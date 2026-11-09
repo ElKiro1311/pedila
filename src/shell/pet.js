@@ -21,7 +21,7 @@ const ALIASES = {
 }
 export const FW = 192
 export const FH = 208
-const PER_FRAME = { idle: 230, waiting: 240, review: 200, running: 110, 'running-left': 110, 'running-right': 110, waving: 170, jumping: 150, failed: 190 }
+const PER_FRAME = { idle: 230, waiting: 240, review: 200, running: 170, 'running-left': 170, 'running-right': 170, waving: 170, jumping: 150, failed: 190 }
 
 const sheets = new Map()
 

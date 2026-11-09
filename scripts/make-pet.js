@@ -83,13 +83,13 @@ app.whenReady().then(async () => {
       idle: wave(8, s => ['quieta', { sy: 1 + 0.012 * s, dy: 1 + s }]),
       // Dos vueltas al ciclo: en las zancadas va pegada al suelo; en el paso, con la rodilla arriba, sube un poco
       // y se corre a la derecha (su recorte es más estrecho y quedaba desplazada respecto al cuerpo).
-      'running-right': wave(8, (s, k) => ['correr-' + (k % 4 + 1), { dy: k % 2 ? 4 : 0, dx: k % 2 ? 12 : 0, rot: 2 }]),
-      'running-left': wave(8, (s, k) => ['correr-' + (k % 4 + 1), { dy: k % 2 ? 4 : 0, dx: k % 2 ? -12 : 0, rot: -2, flip: true }]),
+      'running-right': wave(8, (s, k) => ['correr-' + (k % 4 + 1), { dy: k % 2 ? 3 : 0, dx: k % 2 ? 12 : 0, rot: 1.5 }]),
+      'running-left': wave(8, (s, k) => ['correr-' + (k % 4 + 1), { dy: k % 2 ? 3 : 0, dx: k % 2 ? -12 : 0, rot: -1.5, flip: true }]),
       waving: wave(8, s => ['saludo', { rot: 3 * s, dy: 2 + 2 * Math.abs(s) }]),
       jumping: [0, 14, 26, 32, 32, 26, 14, 0].map((y, k) => [k === 0 || k === 7 ? 'quieta' : 'salto', { dy: y, sy: k === 0 || k === 7 ? 0.94 : 1 }]),
       failed: wave(8, (s, k) => ['triste', { dx: k % 2 ? 1 : -1, sy: 1 - 0.015 * (1 + s) / 2 }]),
       waiting: wave(8, s => ['pregunta', { rot: 2.5 * s, dy: 1 + Math.abs(s) * 2 }]),
-      running: wave(8, (s, k) => ['correr-' + (k % 4 + 1), { dy: k % 2 ? 4 : 0, dx: k % 2 ? 12 : 0, rot: 2 }]),
+      running: wave(8, (s, k) => ['correr-' + (k % 4 + 1), { dy: k % 2 ? 3 : 0, dx: k % 2 ? 12 : 0, rot: 1.5 }]),
       review: wave(8, s => ['lee', { rot: 1.2 * s, sy: 1 + 0.01 * s }])
     }
     Object.values(rows).forEach((frames, r) => frames.forEach(([pose, o], col) => put(col, r, pose, o)))
