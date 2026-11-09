@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+
+# Se generan al preparar la app (npm run assets): el arte es de Petdex y las librerías salen de node_modules
+src/assets/pets/default/
+src/assets/icon.png
+src/assets/tray.png
+src/assets/tray@2x.png
+src/shell/vendor/

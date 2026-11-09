@@ -1,0 +1,60 @@
+{
+  "name": "hermes-panel",
+  "productName": "Hermes Panel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Una ventana sencilla, en español, para usar Hermes Agent: el de este PC y el de tu servidor",
+  "author": "Hermes Panel",
+  "license": "UNLICENSED",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "assets": "node scripts/fetch-pet.mjs && electron scripts/make-icon.js && node scripts/vendor.mjs",
+    "dist": "npm run assets && electron-builder --win nsis --x64"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "dompurify": "3.4.17",
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0",
+    "marked": "18.1.3"
+  },
+  "build": {
+    "appId": "org.hermespanel.app",
+    "productName": "Hermes Panel",
+    "files": [
+      "src/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "HermesPanel-Setup-${version}.${ext}",
+      "deleteAppDataOnUninstall": false
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    }
+  }
+}
