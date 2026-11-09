@@ -5,7 +5,14 @@ Una ventana sencilla, en español, para usar [Hermes Agent](https://github.com/N
 - **Este PC**: el mismo Hermes que usa Hermes Desktop, con sus mismos chats.
 - **Servidor**: un Hermes en otra máquina (`hermes dashboard` protegido con usuario y contraseña).
 
-Incluye la lista de chats, el chat con la respuesta en directo, el razonamiento plegable y las herramientas en curso. También tiene botón de parar, tarjetas de permiso y de pregunta, el selector de modelo (marca los modelos que están en la nube) y avisos de Windows. Se queda en la bandeja del sistema y trae una mascota de [Petdex](https://petdex.dev) que reacciona a lo que hace Hermes.
+Incluye:
+- **Chats:** lista, búsqueda por título y en el contenido, fijados, renombrar, archivar (con su vista de archivados) y borrar con confirmación. Los cambios usan el borrado y la edición protegidos de Hermes: primero `/mutation-snapshot` y después la identidad del cambio.
+- **Chat:** respuesta en directo, razonamiento plegable, herramientas en curso, botón de parar, tarjetas de permiso y de pregunta, copiar, exportar a Markdown, duración y tokens por segundo, y una barra de memoria del chat que avisa al 80 %.
+- **Al escribir:** imágenes (adjuntar, pegar o arrastrar), «Solo consultar», nivel de razonamiento, selector de modelo (marca los modelos que están en la nube) y frases rápidas con «/».
+- **Avisos:** avisos de Windows, un sonido propio al terminar, un punto en el icono de la barra de tareas y parpadeo si los avisos de Windows están apagados.
+- **Tu uso:** chats por día y tokens por modelo, calculados solo con tus datos.
+- **Actualizaciones:** desde una carpeta web con `version.json` (versión y SHA-256) y `HermesPanel-Setup.exe`.
+- **Otros:** bandeja del sistema, atajo Ctrl+Alt+H y una mascota de [Petdex](https://petdex.dev) que reacciona a lo que hace Hermes.
 
 ## Cómo habla con Hermes (la misma vía que Hermes Desktop)
 

@@ -25,6 +25,7 @@
       <div id="pet-stage"><canvas id="pet" width="192" height="208" title="Codux"></canvas></div>
       <div class="side-bottom">
         <button id="open-settings" class="btn-ghost">⚙ Ajustes</button>
+        <button id="open-usage" class="btn-ghost" title="Tu uso">📊</button>
         <span id="version" class="muted small"></span>
       </div>
     </aside>
@@ -33,7 +34,10 @@
       <header id="topbar" class="drag">
         <div id="chat-title">Nuevo chat</div>
         <div id="chat-meta" class="muted small"></div>
+        <button id="chat-actions" class="icon-btn top-act" title="Opciones del chat" aria-label="Opciones del chat" hidden>⋯</button>
       </header>
+      <div id="ctx-bar" hidden><div></div></div>
+      <div id="update-bar" class="bar" hidden></div>
       <div id="banner" hidden></div>
       <section id="scroller">
         <div id="welcome" hidden>
@@ -50,16 +54,27 @@
         <div id="messages" aria-live="polite"></div>
       </section>
       <footer id="composer-wrap">
+        <div id="ctx-warn" class="bar" hidden>
+          <span id="ctx-warn-text" class="grow"></span>
+          <button id="ctx-new" class="btn-primary">Seguir en un chat nuevo</button>
+          <button id="ctx-hide" class="btn-ghost">Ocultar</button>
+        </div>
         <div id="composer">
+          <div id="attach-strip" hidden></div>
           <textarea id="input" rows="1" placeholder="Escribe a Hermes…" spellcheck="true"></textarea>
           <div class="composer-row">
+            <button id="attach-btn" class="pill icon" title="Adjuntar imágenes (también puedes pegar una captura o arrastrarla)">📎</button>
+            <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
             <button id="model-pill" class="pill" title="Modelo para los chats nuevos">Modelo: predeterminado</button>
+            <button id="reason-pill" class="pill">🧠 el de Hermes</button>
+            <button id="readonly-pill" class="pill">🔒 Solo consultar</button>
             <span id="composer-hint" class="muted small">Enter para enviar · Mayús+Enter, salto de línea</span>
             <button id="send" class="send" title="Enviar" aria-label="Enviar">➤</button>
           </div>
         </div>
       </footer>
       <div id="model-menu" class="menu" hidden></div>
+      <div id="snip-menu" class="menu" hidden></div>
     </main>
   </div>
 
@@ -84,6 +99,7 @@
         <button data-sec="apariencia" class="active">Apariencia</button>
         <button data-sec="servidor">Servidor</button>
         <button data-sec="avisos">Avisos</button>
+        <button data-sec="frases">Frases rápidas</button>
         <button data-sec="mascota">Mascota</button>
         <button data-sec="ventana">Ventana</button>
         <button data-sec="acerca">Acerca de</button>
@@ -114,10 +130,18 @@
           <label class="toggle"><input type="checkbox" data-set="notify.needs"><span>Cuando Hermes te necesita (permiso o pregunta)</span></label>
           <label class="toggle"><input type="checkbox" data-set="notify.failed"><span>Cuando algo falla</span></label>
           <label class="toggle"><input type="checkbox" data-set="notify.sound"><span>Con sonido</span></label>
+          <label class="toggle"><input type="checkbox" data-set="notify.chime"><span>Sonido suave de la app al terminar (suena aunque los avisos de Windows estén apagados)</span></label>
+          <label class="toggle"><input type="checkbox" data-set="notify.badge"><span>Punto en el icono de la barra de tareas cuando hay una respuesta sin ver</span></label>
           <div class="row"><span>Solo si la respuesta tardó más de</span><div class="segmented" data-set="notify.minDurationSec">
             <button data-v="0">0 s</button><button data-v="10">10 s</button><button data-v="30">30 s</button><button data-v="60">1 min</button></div></div>
           <p class="muted small">No avisa del chat que tienes delante con la ventana activa.</p>
           <button id="test-notify" class="btn-ghost">Probar aviso</button>
+        </section>
+        <section data-sec="frases" hidden>
+          <h3>Frases rápidas</h3>
+          <p class="muted">Escribe «/» al principio del mensaje y elige una (Tab o Enter usa la primera).</p>
+          <div id="snip-list"></div>
+          <button id="snip-add" class="btn-ghost">＋ Añadir frase</button>
         </section>
         <section data-sec="mascota" hidden>
           <h3>Mascota</h3>
@@ -138,6 +162,7 @@
           <h3>Ventana</h3>
           <label class="toggle"><input type="checkbox" data-set="window.closeToTray"><span>Al cerrar, seguir en la bandeja (junto al reloj)</span></label>
           <label class="toggle"><input type="checkbox" data-set="window.openAtLogin"><span>Abrir al iniciar Windows (oculta en la bandeja)</span></label>
+          <label class="toggle"><input type="checkbox" data-set="shortcut.enabled"><span>Atajo Ctrl+Alt+H para mostrar u ocultar la app desde cualquier sitio</span></label>
         </section>
         <section data-sec="acerca" hidden>
           <h3>Acerca de</h3>
@@ -145,6 +170,10 @@
           <p class="muted">Una ventana sencilla para tu Hermes: el de este PC (el mismo que usa Hermes Desktop, con los mismos chats) y el del servidor.</p>
           <p class="muted small" id="about-pet"></p>
           <button id="open-logs" class="btn-ghost">Abrir carpeta de registros</button>
+          <h4>Actualizaciones</h4>
+          <label class="field">Carpeta de actualizaciones (con su version.json)<input id="upd-url" spellcheck="false" placeholder="http://servidor:8185/hermes-panel"></label>
+          <label class="toggle"><input type="checkbox" data-set="updates.auto"><span>Buscar versiones nuevas al abrir y cada 6 horas</span></label>
+          <div class="row-buttons"><button id="upd-save" class="btn-ghost">Guardar dirección</button><button id="upd-check" class="btn-ghost">Buscar actualizaciones</button><span id="upd-status" class="muted small"></span></div>
         </section>
       </div>
       <button id="settings-close" class="icon-btn" aria-label="Cerrar">✕</button>
@@ -186,6 +215,33 @@
         <span class="muted small pp-credit">Las mascotas son de sus autores en <span class="mono">petdex.dev</span>.</span>
         <button id="pp-use" class="btn-primary" disabled>Usar esta mascota</button>
       </footer>
+    </div>
+  </dialog>
+
+  <div id="popup" class="menu fixed" hidden></div>
+
+  <dialog id="ask-dialog">
+    <div class="ask">
+      <h2 id="ask-title"></h2>
+      <p id="ask-text" class="muted"></p>
+      <input id="ask-input" spellcheck="false">
+      <div class="dialog-buttons"><button id="ask-cancel" class="btn-ghost">Cancelar</button><button id="ask-ok" class="btn-primary">Aceptar</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="archived-dialog">
+    <div class="simple-dialog">
+      <header><h2>Chats archivados · <span id="archived-where"></span></h2><button id="archived-close" class="icon-btn" aria-label="Cerrar">✕</button></header>
+      <div id="archived-list" class="sd-body"></div>
+    </div>
+  </dialog>
+
+  <dialog id="usage-dialog">
+    <div class="simple-dialog">
+      <header><h2>Tu uso</h2>
+        <div class="segmented" id="usage-tabs"><button data-conn="local">Este PC</button><button data-conn="server">Servidor</button></div>
+        <button id="usage-close" class="icon-btn" aria-label="Cerrar">✕</button></header>
+      <div id="usage-body" class="sd-body"></div>
     </div>
   </dialog>
 

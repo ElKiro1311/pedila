@@ -80,6 +80,20 @@ export const demoApi = {
   petsSearch: ({ q = '', kind = '' } = {}) => { const items = DEMO_CATALOG.filter(p => (!kind || p.kind === kind) && (!q || p.name.toLowerCase().includes(q.toLowerCase()))); return ok({ total: items.length, all: DEMO_CATALOG.length, kinds: { character: 2, creature: 1, object: 1 }, items }) },
   petsInstalled: () => ok([DEMO_PET]),
   petUse: slug => (slug === 'code-default' ? ok(DEMO_PET) : Promise.resolve({ ok: false, error: 'En la demostración no se descargan mascotas.' })),
+  archived: () => ok([]),
+  search: (conn, q) => ok(sessions[conn].filter(s => s.preview.toLowerCase().includes(q.toLowerCase())).map(s => ({ id: s.id, snippet: s.preview, role: 'assistant' }))),
+  mutate: (conn, sid, op, value) => {
+    const list = sessions[conn]
+    const i = list.findIndex(s => s.id === sid)
+    if (op === 'delete' || op === 'archive') { if (i >= 0) { list.splice(i, 1) } } else if (i >= 0 && op === 'pin') { list[i].pinned = value } else if (i >= 0 && op === 'rename') { list[i].title = value }
+    return ok({ ok: true })
+  },
+  attachImage: () => ok({ ok: true }),
+  usage: () => ok({ chats: 3, messages: 22, input: 120000, output: 8000, days: Array.from({ length: 30 }, (_, i) => ({ date: `d${i}`, chats: i % 4 })), models: [{ model: 'qwen3-32b', chats: 2, input: 90000, output: 6000 }] }),
+  exportChat: () => ok({ saved: false }),
+  showFile: () => ok(true),
+  updateCheck: () => ok({ available: false }),
+  updateInstall: () => ok(true),
   openLogs: () => ok(true),
   testNotify: () => ok(true),
   onEvent: cb => { listeners.add(cb); return () => listeners.delete(cb) }

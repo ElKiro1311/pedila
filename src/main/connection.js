@@ -97,7 +97,12 @@ function sessionRow(r) {
     model: str(r.model),
     // `is_active` = el chat está cargado en el gateway (no que esté respondiendo ahora).
     active: Boolean(r.is_active),
-    source: str(r.source)
+    source: str(r.source),
+    pinned: Boolean(r.pinned),
+    archived: Boolean(r.archived),
+    inputTokens: Number(r.input_tokens) || 0,
+    outputTokens: Number(r.output_tokens) || 0,
+    startedAt: r.started_at || null
   }
 }
 
@@ -306,11 +311,12 @@ class Connection extends EventEmitter {
       case 'message.complete': {
         const started = this.turnStart.get(sid)
         this.turnStart.delete(sid)
-        this.ui({ kind: 'complete', sid, text: str(p.text || p.content), status: str(p.status), outcome: str(p.outcome), reasoning: str(p.reasoning), ms: started ? Date.now() - started : null })
+        const u = p.usage && typeof p.usage === 'object' ? p.usage : {}
+        this.ui({ kind: 'complete', sid, text: str(p.text || p.content), status: str(p.status), outcome: str(p.outcome), reasoning: str(p.reasoning), ms: started ? Date.now() - started : null, out: Number(u.output || u.completion || 0) || null })
         break
       }
       case 'session.usage':
-        this.ui({ kind: 'usage', sid, used: p.context_tokens || null, max: p.context_length || null })
+        this.ui({ kind: 'usage', sid, used: p.context_tokens || null, max: p.context_length || null, out: Number(p.output_tokens) || null })
         break
       case 'session.title':
         if (str(p.title)) { this.ui({ kind: 'title', sid, title: p.title }) }
@@ -372,10 +378,74 @@ class Connection extends EventEmitter {
 
   // ── Acciones ───────────────────────────────────────────────────────────────────────────────
 
-  async listSessions(limit = 80) {
-    const r = await this.transport.fetchJson(`/api/sessions?limit=${limit}&offset=0&min_messages=1`)
-    if (r.status !== 200 || !r.json) { throw new Error(`No pude leer la lista de chats (${r.status})`) }
-    return (r.json.sessions || []).filter(s => !s.archived && !s.hidden).map(sessionRow)
+  /** Todos los chats (de 100 en 100: el gateway no admite más por página). */
+  async allSessions(max = 1000, archived = 'exclude') {
+    const rows = []
+    for (let off = 0; off < max; off += 100) {
+      const r = await this.transport.fetchJson(`/api/sessions?limit=100&offset=${off}&min_messages=1&archived=${archived}`)
+      if (r.status !== 200 || !r.json) { throw new Error(`No pude leer la lista de chats (${r.status})`) }
+      const page = r.json.sessions || []
+      rows.push(...page)
+      if (page.length < 100) { break }
+    }
+    return rows.filter(s => !s.hidden).map(sessionRow)
+  }
+
+  async listSessions() {
+    return (await this.allSessions(300)).filter(s => !s.archived)
+  }
+
+  async archived() {
+    return this.allSessions(1000, 'only')
+  }
+
+  /** Búsqueda en el texto de todos los chats (la del propio gateway). */
+  async search(q) {
+    const r = await this.transport.fetchJson(`/api/sessions/search?q=${encodeURIComponent(q)}`)
+    if (r.status !== 200 || !r.json) { throw new Error(`No pude buscar (${r.status})`) }
+    return (r.json.results || []).map(x => ({ id: str(x.session_id), snippet: cut(str(x.snippet).replace(/>>>|<<</g, '').replace(/\s+/g, ' ').trim(), 160), role: str(x.role), lastActive: x.last_active || x.session_started || null, model: str(x.model) })).filter(x => x.id)
+  }
+
+  /**
+   * Cambios protegidos sobre un chat guardado (como Hermes Desktop): primero se lee
+   * /mutation-snapshot (revisión y generación) y el cambio lleva esa identidad; sin ella, el
+   * gateway responde 409 y no cambia nada.
+   */
+  async mutate(sid, method, payload = {}) {
+    const base = `/api/sessions/${encodeURIComponent(sid)}`
+    const snap = await this.transport.fetchJson(`${base}/mutation-snapshot`)
+    let identity = {}
+    if (snap.status === 200 && snap.json && Number.isSafeInteger(snap.json.runtime_revision)) {
+      if (!snap.json.exists && method === 'DELETE') { return { ok: true, gone: true } }
+      identity = { request_id: crypto.randomUUID(), expected_revision: snap.json.runtime_revision }
+      if (snap.json.exists && Number.isSafeInteger(snap.json.runtime_generation)) { identity.expected_generation = snap.json.runtime_generation }
+    } else if (snap.status === 404 && method === 'DELETE') {
+      return { ok: true, gone: true }
+    }
+    const r = method === 'DELETE'
+      ? await this.transport.fetchJson(`${base}${Object.keys(identity).length ? '?' + new URLSearchParams(Object.entries(identity).map(([k, v]) => [k, String(v)])) : ''}`, { method })
+      : await this.transport.fetchJson(base, { method, body: { ...payload, ...identity } })
+    if (r.status >= 300) {
+      const why = r.json && (r.json.detail || r.json.error || r.json.message)
+      throw new Error(`Hermes no aceptó el cambio (${r.status}${why ? ': ' + (typeof why === 'string' ? why : JSON.stringify(why)).slice(0, 120) : ''})`)
+    }
+    if (method === 'DELETE') {
+      const live = this.live.get(sid)
+      if (live) { this.liveToStored.delete(live.liveId); this.live.delete(sid) }
+    }
+    return { ok: true }
+  }
+
+  rename(sid, title) { return this.mutate(sid, 'PATCH', { title }) }
+  setPinned(sid, pinned) { return this.mutate(sid, 'PATCH', { pinned }) }
+  setArchived(sid, archived) { return this.mutate(sid, 'PATCH', archived ? { archived, pinned: false } : { archived }) }
+  remove(sid) { return this.mutate(sid, 'DELETE') }
+
+  /** Sube una imagen para el próximo mensaje de ese chat (image.attach_bytes, en los dos protocolos). */
+  async attachImage(sid, base64, filename) {
+    const rec = await this.attach(sid)
+    const r = await this.socket.request('image.attach_bytes', { session_id: rec.liveId, content_base64: base64, filename }, 120000)
+    return { path: str(r && r.path), mime: str(r && (r.mime || r.mime_type)) }
   }
 
   async transcript(sid) {
@@ -427,13 +497,14 @@ class Connection extends EventEmitter {
     return out
   }
 
-  async newChat({ model, provider } = {}) {
+  async newChat({ model, provider, reasoning } = {}) {
     await this.waitReady()
     const params = this.canonical
       ? { request_id: crypto.randomUUID(), source: 'gui' }
       : { source: 'gui', cols: COLS }
     if (model) { params.model = model }
     if (model && provider) { params.provider = provider }
+    if (reasoning) { params[this.canonical ? 'reasoning' : 'reasoning_effort'] = reasoning }
     const snap = await this.socket.request('session.create', params, 90000)
     const liveId = str(snap.session_id)
     const stored = str(snap.stored_session_id) || liveId
@@ -441,11 +512,14 @@ class Connection extends EventEmitter {
     return { sid: stored }
   }
 
-  async send(sid, text) {
+  async send(sid, text, attachments = []) {
     const rec = await this.attach(sid)
     const params = this.canonical
       ? { session_id: rec.liveId, text, submission_id: crypto.randomUUID() }
       : { session_id: rec.liveId, text }
+    // Protocolo nuevo: las imágenes subidas van nombradas en el envío; en el clásico ya quedaron en cola.
+    const files = attachments.filter(a => a && a.path && a.mime)
+    if (this.canonical && files.length) { params.attachments = files.map(a => ({ path: a.path, mime: a.mime })) }
     return this.socket.request('prompt.submit', params, 120000)
   }
 

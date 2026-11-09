@@ -21,7 +21,18 @@ function defaults() {
     local: { enabled: true },
     lastConnection: 'local',
     models: { local: null, server: null },
-    notify: { enabled: true, done: true, needs: true, failed: true, minDurationSec: 10, sound: true },
+    notify: { enabled: true, done: true, needs: true, failed: true, minDurationSec: 10, sound: true, chime: true, badge: true },
+    // Nivel de razonamiento de los chats nuevos: '' = el que tenga Hermes.
+    chat: { reasoning: '' },
+    // Frases rápidas que se insertan escribiendo «/» al principio.
+    snippets: [
+      { name: 'Resume', text: 'Resúmeme lo anterior en 5 puntos cortos.' },
+      { name: 'Explica fácil', text: 'Explícamelo como si no supiera nada del tema, paso a paso.' },
+      { name: 'Revisa', text: 'Revisa lo que hiciste y dime si algo puede fallar.' }
+    ],
+    shortcut: { enabled: true },
+    // Dirección de una carpeta con version.json para buscar versiones nuevas ('' = no buscar).
+    updates: { url: '', auto: true },
     pet: { visible: true, size: 'normal', slug: DEFAULT_PET },
     window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false },
     secrets: { server: null }
@@ -61,7 +72,17 @@ function sanitize(raw) {
       ? { model: m.model, provider: m.provider, local: Boolean(m.local) } : null
   }
   const n = isObj(raw.notify) ? raw.notify : {}
-  for (const k of ['enabled', 'done', 'needs', 'failed', 'sound']) { s.notify[k] = bool(n[k], d.notify[k]) }
+  for (const k of ['enabled', 'done', 'needs', 'failed', 'sound', 'chime', 'badge']) { s.notify[k] = bool(n[k], d.notify[k]) }
+  const chat = isObj(raw.chat) ? raw.chat : {}
+  s.chat.reasoning = pick(chat.reasoning, ['', 'low', 'medium', 'high'], '')
+  if (Array.isArray(raw.snippets)) {
+    s.snippets = raw.snippets.filter(x => isObj(x) && typeof x.name === 'string' && typeof x.text === 'string' && x.name.trim() && x.text.trim())
+      .slice(0, 60).map(x => ({ name: x.name.trim().slice(0, 40), text: x.text.slice(0, 4000) }))
+  }
+  s.shortcut.enabled = bool(isObj(raw.shortcut) ? raw.shortcut.enabled : undefined, true)
+  const up = isObj(raw.updates) ? raw.updates : {}
+  s.updates.url = typeof up.url === 'string' && up.url ? (validUrl(up.url) ? up.url.replace(/[/]+$/, '') : '') : ''
+  s.updates.auto = bool(up.auto, true)
   s.notify.minDurationSec = clampInt(n.minDurationSec, 0, 3600, d.notify.minDurationSec)
   const pet = isObj(raw.pet) ? raw.pet : {}
   s.pet.visible = bool(pet.visible, true)
@@ -108,10 +129,11 @@ class Settings {
   patch(partial) {
     if (!isObj(partial)) { return this.data }
     const next = JSON.parse(JSON.stringify(this.data))
-    for (const key of ['look', 'server', 'notify', 'pet', 'window', 'models']) {
+    for (const key of ['look', 'server', 'notify', 'pet', 'window', 'models', 'chat', 'shortcut', 'updates']) {
       if (isObj(partial[key])) { next[key] = { ...next[key], ...partial[key] } }
     }
     if (partial.lastConnection !== undefined) { next.lastConnection = partial.lastConnection }
+    if (Array.isArray(partial.snippets)) { next.snippets = partial.snippets }
     next.secrets = this.data.secrets
     this.data = sanitize(next)
     this.save()

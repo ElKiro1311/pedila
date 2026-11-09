@@ -1,7 +1,7 @@
 'use strict'
 // Hermes Panel: proceso principal. Ventana con su propio protocolo app://, bandeja, avisos de
 // Windows y dos conexiones con Hermes («Este PC» y «Servidor»).
-const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, protocol, net, nativeTheme, shell, nativeImage, session, screen } = require('electron')
+const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, protocol, net, nativeTheme, shell, nativeImage, session, screen, globalShortcut, dialog } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const { pathToFileURL } = require('node:url')
@@ -13,6 +13,7 @@ const { RemoteTransport } = require('./remote')
 const { Connection } = require('./connection')
 const notify = require('./notify')
 const { Pets } = require('./pets')
+const extras = require('./extras')
 
 const APP_ID = 'org.hermespanel.app'
 const TOAST_CLSID = '{6B1E3C2A-9F4D-4E7B-A1C5-3D8F2B6E9A41}'
@@ -94,6 +95,9 @@ function main() {
     }
 
     registerIpc(remote)
+    applyShortcut()
+    setTimeout(() => autoCheckUpdate(), 20000)
+    setInterval(() => autoCheckUpdate(), 6 * 60 * 60 * 1000)
     createWindow()
     createTray()
     Notification.handleActivation?.(() => showWindow())
@@ -103,6 +107,8 @@ function main() {
       if (settings.data.server.enabled) { conns.server.start() }
     }
   })
+
+  app.on('will-quit', () => { try { globalShortcut.unregisterAll() } catch {} })
 
   app.on('before-quit', () => {
     quitting = true
@@ -200,7 +206,7 @@ function main() {
         win.hide()
       }
     })
-    win.on('focus', () => { try { win.flashFrame(false) } catch {} })
+    win.on('focus', () => { try { win.flashFrame(false); setBadge(false) } catch {} })
     win.on('closed', () => { win = null })
     nativeTheme.on('updated', () => {
       if (win && !win.isDestroyed()) {
@@ -255,6 +261,7 @@ function main() {
     const chatTitle = titles.get(`${evt.conn}:${evt.sid}`) || (viewing.conn === evt.conn && viewing.sid === evt.sid ? viewing.title : '')
     const where = c ? c.name : ''
     const open = () => { showWindow(); send({ kind: 'focus-chat', conn: evt.conn, sid: evt.sid }) }
+    if (evt.kind === 'complete' && settings.data.notify.badge && !focusedOnChat && win && !win.isFocused()) { setBadge(true) }
     if (evt.kind === 'complete') {
       const failed = evt.outcome && !['completed', 'complete', ''].includes(evt.outcome)
       const kind = failed ? 'failed' : 'done'
@@ -285,6 +292,56 @@ function main() {
     }
   }
 
+  // Punto en el icono de la barra de tareas: hay una respuesta que no has visto.
+  let dot = null
+  function setBadge(on) {
+    if (!win || win.isDestroyed()) { return }
+    if (on && !dot) {
+      const n = 16
+      const buf = Buffer.alloc(n * n * 4)
+      for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+          const d = Math.hypot(x - 7.5, y - 7.5)
+          const i = (y * n + x) * 4
+          if (d <= 7.5) { buf[i] = d > 6 ? 255 : 0x6c; buf[i + 1] = d > 6 ? 255 : 0x5c; buf[i + 2] = d > 6 ? 255 : 0xf0; buf[i + 3] = 255 }
+        }
+      }
+      dot = nativeImage.createFromBitmap(buf, { width: n, height: n })
+    }
+    try { win.setOverlayIcon(on ? dot : null, on ? 'Respuesta nueva de Hermes' : '') } catch {}
+  }
+
+  // Atajo global: Ctrl+Alt+H muestra la app (lista para escribir) o la esconde.
+  function applyShortcut() {
+    try { globalShortcut.unregister('CommandOrControl+Alt+H') } catch {}
+    if (!settings.data.shortcut.enabled) { return }
+    const ok = globalShortcut.register('CommandOrControl+Alt+H', () => {
+      if (win && win.isVisible() && win.isFocused()) { win.hide(); return }
+      showWindow()
+      send({ kind: 'focus-input' })
+    })
+    if (!ok) { log.warn('el atajo Ctrl+Alt+H ya lo usa otra app') }
+  }
+
+  let pendingUpdate = null
+  async function autoCheckUpdate(manual = false) {
+    const u = settings.data.updates
+    if (!u.url || (!u.auto && !manual)) { return null }
+    try {
+      const r = await extras.checkUpdate(u.url, app.getVersion())
+      if (r.available) {
+        pendingUpdate = r
+        send({ kind: 'update', version: r.version, notes: r.notes })
+        log.info(`[actualizar] hay versión nueva: ${r.version}`)
+      }
+      return r
+    } catch (e) {
+      if (manual) { throw e }
+      log.warn('[actualizar]', e.message)
+      return null
+    }
+  }
+
   // ── IPC ────────────────────────────────────────────────────────────────────────────────────
   function registerIpc(remote) {
     const handle = (ch, fn) => ipcMain.handle(ch, async (e, ...args) => {
@@ -293,8 +350,8 @@ function main() {
       try {
         return { ok: true, value: await fn(...args) }
       } catch (err) {
-        if (!err.needLogin) { log.warn(`[ipc ${ch}]`, err.message) }
-        return { ok: false, error: err.message || String(err), needLogin: Boolean(err.needLogin) }
+        if (!err.needLogin && !err.setup) { log.warn(`[ipc ${ch}]`, err.message) }
+        return { ok: false, error: err.message || String(err), needLogin: Boolean(err.needLogin), setup: Boolean(err.setup) }
       }
     })
     const connOf = id => {
@@ -323,11 +380,12 @@ function main() {
     })
     handle('hp:new', (id, opts) => {
       const o = opts && typeof opts === 'object' ? opts : {}
-      return connOf(id).newChat({ model: typeof o.model === 'string' ? o.model.slice(0, 200) : undefined, provider: typeof o.provider === 'string' ? o.provider.slice(0, 200) : undefined })
+      return connOf(id).newChat({ model: typeof o.model === 'string' ? o.model.slice(0, 200) : undefined, provider: typeof o.provider === 'string' ? o.provider.slice(0, 200) : undefined, reasoning: ['low', 'medium', 'high'].includes(o.reasoning) ? o.reasoning : undefined })
     })
-    handle('hp:send', async (id, sid, text) => {
+    handle('hp:send', async (id, sid, text, attachments) => {
       if (typeof text !== 'string' || !text.trim() || text.length > 200000) { throw new Error('mensaje vacío o demasiado largo') }
-      const r = await connOf(id).send(sidOf(sid), text)
+      const files = Array.isArray(attachments) ? attachments.slice(0, 6).filter(a => a && typeof a.path === 'string' && typeof a.mime === 'string' && a.mime.startsWith('image/')) : []
+      const r = await connOf(id).send(sidOf(sid), text, files)
       return { status: r && r.status ? String(r.status) : 'ok' }
     })
     handle('hp:stop', (id, sid) => connOf(id).interrupt(sidOf(sid)).then(r => ({ status: r && r.status })))
@@ -336,6 +394,43 @@ function main() {
       return connOf(id).answer(key, value)
     })
     handle('hp:models', id => connOf(id).modelOptions())
+    handle('hp:archived', id => connOf(id).archived())
+    handle('hp:search', (id, q) => {
+      if (typeof q !== 'string' || q.trim().length < 2) { return [] }
+      return connOf(id).search(q.trim().slice(0, 200))
+    })
+    handle('hp:mutate', (id, sid, op, value) => {
+      const c = connOf(id)
+      sidOf(sid)
+      if (op === 'rename') { if (typeof value !== 'string' || !value.trim()) { throw new Error('nombre vacío') } return c.rename(sid, value.trim().slice(0, 200)) }
+      if (op === 'pin') { return c.setPinned(sid, Boolean(value)) }
+      if (op === 'archive') { return c.setArchived(sid, Boolean(value)) }
+      if (op === 'delete') { return c.remove(sid) }
+      throw new Error('operación desconocida')
+    })
+    handle('hp:attach-image', (id, sid, b64, name) => {
+      if (typeof b64 !== 'string' || b64.length > 15 * 1024 * 1024 * 1.4) { throw new Error('imagen demasiado grande (máximo 15 MB)') }
+      return connOf(id).attachImage(sidOf(sid), b64, typeof name === 'string' ? name.replace(/[^\w. -]/g, '_').slice(0, 80) : 'imagen.png')
+    })
+    handle('hp:usage', async id => extras.usageStats(await connOf(id).allSessions(2000, 'include')))
+    handle('hp:export', async (name, markdown) => {
+      if (typeof markdown !== 'string' || markdown.length > 20 * 1024 * 1024) { throw new Error('nada que exportar') }
+      const base = (typeof name === 'string' && name ? name : 'chat').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80) || 'chat'
+      const r = await dialog.showSaveDialog(win, { title: 'Exportar el chat', defaultPath: path.join(app.getPath('documents'), base + '.md'), filters: [{ name: 'Markdown', extensions: ['md'] }] })
+      if (r.canceled || !r.filePath) { return { saved: false } }
+      fs.writeFileSync(r.filePath, markdown, 'utf8')
+      return { saved: true, file: r.filePath }
+    })
+    handle('hp:show-file', file => { if (typeof file === 'string') { shell.showItemInFolder(file) } return true })
+    handle('hp:update-check', () => autoCheckUpdate(true))
+    handle('hp:update-install', async () => {
+      const u = settings.data.updates
+      const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion())
+      if (!info || !info.available) { throw new Error('no hay versión nueva') }
+      await extras.installUpdate(u.url, info, log)
+      setTimeout(() => { quitting = true; app.quit() }, 600)
+      return true
+    })
     handle('hp:login', async (user, pass) => {
       if (typeof user !== 'string' || typeof pass !== 'string' || !user || !pass || user.length > 200 || pass.length > 500) { throw new Error('Escribe usuario y contraseña') }
       const r = await remote.login(user, pass)
@@ -364,6 +459,7 @@ function main() {
           app.setLoginItemSettings({ openAtLogin: settings.data.window.openAtLogin, args: ['--oculto'] })
         }
         if (JSON.stringify(settings.data.server.urls) !== before) { remote.invalidate(); conns.server.retryNow() }
+        if (patch.shortcut) { applyShortcut() }
       }
       return settings.publicView()
     })

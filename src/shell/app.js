@@ -22,7 +22,12 @@ const S = {
   chats: new Map(),
   modelChoice: { local: null, server: null },
   models: { local: null, server: null },
-  search: ''
+  search: '',
+  found: { local: [], server: [] },
+  attach: [],
+  readOnly: false,
+  reasoning: '',
+  ctxHidden: new Set()
 }
 
 const key = (conn, sid) => `${conn}|${sid}`
@@ -213,22 +218,44 @@ function renderList() {
     .map(r => ({ ...r, title: chat(conn, r.id).title || r.title, ms: toMs(r.lastActive) }))
     .filter(r => !q || r.title.toLowerCase().includes(q) || r.preview.toLowerCase().includes(q))
     .sort((a, b) => b.ms - a.ms)
-  if (!rows.length) {
-    nav.append(el('div', { class: 'list-empty', text: q ? 'Ningún chat coincide.' : 'Todavía no hay chats aquí. Escribe algo para empezar.' }))
+  if (!rows.length && !(q.length >= 3 && S.found[conn].length)) {
+    nav.append(el('div', { class: 'list-empty', text: q ? (q.length >= 3 ? 'Ningún chat coincide (buscando también en el contenido…).' : 'Ningún chat coincide.') : 'Todavía no hay chats aquí. Escribe algo para empezar.' }))
+    if (!q) { nav.append(el('button', { class: 'archived-link', text: '🗄 Ver chats archivados', onclick: () => openArchived() })) }
     return
   }
   let group = null
-  for (const r of rows) {
+  const pinned = rows.filter(r => r.pinned)
+  if (pinned.length) { nav.append(el('div', { class: 'group-label', text: '📌 Fijados' })); for (const r of pinned) { nav.append(chatRow(conn, r)) } }
+  for (const r of rows.filter(x => !x.pinned)) {
     const g = groupOf(r.ms)
     if (g !== group) { group = g; nav.append(el('div', { class: 'group-label', text: g })) }
-    const ch = chat(conn, r.id)
-    const running = ch.running || (ch.live && !ch.live.done)
-    const row = el('button', { class: 'chat-row' + (S.current.conn === conn && S.current.sid === r.id ? ' active' : ''), title: r.title },
-      el('div', { class: 't' }, running ? el('span', { class: 'run' }) : null, el('span', { text: r.title })),
-      r.preview ? el('div', { class: 'p', text: r.preview }) : null)
-    row.addEventListener('click', () => openChat(conn, r.id))
-    nav.append(row)
+    nav.append(chatRow(conn, r))
   }
+  if (q.length >= 3 && S.found[conn].length) {
+    nav.append(el('div', { class: 'group-label', text: '🔎 En el contenido' }))
+    for (const h of S.found[conn].slice(0, 30)) {
+      const known = S.sessions[conn].find(x => x.id === h.id)
+      const row = el('button', { class: 'chat-row found', title: h.snippet },
+        el('div', { class: 't' }, el('span', { text: (known && (chat(conn, h.id).title || known.title)) || 'Chat' })),
+        el('div', { class: 'p', text: h.snippet }))
+      row.addEventListener('click', () => openChat(conn, h.id))
+      nav.append(row)
+    }
+  }
+  nav.append(el('button', { class: 'archived-link', text: '🗄 Ver chats archivados', onclick: () => openArchived() }))
+}
+
+function chatRow(conn, r) {
+  const ch = chat(conn, r.id)
+  const running = ch.running || (ch.live && !ch.live.done)
+  const row = el('button', { class: 'chat-row' + (S.current.conn === conn && S.current.sid === r.id ? ' active' : ''), title: r.title },
+    el('div', { class: 't' }, running ? el('span', { class: 'run' }) : null, el('span', { text: r.title })),
+    r.preview ? el('div', { class: 'p', text: r.preview }) : null)
+  row.addEventListener('click', () => openChat(conn, r.id))
+  row.addEventListener('contextmenu', e => { e.preventDefault(); openChatMenu(conn, r.id, e.clientX, e.clientY) })
+  const more = el('button', { class: 'row-more', title: 'Más opciones', 'aria-label': 'Más opciones', text: '⋯' })
+  more.addEventListener('click', e => { e.stopPropagation(); const b = more.getBoundingClientRect(); openChatMenu(conn, r.id, b.right, b.bottom) })
+  return el('div', { class: 'chat-row-wrap' }, row, more)
 }
 
 // ── Chat ─────────────────────────────────────────────────────────────────────────────────────
@@ -239,6 +266,16 @@ function setTopbar() {
   if (ch && ch.model) { bits.push(ch.model) }
   if (ch && ch.usage && ch.usage.used && ch.usage.max) { bits.push(`contexto ${kfmt(ch.usage.used)} / ${kfmt(ch.usage.max)}`) }
   $('#chat-meta').textContent = bits.join(' · ')
+  $('#chat-actions').hidden = !ch
+  const pct = ch && ch.usage && ch.usage.used && ch.usage.max ? Math.min(100, Math.round(ch.usage.used / ch.usage.max * 100)) : 0
+  const bar = $('#ctx-bar')
+  bar.hidden = !pct
+  bar.firstElementChild.style.width = pct + '%'
+  bar.classList.toggle('warn', pct >= 80)
+  bar.title = pct ? `Memoria del chat: ${pct} % (Hermes resume lo antiguo al 85 %)` : ''
+  const warn = $('#ctx-warn')
+  warn.hidden = !(ch && pct >= 80 && !S.ctxHidden.has(key(ch.conn, ch.sid)))
+  if (!warn.hidden) { $('#ctx-warn-text').textContent = `Este chat va por el ${pct} % de su memoria. Si cambias de tema, mejor sigue en uno nuevo.` }
   document.title = ch && ch.title ? `${ch.title} · Hermes Panel` : 'Hermes Panel'
 }
 
@@ -365,7 +402,27 @@ function renderReasoning(text, live) {
 
 function renderTurn(t) {
   if (t.role === 'user') { return el('div', { class: 'msg user' }, el('div', { class: 'bubble', text: t.text })) }
-  return el('div', { class: 'msg assistant' }, whoRow(), renderReasoning(t.reasoning, false), renderBlocks(t.blocks))
+  return el('div', { class: 'msg assistant' }, whoRow(), renderReasoning(t.reasoning, false), renderBlocks(t.blocks), turnActions(t))
+}
+
+function turnText(t) {
+  return t.blocks.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
+}
+
+function statsText(st) {
+  if (!st) { return '' }
+  const bits = []
+  if (st.ms) { bits.push(st.ms >= 60000 ? `${Math.floor(st.ms / 60000)} min ${Math.round(st.ms % 60000 / 1000)} s` : `${(st.ms / 1000).toFixed(1)} s`) }
+  if (st.tps) { bits.push(`${st.tps.toFixed(1)} tok/s`) }
+  return bits.join(' · ')
+}
+
+function turnActions(t) {
+  const text = turnText(t)
+  if (!text && !t.stats) { return null }
+  const copy = el('button', { class: 'mini', text: 'Copiar' })
+  copy.addEventListener('click', () => navigator.clipboard.writeText(text).then(() => { copy.textContent = 'Copiado'; setTimeout(() => { copy.textContent = 'Copiar' }, 1200) }).catch(() => {}))
+  return el('div', { class: 'turn-actions' }, text ? copy : null, t.stats ? el('span', { class: 'muted small', text: statsText(t.stats) }) : null)
 }
 
 function renderLiveTurn(ch) {
@@ -377,6 +434,7 @@ function renderLiveTurn(ch) {
   }
   if (L.error) { node.append(el('div', { class: 'turn-error', text: L.error })) }
   if (L.note) { node.append(el('div', { class: 'turn-note', text: L.note })) }
+  if (L.done) { const a = turnActions(liveToTurn(L)); if (a) { node.append(a) } }
   return node
 }
 
@@ -463,6 +521,7 @@ function updateComposer() {
     b.disabled = !hasText
   }
   $('#input').placeholder = S.current.sid ? 'Escribe a Hermes…' : `Escribe a Hermes (${CONN_NAMES[S.current.conn]})…`
+  if (typeof updateExtrasPills === 'function') { updateExtrasPills() }
 }
 
 function autoGrow() {
@@ -473,9 +532,13 @@ function autoGrow() {
 
 async function onSendClick() {
   const ch = currentChat()
-  const text = $('#input').value.trim()
-  if (!text && busy(ch)) { return stopTurn(ch) }
+  let text = $('#input').value.trim()
+  if (!text && busy(ch) && !S.attach.length) { return stopTurn(ch) }
+  if (!text && S.attach.length) { text = 'Mira la imagen.' }
   if (!text) { return }
+  closeSnippets()
+  const images = S.attach.splice(0)
+  renderAttach()
   const conn = S.current.conn
   let sid = S.current.sid
   $('#input').value = ''
@@ -484,7 +547,7 @@ async function onSendClick() {
     $('#send').disabled = true
     try {
       const choice = S.modelChoice[conn]
-      const r = await call(api.newChat, conn, choice ? { model: choice.model, provider: choice.provider } : {})
+      const r = await call(api.newChat, conn, { ...(choice ? { model: choice.model, provider: choice.provider } : {}), ...(S.reasoning ? { reasoning: S.reasoning } : {}) })
       sid = r.sid
       S.current = { conn, sid }
       const nc = chat(conn, sid)
@@ -495,6 +558,8 @@ async function onSendClick() {
       call(api.viewing, conn, sid, nc.title).catch(() => {})
     } catch (e) {
       $('#input').value = text
+      S.attach.push(...images)
+      renderAttach()
       autoGrow()
       updateComposer()
       showToastLine(e.needLogin ? 'Falta iniciar sesión en el servidor.' : `No pude crear el chat: ${e.message}`)
@@ -504,7 +569,7 @@ async function onSendClick() {
   }
   const c = chat(conn, sid)
   if (c.live && c.live.done) { c.transcript.push(liveToTurn(c.live)); c.live = null }
-  c.transcript.push({ role: 'user', text })
+  c.transcript.push({ role: 'user', text: images.length ? `${text}\n📎 ${images.map(i => i.name).join(', ')}` : text })
   if (!c.live) { c.live = { blocks: [], reasoning: '', status: 'Enviando', done: false, startedAt: Date.now() } }
   c.running = true
   setTopbar()
@@ -513,7 +578,10 @@ async function onSendClick() {
   updateComposer()
   updatePet()
   try {
-    const r = await call(api.send, conn, sid, text)
+    const files = []
+    for (const img of images) { files.push(await call(api.attachImage, conn, sid, img.b64, img.name)) }
+    const wire = S.readOnly ? `${READ_ONLY_NOTE}\n\n${text}` : text
+    const r = await call(api.send, conn, sid, wire, files)
     if (r && r.status === 'queued' && c.live && !c.live.done && c.live.blocks.length) { c.live.note = 'Tu mensaje va en cola: Hermes lo leerá al terminar.' }
     if (c.live && c.live.status === 'Enviando') { c.live.status = 'Pensando' }
     scheduleLive()
@@ -544,7 +612,7 @@ async function stopTurn(ch) {
 }
 
 function liveToTurn(L) {
-  return { role: 'assistant', blocks: L.blocks.map(b => ({ ...b, done: true })), reasoning: L.reasoning }
+  return { role: 'assistant', blocks: L.blocks.map(b => ({ ...b, done: true })), reasoning: L.reasoning, stats: L.stats || null }
 }
 
 let toastT = null
@@ -704,6 +772,12 @@ function onEvent(evt) {
     case 'focus-chat':
       if (evt.sid) { openChat(evt.conn, evt.sid) }
       return
+    case 'focus-input':
+      $('#input').focus()
+      return
+    case 'update':
+      showUpdate(evt.version, evt.notes)
+      return
     default:
       break
   }
@@ -727,6 +801,7 @@ function onEvent(evt) {
     case 'delta': {
       const L = ensureLive()
       const last = L.blocks[L.blocks.length - 1]
+      if (!L.firstAt) { L.firstAt = Date.now() }
       if (last && last.type === 'text' && !L.cut) { last.text += evt.text } else { L.blocks.push({ type: 'text', text: evt.text }); L.cut = false }
       L.status = 'Escribiendo'
       break
@@ -772,9 +847,16 @@ function onEvent(evt) {
       for (const b of L.blocks) { if (b.type === 'tool') { b.done = true } }
       L.done = true
       ch.running = false
+      {
+        const out = evt.out || (ch.usage && ch.usage.out && ch.usage.outStart !== undefined ? ch.usage.out - ch.usage.outStart : 0)
+        const streamMs = L.firstAt ? Date.now() - L.firstAt : 0
+        L.stats = { ms: evt.ms || (L.startedAt ? Date.now() - L.startedAt : null), tps: out && streamMs > 500 ? out / (streamMs / 1000) : null }
+      }
+      if (S.settings.notify.chime && (!document.hasFocus() || !isCur)) { chime() }
       if (evt.outcome && !['completed', 'complete'].includes(evt.outcome)) {
-        L.note = evt.outcome === 'interrupted' ? 'Parado.' : `Terminó así: ${evt.outcome}`
-        pet.flash(evt.outcome === 'interrupted' ? 'waving' : 'failed', 2)
+        const stopped = ['interrupted', 'cancelled', 'canceled'].includes(evt.outcome)
+        L.note = stopped ? 'Parado.' : `Terminó así: ${evt.outcome}`
+        pet.flash(stopped ? 'waving' : 'failed', 2)
       } else {
         pet.flash('jumping', 2)
       }
@@ -789,7 +871,7 @@ function onEvent(evt) {
       if (evt.model) { ch.model = evt.model }
       break
     case 'usage':
-      ch.usage = { used: evt.used, max: evt.max }
+      ch.usage = { used: evt.used, max: evt.max, out: evt.out, outStart: ch.usage && ch.usage.outStart !== undefined && ch.live && !ch.live.done ? ch.usage.outStart : (ch.usage && ch.usage.out) || 0 }
       break
     case 'title':
       ch.title = evt.title
@@ -1079,6 +1161,8 @@ function renderSettings() {
   $('#srv-logout').disabled = !st.serverSignedIn
   $('#about-version').textContent = S.version
   renderPetLabels()
+  renderSnippetSettings()
+  $('#upd-url').value = (st.updates && st.updates.url) || ''
 }
 
 async function saveSetting(patch) {
@@ -1157,6 +1241,9 @@ async function start() {
   api.onEvent(onEvent)
   wireSettings()
   wirePetPicker()
+  wireExtras()
+  S.reasoning = init.settings.chat?.reasoning || ''
+  updateExtrasPills()
 
   for (const b of document.querySelectorAll('#conn-switch button')) { b.addEventListener('click', () => switchConn(b.dataset.conn)) }
   $('#new-chat').addEventListener('click', newChatView)
@@ -1200,3 +1287,364 @@ async function start() {
 start().catch(e => {
   document.body.append(el('pre', { class: 'error', text: 'No pude arrancar la pantalla: ' + e.message }))
 })
+
+// ── Gestión de chats: menú, renombrar, fijar, archivar, borrar, exportar ─────────────────────
+function closePopup() { $('#popup').hidden = true }
+
+function showPopup(items, x, y) {
+  const m = $('#popup')
+  m.replaceChildren(...items.map(([label, fn, cls]) => el('button', { class: cls || '', text: label, onclick: () => { closePopup(); fn() } })))
+  m.hidden = false
+  const w = m.offsetWidth
+  const h = m.offsetHeight
+  m.style.left = Math.max(8, Math.min(x, innerWidth - w - 8)) + 'px'
+  m.style.top = Math.max(8, Math.min(y, innerHeight - h - 8)) + 'px'
+}
+
+function rowOf(conn, sid) {
+  return S.sessions[conn].find(r => r.id === sid) || { id: sid, title: chat(conn, sid).title || 'Chat', pinned: false }
+}
+
+function openChatMenu(conn, sid, x, y) {
+  const r = rowOf(conn, sid)
+  showPopup([
+    ['✏️ Renombrar', () => renameChat(conn, sid)],
+    [r.pinned ? '📌 Quitar de fijados' : '📌 Fijar arriba', () => mutateChat(conn, sid, 'pin', !r.pinned)],
+    ['🗄 Archivar', () => mutateChat(conn, sid, 'archive', true)],
+    ['⬇️ Exportar a Markdown', () => exportChat(conn, sid)],
+    ['🗑 Borrar…', () => deleteChat(conn, sid), 'danger']
+  ], x, y)
+}
+
+function askBox({ title, text = '', value = null, ok = 'Aceptar', danger = false }) {
+  return new Promise(resolve => {
+    const d = $('#ask-dialog')
+    $('#ask-title').textContent = title
+    $('#ask-text').textContent = text
+    $('#ask-text').hidden = !text
+    const input = $('#ask-input')
+    input.hidden = value === null
+    input.value = value || ''
+    const okBtn = $('#ask-ok')
+    okBtn.textContent = ok
+    okBtn.className = danger ? 'btn-danger' : 'btn-primary'
+    const done = v => { d.close(); okBtn.onclick = null; $('#ask-cancel').onclick = null; resolve(v) }
+    okBtn.onclick = () => done(value === null ? true : input.value.trim() || null)
+    $('#ask-cancel').onclick = () => done(value === null ? false : null)
+    d.onclose = () => resolve(value === null ? false : null)
+    d.showModal()
+    if (value !== null) { input.focus(); input.select() } else { okBtn.focus() }
+  })
+}
+
+async function renameChat(conn, sid) {
+  const r = rowOf(conn, sid)
+  const title = await askBox({ title: 'Renombrar el chat', value: chat(conn, sid).title || r.title, ok: 'Guardar' })
+  if (!title) { return }
+  if (await mutateChat(conn, sid, 'rename', title)) {
+    chat(conn, sid).title = title
+    r.title = title
+    if (S.current.sid === sid) { setTopbar(); call(api.viewing, conn, sid, title).catch(() => {}) }
+    renderList()
+  }
+}
+
+async function deleteChat(conn, sid) {
+  const title = chat(conn, sid).title || rowOf(conn, sid).title
+  const yes = await askBox({ title: '¿Borrar este chat?', text: `«${title}» desaparecerá de Hermes Panel y de Hermes Desktop, con todos sus mensajes. No se puede deshacer. (Si solo quieres quitarlo de en medio, mejor «Archivar».)`, ok: 'Borrar', danger: true })
+  if (yes) { await mutateChat(conn, sid, 'delete') }
+}
+
+async function mutateChat(conn, sid, op, value) {
+  try {
+    await call(api.mutate, conn, sid, op, value)
+  } catch (e) {
+    showToastLine(`No se pudo: ${e.message}`)
+    return false
+  }
+  const rows = S.sessions[conn]
+  const r = rows.find(x => x.id === sid)
+  if (op === 'delete' || (op === 'archive' && value)) {
+    S.sessions[conn] = rows.filter(x => x.id !== sid)
+    if (op === 'delete') { S.chats.delete(key(conn, sid)) }
+    if (S.current.conn === conn && S.current.sid === sid) { newChatView() }
+    showToastLine(op === 'delete' ? 'Chat borrado.' : 'Chat archivado. Lo tienes en «Ver chats archivados».')
+  } else if (r && op === 'pin') {
+    r.pinned = Boolean(value)
+  }
+  renderList()
+  reloadSessionsSoon(conn)
+  return true
+}
+
+function chatMarkdown(conn, sid) {
+  const ch = chat(conn, sid)
+  const lines = [`# ${ch.title || 'Chat'}`, '', `_Exportado de Hermes Panel · ${CONN_NAMES[conn]}${ch.model ? ' · ' + ch.model : ''} · ${new Date().toLocaleString('es')}_`, '']
+  const turns = [...ch.transcript, ...(ch.live && ch.live.done ? [liveToTurn(ch.live)] : [])]
+  for (const t of turns) {
+    if (t.role === 'user') { lines.push('## Tú', '', t.text, ''); continue }
+    lines.push('## Hermes', '')
+    for (const b of t.blocks) {
+      if (b.type === 'text') { lines.push(b.text, '') } else { lines.push(`> 🔧 ${b.name}${b.args ? ' — `' + b.args.replace(/`/g, "'") + '`' : ''}`, '') }
+    }
+  }
+  return lines.join('\n')
+}
+
+async function exportChat(conn, sid) {
+  const ch = chat(conn, sid)
+  try {
+    if (!ch.loaded) { ch.transcript = await call(api.transcript, conn, sid); ch.loaded = true }
+    const r = await call(api.exportChat, ch.title || rowOf(conn, sid).title, chatMarkdown(conn, sid))
+    if (r.saved) { showToastLine(`Guardado en ${r.file}`) }
+  } catch (e) {
+    showToastLine(`No pude exportar: ${e.message}`)
+  }
+}
+
+async function openArchived() {
+  const d = $('#archived-dialog')
+  const list = $('#archived-list')
+  const conn = S.active
+  $('#archived-where').textContent = CONN_NAMES[conn]
+  list.replaceChildren(el('p', { class: 'muted', text: 'Cargando…' }))
+  d.showModal()
+  try {
+    const rows = await call(api.archived, conn)
+    list.replaceChildren()
+    if (!rows.length) { list.append(el('p', { class: 'muted', text: 'No hay chats archivados.' })); return }
+    for (const r of rows) {
+      const item = el('div', { class: 'arch-row' },
+        el('div', { class: 'grow' }, el('div', { class: 'n', text: r.title }), el('div', { class: 'muted small', text: r.preview })),
+        el('button', { class: 'btn-ghost', text: 'Abrir', onclick: () => { d.close(); openChat(conn, r.id) } }),
+        el('button', { class: 'btn-ghost', text: 'Desarchivar', onclick: async () => { if (await mutateChat(conn, r.id, 'archive', false)) { item.remove(); loadSessions(conn) } } }),
+        el('button', { class: 'btn-ghost danger', text: 'Borrar', onclick: async () => {
+          const yes = await askBox({ title: '¿Borrar este chat?', text: `«${r.title}» se borrará para siempre (también de Hermes Desktop).`, ok: 'Borrar', danger: true })
+          if (yes && await mutateChat(conn, r.id, 'delete')) { item.remove() }
+          if (!d.open) { d.showModal() }
+        } }))
+      list.append(item)
+    }
+  } catch (e) {
+    list.replaceChildren(el('p', { class: 'error', text: `No pude leerlos: ${e.message}` }))
+  }
+}
+
+// ── Escribir: imágenes, solo consultar, razonamiento, frases ─────────────────────────────────
+const READ_ONLY_NOTE = '[Modo solo consulta: puedes leer, buscar e investigar, pero NO cambies, borres, instales ni ejecutes nada que modifique archivos, programas o el sistema. Si hiciera falta un cambio, explícame cuál y pregúntame antes.]'
+const REASONING = [['', 'el de Hermes'], ['low', 'rápido'], ['medium', 'normal'], ['high', 'a fondo']]
+
+function updateExtrasPills() {
+  const ro = $('#readonly-pill')
+  ro.classList.toggle('on', S.readOnly)
+  ro.title = S.readOnly ? 'Solo consultar: Hermes no cambiará nada (pulsa para quitarlo)' : 'Pulsa para que Hermes solo lea y consulte, sin cambiar nada'
+  const rp = $('#reason-pill')
+  const ch = currentChat()
+  rp.disabled = Boolean(ch)
+  rp.textContent = `🧠 ${(REASONING.find(r => r[0] === S.reasoning) || REASONING[0])[1]}`
+  rp.title = ch ? 'El razonamiento se elige al empezar un chat nuevo' : 'Cuánto piensa Hermes en el chat nuevo (pulsa para cambiar)'
+}
+
+function renderAttach() {
+  const strip = $('#attach-strip')
+  strip.replaceChildren(...S.attach.map((a, i) => el('div', { class: 'att' },
+    el('img', { src: a.url, alt: a.name, title: a.name }),
+    el('button', { class: 'att-x', text: '✕', title: 'Quitar', onclick: () => { URL.revokeObjectURL(a.url); S.attach.splice(i, 1); renderAttach(); updateComposer() } }))))
+  strip.hidden = !S.attach.length
+}
+
+async function addImages(files) {
+  for (const file of files) {
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) { showToastLine('Solo se pueden adjuntar imágenes (PNG, JPG, WebP o GIF).'); continue }
+    if (file.size > 15 * 1024 * 1024) { showToastLine(`«${file.name}» pasa de 15 MB.`); continue }
+    if (S.attach.length >= 6) { showToastLine('Como mucho 6 imágenes por mensaje.'); break }
+    const buf = new Uint8Array(await file.arrayBuffer())
+    let bin = ''
+    for (let i = 0; i < buf.length; i += 0x8000) { bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000)) }
+    const ext = file.type.split('/')[1].replace('jpeg', 'jpg')
+    S.attach.push({ name: file.name && file.name !== 'image.png' ? file.name : `captura-${Date.now()}.${ext}`, b64: btoa(bin), url: URL.createObjectURL(file) })
+  }
+  renderAttach()
+  updateComposer()
+}
+
+function snippetMatches() {
+  const v = $('#input').value
+  if (!v.startsWith('/') || v.includes('\n') || v.length > 40) { return null }
+  const q = v.slice(1).toLowerCase()
+  return (S.settings.snippets || []).filter(x => x.name.toLowerCase().includes(q))
+}
+
+function closeSnippets() { $('#snip-menu').hidden = true }
+
+function updateSnippets() {
+  const list = snippetMatches()
+  const m = $('#snip-menu')
+  if (!list || !list.length) { m.hidden = true; return }
+  m.replaceChildren(el('div', { class: 'mh', text: 'Frases rápidas (Tab o clic para usar)' }), ...list.map(x => el('button', { text: x.name, title: x.text, onclick: () => useSnippet(x) })))
+  const box = $('#composer').getBoundingClientRect()
+  const main = $('#main').getBoundingClientRect()
+  m.style.left = (box.left - main.left) + 'px'
+  m.style.bottom = (main.bottom - box.top + 6) + 'px'
+  m.hidden = false
+}
+
+function useSnippet(x) {
+  const t = $('#input')
+  t.value = x.text
+  closeSnippets()
+  autoGrow()
+  updateComposer()
+  t.focus()
+  t.setSelectionRange(t.value.length, t.value.length)
+}
+
+// ── Sonido al terminar (generado aquí, sin archivos) ─────────────────────────────────────────
+let audioCtx = null
+function chime() {
+  try {
+    audioCtx = audioCtx || new AudioContext()
+    const now = audioCtx.currentTime
+    for (const [freq, at] of [[880, 0], [1318.5, 0.12]]) {
+      const o = audioCtx.createOscillator()
+      const g = audioCtx.createGain()
+      o.type = 'sine'
+      o.frequency.value = freq
+      g.gain.setValueAtTime(0.0001, now + at)
+      g.gain.exponentialRampToValueAtTime(0.12, now + at + 0.02)
+      g.gain.exponentialRampToValueAtTime(0.0001, now + at + 0.45)
+      o.connect(g).connect(audioCtx.destination)
+      o.start(now + at)
+      o.stop(now + at + 0.5)
+    }
+  } catch {}
+}
+
+// ── Tu uso ───────────────────────────────────────────────────────────────────────────────────
+async function openUsage(conn = S.active) {
+  const d = $('#usage-dialog')
+  for (const b of document.querySelectorAll('#usage-tabs button')) { b.classList.toggle('active', b.dataset.conn === conn) }
+  const body = $('#usage-body')
+  body.replaceChildren(el('p', { class: 'muted', text: 'Calculando…' }))
+  if (!d.open) { d.showModal() }
+  try {
+    const u = await call(api.usage, conn)
+    const max = Math.max(1, ...u.days.map(x => x.chats))
+    const bars = el('div', { class: 'u-bars' }, ...u.days.map(x => el('div', { class: 'u-bar', title: `${x.date}: ${x.chats} chats` }, el('div', { style: `height:${Math.round(x.chats / max * 100)}%` }))))
+    const active = u.days.filter(x => x.chats).length
+    body.replaceChildren(
+      el('div', { class: 'u-cards' },
+        el('div', { class: 'u-card' }, el('b', { text: String(u.chats) }), el('span', { text: 'chats en total' })),
+        el('div', { class: 'u-card' }, el('b', { text: String(u.messages) }), el('span', { text: 'mensajes' })),
+        el('div', { class: 'u-card' }, el('b', { text: kfmt(u.input) }), el('span', { text: 'tokens leídos' })),
+        el('div', { class: 'u-card' }, el('b', { text: kfmt(u.output) }), el('span', { text: 'tokens escritos' }))),
+      el('h4', { text: `Chats por día (últimos 30 días · ${active} días con uso)` }), bars,
+      el('h4', { text: 'Por modelo' }),
+      el('table', { class: 'u-table' },
+        el('tr', {}, el('th', { text: 'Modelo' }), el('th', { text: 'Chats' }), el('th', { text: 'Leídos' }), el('th', { text: 'Escritos' })),
+        ...u.models.slice(0, 15).map(m => el('tr', {}, el('td', { text: m.model }), el('td', { text: String(m.chats) }), el('td', { text: kfmt(m.input) }), el('td', { text: kfmt(m.output) })))),
+      el('p', { class: 'muted small', text: 'Calculado con tus chats guardados en ese Hermes; no sale nada de tu red.' }))
+  } catch (e) {
+    body.replaceChildren(el('p', { class: 'error', text: `No pude calcularlo: ${e.message}` }))
+  }
+}
+
+// ── Actualizaciones ──────────────────────────────────────────────────────────────────────────
+function showUpdate(version, notes) {
+  const b = $('#update-bar')
+  b.replaceChildren(el('div', { class: 'grow' }, el('strong', { text: `Hay una versión nueva de Hermes Panel (${version}). ` }), el('span', { class: 'muted', text: notes || '' })),
+    el('button', { class: 'btn-primary', text: 'Actualizar y reiniciar', onclick: async e => {
+      e.target.disabled = true
+      e.target.textContent = 'Descargando…'
+      try { await call(api.updateInstall) } catch (err) { e.target.disabled = false; e.target.textContent = 'Actualizar y reiniciar'; showToastLine(`No pude actualizar: ${err.message}`) }
+    } }))
+  b.hidden = false
+}
+
+function renderSnippetSettings() {
+  const box = $('#snip-list')
+  const list = S.settings.snippets || []
+  box.replaceChildren(...list.map((x, i) => el('div', { class: 'snip-row' },
+    el('div', { class: 'grow' }, el('div', { class: 'n', text: '/' + x.name }), el('div', { class: 'muted small', text: x.text })),
+    el('button', { class: 'btn-ghost', text: 'Editar', onclick: async () => {
+      const name = await askBox({ title: 'Nombre de la frase', value: x.name, ok: 'Siguiente' })
+      if (!name) { return }
+      const text = await askBox({ title: `Texto de «${name}»`, value: x.text, ok: 'Guardar' })
+      if (!text) { return }
+      const next = list.slice(); next[i] = { name, text }
+      await saveSetting({ snippets: next })
+      renderSnippetSettings()
+    } }),
+    el('button', { class: 'btn-ghost danger', text: 'Quitar', onclick: async () => { await saveSetting({ snippets: list.filter((_, j) => j !== i) }); renderSnippetSettings() } }))))
+  if (!list.length) { box.append(el('p', { class: 'muted small', text: 'No tienes frases guardadas.' })) }
+}
+
+function wireExtras() {
+  document.addEventListener('click', e => { const m = $('#popup'); if (!m.hidden && !m.contains(e.target)) { closePopup() } })
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePopup(); closeSnippets() } })
+  $('#chat-actions').addEventListener('click', e => { const ch = currentChat(); if (ch) { const b = e.currentTarget.getBoundingClientRect(); e.stopPropagation(); openChatMenu(ch.conn, ch.sid, b.left - 150, b.bottom + 4) } })
+  $('#ctx-new').addEventListener('click', () => {
+    const ch = currentChat()
+    const title = ch ? ch.title : ''
+    newChatView()
+    $('#input').value = `Sigamos con lo que hablábamos en el chat «${title}». Si te hace falta el contexto, búscalo en tus sesiones anteriores.`
+    autoGrow()
+    updateComposer()
+  })
+  $('#ctx-hide').addEventListener('click', () => { const ch = currentChat(); if (ch) { S.ctxHidden.add(key(ch.conn, ch.sid)) } setTopbar() })
+  $('#readonly-pill').addEventListener('click', () => { S.readOnly = !S.readOnly; updateExtrasPills() })
+  $('#reason-pill').addEventListener('click', () => {
+    const i = REASONING.findIndex(r => r[0] === S.reasoning)
+    S.reasoning = REASONING[(i + 1) % REASONING.length][0]
+    updateExtrasPills()
+    call(api.settings, { chat: { reasoning: S.reasoning } }).catch(() => {})
+  })
+  $('#attach-btn').addEventListener('click', () => $('#file-input').click())
+  $('#file-input').addEventListener('change', e => { addImages([...e.target.files]); e.target.value = '' })
+  const input = $('#input')
+  input.addEventListener('paste', e => {
+    const files = [...(e.clipboardData && e.clipboardData.files ? e.clipboardData.files : [])].filter(f => f.type.startsWith('image/'))
+    if (files.length) { e.preventDefault(); addImages(files) }
+  })
+  const comp = $('#composer')
+  comp.addEventListener('dragover', e => { e.preventDefault(); comp.classList.add('drop') })
+  comp.addEventListener('dragleave', () => comp.classList.remove('drop'))
+  comp.addEventListener('drop', e => { e.preventDefault(); comp.classList.remove('drop'); addImages([...e.dataTransfer.files]) })
+  input.addEventListener('input', updateSnippets)
+  input.addEventListener('keydown', e => {
+    const list = snippetMatches()
+    if (list && list.length && !$('#snip-menu').hidden && (e.key === 'Tab' || e.key === 'Enter')) { e.preventDefault(); e.stopImmediatePropagation(); useSnippet(list[0]) }
+  }, true)
+  let ft = null
+  $('#search').addEventListener('input', e => {
+    clearTimeout(ft)
+    const q = e.target.value.trim()
+    const conn = S.active
+    if (q.length < 3) { S.found[conn] = []; return }
+    ft = setTimeout(async () => {
+      try { S.found[conn] = await call(api.search, conn, q) } catch { S.found[conn] = [] }
+      if (S.search.trim() === q) { renderList() }
+    }, 400)
+  })
+  $('#open-usage').addEventListener('click', () => openUsage())
+  for (const b of document.querySelectorAll('#usage-tabs button')) { b.addEventListener('click', () => openUsage(b.dataset.conn)) }
+  $('#usage-close').addEventListener('click', () => $('#usage-dialog').close())
+  $('#archived-close').addEventListener('click', () => $('#archived-dialog').close())
+  $('#snip-add').addEventListener('click', async () => {
+    const name = await askBox({ title: 'Nombre de la frase (lo que escribirás después de «/»)', value: '', ok: 'Siguiente' })
+    if (!name) { return }
+    const text = await askBox({ title: `Texto de «${name}»`, value: '', ok: 'Guardar' })
+    if (!text) { return }
+    await saveSetting({ snippets: [...(S.settings.snippets || []), { name, text }] })
+    renderSnippetSettings()
+  })
+  $('#upd-save').addEventListener('click', () => saveSetting({ updates: { url: $('#upd-url').value.trim() } }))
+  $('#upd-check').addEventListener('click', async () => {
+    const st = $('#upd-status')
+    st.textContent = 'Buscando…'
+    try {
+      const r = await call(api.updateCheck)
+      st.textContent = !r ? 'Falta la dirección de actualizaciones.' : r.available ? `Hay una versión nueva: ${r.version}.` : `Tienes la última (${S.version}).`
+    } catch (e) { st.textContent = `No pude comprobarlo: ${e.message}` }
+  })
+}
