@@ -62,6 +62,18 @@ app.whenReady().then(async () => {
     const S = ${JSON.stringify(srcs)}, FW = 192, FH = 208, COLS = 8, ROWS = 9, BASE = 202
     const img = {}
     for (const [k, v] of Object.entries(S)) { const i = new Image(); i.src = v; await i.decode(); img[k] = i }
+    // Saludo: la mano levantada (arriba a la izquierda, fuera del pelo) se gira desde la muñeca para que
+    // vaya y venga. Coordenadas en píxeles del dibujo maestro docs/mascota/saludo.png (286×480).
+    const MANO = { x: 0, y: 60, w: 56, h: 70, px: 50, py: 122 }
+    const saludoCon = ang => {
+      const i = img.saludo, c = document.createElement('canvas'); c.width = i.width; c.height = i.height
+      const g = c.getContext('2d'); g.drawImage(i, 0, 0); g.clearRect(MANO.x, MANO.y, MANO.w, MANO.h)
+      g.save(); g.translate(MANO.px, MANO.py); g.rotate(ang * Math.PI / 180); g.translate(-MANO.px, -MANO.py)
+      g.drawImage(i, MANO.x, MANO.y, MANO.w, MANO.h, MANO.x, MANO.y, MANO.w, MANO.h); g.restore()
+      return c
+    }
+    const MANO_ANG = [4, 20, 4, -14, 4, 20, 4, -14]
+    MANO_ANG.forEach((a, k) => { img['saludo-' + k] = saludoCon(a) })
     // Alto de cada pose en el cuadro, para que la chica tenga el mismo tamaño en todas (sentada o
     // corriendo ocupa menos alto que de pie). Si alguna no cabe de ancho, se reduce esa.
     const ALTO = { quieta: 186, pregunta: 186, lee: 186, saludo: 176, 'correr-1': 150, 'correr-2': 168, 'correr-3': 150, 'correr-4': 168, salto: 150, triste: 122 }
@@ -71,7 +83,7 @@ app.whenReady().then(async () => {
     // sy aplasta o estira en vertical, flip la pone mirando al otro lado.
     const put = (col, row, pose, { dx = 0, dy = 0, rot = 0, sy = 1, flip = false } = {}) => {
       const i = img[pose]
-      let s = ALTO[pose] / i.height; if (i.width * s > FW - 6) { s = (FW - 6) / i.width }; if (i.height * s > FH - 8) { s = (FH - 8) / i.height }
+      let s = (ALTO[pose] || ALTO[pose.replace(/-\\d+$/, '')]) / i.height; if (i.width * s > FW - 6) { s = (FW - 6) / i.width }; if (i.height * s > FH - 8) { s = (FH - 8) / i.height }
       const w = i.width * s, h = i.height * s * sy
       g.save(); g.beginPath(); g.rect(col * FW, row * FH, FW, FH); g.clip()
       g.translate(col * FW + FW / 2 + dx, row * FH + BASE - dy)
@@ -85,10 +97,13 @@ app.whenReady().then(async () => {
       // y se corre a la derecha (su recorte es más estrecho y quedaba desplazada respecto al cuerpo).
       'running-right': wave(8, (s, k) => ['correr-' + (k % 4 + 1), { dy: k % 2 ? 3 : 0, dx: k % 2 ? 12 : 0, rot: 1.5 }]),
       'running-left': wave(8, (s, k) => ['correr-' + (k % 4 + 1), { dy: k % 2 ? 3 : 0, dx: k % 2 ? -12 : 0, rot: -1.5, flip: true }]),
-      waving: wave(8, s => ['saludo', { rot: 3 * s, dy: 2 + 2 * Math.abs(s) }]),
+      // Dos vaivenes de la mano por vuelta; el cuerpo apenas se mueve.
+      waving: wave(8, (s, k) => ['saludo-' + k, { rot: 0.8 * s, dy: 1 + Math.abs(s) }]),
       jumping: [0, 14, 26, 32, 32, 26, 14, 0].map((y, k) => [k === 0 || k === 7 ? 'quieta' : 'salto', { dy: y, sy: k === 0 || k === 7 ? 0.94 : 1 }]),
-      failed: wave(8, (s, k) => ['triste', { dx: k % 2 ? 1 : -1, sy: 1 - 0.015 * (1 + s) / 2 }]),
-      waiting: wave(8, s => ['pregunta', { rot: 2.5 * s, dy: 1 + Math.abs(s) * 2 }]),
+      // Triste: respira hondo y despacio, hundiendo los hombros (sin temblar de lado).
+      failed: wave(8, s => ['triste', { sy: 1 - 0.02 * (1 + s) / 2, dy: 0 }]),
+      // Esperando: ladea un poco y da saltitos suaves, como quien pregunta.
+      waiting: wave(8, s => ['pregunta', { rot: 1.2 * s, dy: 1 + Math.abs(s) * 2 }]),
       running: wave(8, (s, k) => ['correr-' + (k % 4 + 1), { dy: k % 2 ? 3 : 0, dx: k % 2 ? 12 : 0, rot: 1.5 }]),
       review: wave(8, s => ['lee', { rot: 1.2 * s, sy: 1 + 0.01 * s }])
     }
