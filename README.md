@@ -21,7 +21,7 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
 
 **Pedila, la mensajera.** En la app las sandalias cobran vida: Pedila es una chica que se las calza y corre con tus mensajes de un lado a otro. Es la mascota de la app. Espera tranquila con su carta, corre mientras Hermes trabaja, lee su pergamino cuando Hermes usa herramientas, te ofrece la carta cuando Hermes necesita tu permiso, salta de alegría cuando termina y se pone triste si algo falla.
 
-<p align="center"><img src="docs/mascota/quieta.png" height="150" alt="Pedila, de pie con su carta"> <img src="docs/mascota/correr-a.png" height="130" alt="Pedila corriendo con la carta"> <img src="docs/mascota/lee.png" height="150" alt="Pedila leyendo un pergamino"> <img src="docs/mascota/salto.png" height="140" alt="Pedila saltando de alegría"></p>
+<p align="center"><img src="docs/mascota/quieta.png" height="150" alt="Pedila, de pie con su carta"> <img src="docs/mascota/correr-1.png" height="130" alt="Pedila corriendo con la carta"> <img src="docs/mascota/lee.png" height="150" alt="Pedila leyendo un pergamino"> <img src="docs/mascota/salto.png" height="140" alt="Pedila saltando de alegría"></p>
 
 **El icono, el banner y Pedila** están dibujados en tinta al estilo manga, con el oro de las sandalias como único color: en el icono, una sandalia alada a toda velocidad; en el banner, Pedila cruzando el cielo con una carta. Los generó el propio Hermes con un modelo de imágenes en local (Qwen-Image), y después se recortaron para la app ([`docs/icono.png`](docs/icono.png), [`docs/banner.jpg`](docs/banner.jpg), [`docs/mascota/`](docs/mascota)). Las poses de Pedila se pidieron sobre fondo verde; `scripts/make-pet.js` quita el verde y monta la hoja animada.
 
