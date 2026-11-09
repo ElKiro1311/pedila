@@ -1,4 +1,6 @@
-<p align="center"><img src="docs/logo.svg" width="128" alt="Logo de Pedila: una sandalia alada"></p>
+<p align="center"><img src="docs/banner.jpg" alt="Un par de sandalias aladas de oro volando sobre el mar al amanecer"></p>
+
+<p align="center"><img src="docs/icono.png" width="112" alt="Icono de Pedila: una sandalia alada de oro"></p>
 
 <h1 align="center">Pedila</h1>
 
@@ -17,7 +19,7 @@
 
 Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, esté en tu PC o en tu servidor.
 
-**El logo** es una de esas sandalias: suela y tiras de oro, con el ala blanca en el tobillo. Es un dibujo original del proyecto ([`docs/logo.svg`](docs/logo.svg)).
+**El icono y el banner** son esas sandalias: de oro, con alas, volando sobre el mar. Los generó el propio Hermes con un modelo de imágenes en local (Qwen-Image), a partir de esta misma descripción, y después se recortaron para la app ([`docs/icono.png`](docs/icono.png), [`docs/banner.jpg`](docs/banner.jpg)).
 
 ## Qué hace
 
@@ -71,7 +73,7 @@ Los cambios sobre un chat (renombrar, fijar, archivar, borrar) usan las edicione
 
 ```
 npm install                # si falta el binario de Electron: node node_modules/electron/install.js
-npm run assets             # iconos desde docs/logo.svg y copia de marked/DOMPurify
+npm run assets             # iconos desde docs/icono.png y copia de marked/DOMPurify
 npm test                   # pruebas de las piezas puras
 npm start                  # abre la app
 npm run dist               # instalador en dist/ (NSIS por usuario)
