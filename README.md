@@ -1,6 +1,6 @@
-<p align="center"><img src="docs/banner.jpg" alt="Un par de sandalias aladas de oro volando sobre el mar al amanecer"></p>
+<p align="center"><img src="docs/banner.jpg" alt="Una mensajera con sandalias aladas de oro corre por el cielo con una carta, dibujada en tinta"></p>
 
-<p align="center"><img src="docs/icono.png" width="112" alt="Icono de Pedila: una sandalia alada de oro"></p>
+<p align="center"><img src="docs/icono.png" width="112" alt="Icono de Pedila: una sandalia alada a toda velocidad, en tinta con un toque de oro"></p>
 
 <h1 align="center">Pedila</h1>
 
@@ -19,7 +19,7 @@
 
 Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, esté en tu PC o en tu servidor.
 
-**El icono y el banner** son esas sandalias: de oro, con alas, volando sobre el mar. Los generó el propio Hermes con un modelo de imágenes en local (Qwen-Image), a partir de esta misma descripción, y después se recortaron para la app ([`docs/icono.png`](docs/icono.png), [`docs/banner.jpg`](docs/banner.jpg)).
+**El icono y el banner** son esas sandalias, dibujadas en tinta al estilo manga con el oro como único color: en el icono, una sandalia alada a toda velocidad; en el banner, una mensajera que cruza el cielo con una carta. Los generó el propio Hermes con un modelo de imágenes en local (Qwen-Image), y después se recortaron para la app ([`docs/icono.png`](docs/icono.png), [`docs/banner.jpg`](docs/banner.jpg)).
 
 ## Qué hace
 

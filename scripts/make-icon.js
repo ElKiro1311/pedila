@@ -3,7 +3,7 @@
 // Se ejecuta con Electron: `npx electron scripts/make-icon.js`.
 //   src/assets/icon.png      256×256 (app, ventana, instalador)
 //   src/assets/tray.png      16×16 (bandeja) + tray@2x.png 32×32
-// Con `--desde <imagen> [--banner <imagen>]` prepara antes los maestros: recorta el cuadrado redondeado
+// Con `--desde <imagen> [--recorte x,lado] [--banner <imagen>]` prepara antes los maestros: recorta el cuadrado redondeado
 // del icono (esquinas transparentes) y guarda el banner como JPEG; volver a codificar quita los metadatos.
 const { app, BrowserWindow } = require('electron')
 const fs = require('node:fs')
@@ -23,9 +23,11 @@ app.whenReady().then(async () => {
 
   const desde = arg('--desde')
   if (desde) {
-    // El cuadrado redondeado ocupa ~70..955 de 1024: se recorta sin el marco claro y con esquinas transparentes.
+    // `--recorte x,lado` (en píxeles de 1024) elige el cuadrado a usar; por defecto 74,876 quita el marco
+    // claro de una imagen que ya trae su cuadrado redondeado. Las esquinas quedan transparentes.
+    const [rx, rw] = (arg('--recorte') || '74,876').split(',').map(Number)
     const out = await run(fs.readFileSync(desde).toString('base64'), `
-      const s = img.width / 1024, x = 74 * s, w = 876 * s, n = 512, r = 118
+      const s = img.width / 1024, x = ${rx} * s, w = ${rw} * s, n = 512, r = 118
       const c = document.createElement('canvas'); c.width = n; c.height = n
       const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'
       g.beginPath(); g.roundRect(0, 0, n, n, r); g.clip()
