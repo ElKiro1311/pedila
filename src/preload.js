@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('hp', {
   retry: conn => call('hp:retry', conn),
   settings: patch => call('hp:settings', patch || null),
   viewing: (conn, sid, title) => call('hp:viewing', conn, sid, title || ''),
+  petsSearch: params => call('hp:pets-search', params || {}),
+  petsInstalled: () => call('hp:pets-installed'),
+  petUse: slug => call('hp:pet-use', slug),
   openLogs: () => call('hp:open-logs'),
   testNotify: () => call('hp:test-notify'),
   onEvent: cb => {

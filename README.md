@@ -42,15 +42,23 @@ Solo en desarrollo:
 - `HERMES_PANEL_CDP=9334` abre un puerto de depuración. Con `node scripts/cdp.mjs 9334 eval "<js>"` se lee o maneja la ventana, y con `close` se cierra.
 - `HERMES_PANEL_DEMO=1` usa datos inventados (`src/shell/demo.js`), sin tocar ningún Hermes.
 - `HERMES_PANEL_DEBUG=1` saca también el registro por consola.
+- `HERMES_PANEL_DATA=<carpeta>` usa otra carpeta de datos (ajustes, sesión, mascotas) y deja abrir esa copia junto a la app instalada.
 
 El registro va a `%APPDATA%\Hermes Panel\logs\hermes-panel.log` y los ajustes a `%APPDATA%\Hermes Panel\settings.json`.
 
 ## Mascota
 
+En Ajustes → Mascota → «Elegir otra mascota…» se abre el selector:
+
+- **Tus mascotas**: la predeterminada más las que ya usaste.
+- **Catálogo de Petdex**: más de 5.000 mascotas, con búsqueda por nombre o autor y filtro por tipo.
+  - Las miniaturas animadas son las tiras `preview.webp` que usa la propia web de Petdex.
+  - Al elegir una se baja su hoja completa, solo de `petdex.dev`, con un tamaño máximo y comprobando que sea PNG o WebP. Se guarda en `%APPDATA%\Hermes Panel\pets\<slug>\`.
+
 La predeterminada es Codux, de petdex.dev (slug `code-default`, subida por duxphp). Su arte no está en el repositorio: `scripts/fetch-pet.mjs` la descarga al preparar la app.
 
-`src/shell/pet.js` sirve para cualquier hoja de Petdex de cuadros de 192×208:
-- la actual, de 8×9 filas (idle, running-right, running-left, waving, jumping, failed, waiting, running, review);
-- la antigua, de 9×8.
+`src/shell/pet.js` deduce la cuadrícula de cada hoja:
+- cuadros de 192×208 en 8×9 (o con filas de más, como 8×11) y en las antiguas de 9×8;
+- si la hoja no encaja en 192×208, la de 8×9 o 9×8 con esa proporción, como hace la web de Petdex al escalarla.
 
 El número de cuadros de cada fila se cuenta mirando la transparencia.

@@ -1,5 +1,5 @@
 // Hermes Panel: la pantalla. Sin Node; habla con el proceso principal por window.hp (preload).
-import { Pet } from './pet.js'
+import { Pet, loadSheet } from './pet.js'
 
 const demo = new URLSearchParams(location.search).get('demo') === '1'
 const api = demo ? (await import('./demo.js')).demoApi : window.hp
@@ -823,9 +823,14 @@ function onEvent(evt) {
   updatePet()
 }
 
-// ── Codux ────────────────────────────────────────────────────────────────────────────────────
+// ── Mascota ──────────────────────────────────────────────────────────────────────────────────
 const pet = new Pet($('#pet'))
 const welcomePet = new Pet($('#welcome-pet'))
+const settingsPet = new Pet($('#settings-pet'))
+const DEFAULT_PET = { slug: 'code-default', name: 'codux', author: 'duxphp', kind: 'object', url: PET_URL, bundled: true }
+const KIND_NAMES = { character: 'personaje', creature: 'criatura', object: 'objeto' }
+const petName = p => { const n = (p && p.name) || 'mascota'; return n.charAt(0).toUpperCase() + n.slice(1) }
+const petBy = p => (p && p.author ? `de ${p.author} en Petdex` : 'de Petdex')
 
 function updatePet() {
   let base = 'idle'
@@ -833,8 +838,182 @@ function updatePet() {
   const relevant = all.filter(c => c.conn === S.active || c === currentChat())
   if (all.some(c => c.prompts.size)) { base = 'waiting' } else if (relevant.some(c => c.live && !c.live.done && c.live.blocks.some(b => b.type === 'tool' && !b.done))) { base = 'review' } else if (relevant.some(c => (c.live && !c.live.done) || c.running)) { base = 'running' }
   pet.setBase(base)
-  const what = { idle: 'Codux está tranquilo', waiting: 'Hermes te necesita', review: 'Hermes está usando herramientas', running: 'Hermes está trabajando' }[base]
+  const name = petName(S.pet)
+  const what = { idle: `${name} está tranquilo`, waiting: 'Hermes te necesita', review: 'Hermes está usando herramientas', running: 'Hermes está trabajando' }[base]
   $('#pet').title = what
+}
+
+function renderPetLabels() {
+  const p = S.pet || DEFAULT_PET
+  $('#settings-pet-name').textContent = petName(p)
+  $('#settings-pet-by').textContent = petBy(p) + (p.kind ? ` · ${KIND_NAMES[p.kind] || p.kind}` : '')
+  $('#about-pet').textContent = `Mascota: ${petName(p)}, ${petBy(p)}.`
+  updatePet()
+}
+
+/** Pone la mascota en la barra, la bienvenida y Ajustes. Si su hoja no vale, lanza el error. */
+async function applyPet(info, { greet = false } = {}) {
+  await pet.load(info.url)
+  S.pet = info
+  welcomePet.load(info.url).catch(() => {})
+  settingsPet.load(info.url).catch(() => {})
+  renderPetLabels()
+  if (greet) { pet.flash('waving', 3) }
+}
+
+// Selector: «Tus mascotas» (la de la app y las que ya usaste) y el catálogo de Petdex.
+const PP = { tab: 'petdex', q: '', kind: '', items: [], total: 0, sel: null, seq: 0, kinds: null }
+
+function stripFor(item, cls = '') {
+  const d = el('div', { class: `strip ${cls}`.trim() })
+  const fail = text => { d.classList.add('missing'); d.textContent = text }
+  if (item.url) {
+    // Hoja completa guardada: se anima la fila «idle».
+    loadSheet(item.url).then(sh => {
+      d.style.setProperty('--cols', String(sh.cols))
+      d.style.setProperty('--rows', String(sh.rows))
+      d.style.backgroundImage = `url("${item.url}")`
+    }).catch(() => fail('no se puede ver'))
+  } else if (item.preview) {
+    // Vista previa de Petdex: una tira de 6 cuadros (la usa su propia web).
+    const probe = new Image()
+    probe.onload = () => { d.style.backgroundImage = `url("${item.preview}")` }
+    probe.onerror = () => fail('sin vista previa')
+    probe.src = item.preview
+  }
+  return d
+}
+
+function petCard(item) {
+  const current = S.pet && S.pet.slug === item.slug
+  const card = el('button', { class: 'pet-card' + (PP.sel && PP.sel.slug === item.slug ? ' sel' : ''), title: `${petName(item)} — ${petBy(item)}`, 'data-slug': item.slug },
+    stripFor(item),
+    el('div', { class: 'n', text: petName(item) }),
+    el('div', { class: 'a', text: item.author ? `de ${item.author}` : '' }),
+    current ? el('div', { class: 'badge', text: 'La que tienes' }) : item.installed ? el('div', { class: 'badge', text: 'Guardada' }) : null)
+  card.addEventListener('click', () => selectPet(item))
+  card.addEventListener('dblclick', () => { selectPet(item); usePet() })
+  return card
+}
+
+function selectPet(item) {
+  PP.sel = item
+  for (const c of document.querySelectorAll('#pp-grid .pet-card')) { c.classList.toggle('sel', c.dataset.slug === item.slug) }
+  $('#pp-sel-strip').replaceWith(Object.assign(stripFor(item, 'big'), { id: 'pp-sel-strip' }))
+  $('#pp-sel-name').textContent = petName(item)
+  $('#pp-sel-by').textContent = petBy(item) + (item.kind ? ` · ${KIND_NAMES[item.kind] || item.kind}` : '')
+  const current = S.pet && S.pet.slug === item.slug
+  $('#pp-use').disabled = current
+  $('#pp-use').textContent = current ? 'Ya es tu mascota' : 'Usar esta mascota'
+}
+
+function ppStatus(text, retry = false) {
+  const s = $('#pp-status')
+  s.replaceChildren()
+  s.hidden = !text
+  if (text) { s.append(text) }
+  if (retry) { s.append(' ', el('button', { class: 'btn-ghost', text: 'Reintentar', onclick: () => loadPetPage(true) })) }
+}
+
+async function loadPetPage(reset) {
+  const seq = ++PP.seq
+  const grid = $('#pp-grid')
+  $('#pp-filters').hidden = PP.tab !== 'petdex'
+  if (reset) { grid.replaceChildren(); PP.items = []; $('#pp-more').hidden = true }
+  if (PP.tab === 'mine') {
+    try {
+      const mine = await call(api.petsInstalled)
+      if (seq !== PP.seq) { return }
+      PP.items = mine
+      grid.replaceChildren(...mine.map(petCard))
+      ppStatus(mine.length > 1 ? '' : 'Aquí aparecerán las mascotas que elijas del catálogo de Petdex.')
+    } catch (e) {
+      if (seq === PP.seq) { ppStatus(`No pude leer tus mascotas: ${e.message}`) }
+    }
+    return
+  }
+  ppStatus(PP.items.length ? '' : 'Cargando el catálogo de Petdex…')
+  try {
+    const r = await call(api.petsSearch, { q: PP.q, kind: PP.kind, offset: PP.items.length, limit: 30 })
+    if (seq !== PP.seq) { return }
+    if (!PP.kinds) {
+      PP.kinds = r.kinds
+      for (const b of document.querySelectorAll('#pp-kinds button')) {
+        const n = b.dataset.kind ? r.kinds[b.dataset.kind] : r.all
+        if (n) { b.textContent = `${b.textContent.replace(/ \(\d+\)$/, '')} (${n})` }
+      }
+    }
+    PP.items.push(...r.items)
+    PP.total = r.total
+    grid.append(...r.items.map(petCard))
+    $('#pp-more').hidden = PP.items.length >= r.total
+    $('#pp-count').textContent = `${PP.items.length} de ${r.total}`
+    ppStatus(r.total ? '' : 'Ninguna mascota coincide.')
+  } catch (e) {
+    if (seq === PP.seq) { ppStatus(e.message, true) }
+  }
+}
+
+async function usePet() {
+  const item = PP.sel
+  if (!item || (S.pet && S.pet.slug === item.slug)) { return }
+  const btn = $('#pp-use')
+  btn.disabled = true
+  btn.textContent = item.url ? 'Cambiando…' : 'Descargando…'
+  const prev = S.pet
+  try {
+    const info = await call(api.petUse, item.slug)
+    try {
+      await applyPet(info, { greet: true })
+    } catch (e) {
+      // La hoja no tiene la geometría de Petdex: vuelvo a la anterior.
+      if (prev) { await call(api.petUse, prev.slug).catch(() => {}) }
+      throw new Error(`${petName(item)} ${e.message}; sigues con ${petName(prev)}`)
+    }
+    $('#pet-dialog').close()
+  } catch (e) {
+    ppStatus(`No pude cambiar de mascota: ${e.message}`)
+    btn.disabled = false
+    btn.textContent = 'Usar esta mascota'
+  }
+}
+
+function openPetPicker() {
+  PP.sel = null
+  $('#pp-sel-name').textContent = 'Elige una'
+  $('#pp-sel-by').textContent = ''
+  $('#pp-sel-strip').replaceWith(Object.assign(el('div', { class: 'strip big missing' }), { id: 'pp-sel-strip' }))
+  $('#pp-use').disabled = true
+  $('#pp-use').textContent = 'Usar esta mascota'
+  for (const b of document.querySelectorAll('#pp-tabs button')) { b.classList.toggle('active', b.dataset.tab === PP.tab) }
+  $('#pet-dialog').showModal()
+  loadPetPage(true)
+}
+
+function wirePetPicker() {
+  $('#choose-pet').addEventListener('click', openPetPicker)
+  $('#pp-close').addEventListener('click', () => $('#pet-dialog').close())
+  $('#pp-use').addEventListener('click', usePet)
+  $('#pp-more-btn').addEventListener('click', () => loadPetPage(false))
+  for (const b of document.querySelectorAll('#pp-tabs button')) {
+    b.addEventListener('click', () => {
+      PP.tab = b.dataset.tab
+      for (const x of document.querySelectorAll('#pp-tabs button')) { x.classList.toggle('active', x === b) }
+      loadPetPage(true)
+    })
+  }
+  for (const b of document.querySelectorAll('#pp-kinds button')) {
+    b.addEventListener('click', () => {
+      PP.kind = b.dataset.kind
+      for (const x of document.querySelectorAll('#pp-kinds button')) { x.classList.toggle('active', x === b) }
+      loadPetPage(true)
+    })
+  }
+  let t = null
+  $('#pp-search').addEventListener('input', e => {
+    clearTimeout(t)
+    t = setTimeout(() => { PP.q = e.target.value; loadPetPage(true) }, 300)
+  })
 }
 
 // ── Inicio de sesión ─────────────────────────────────────────────────────────────────────────
@@ -899,6 +1078,7 @@ function renderSettings() {
   $('#srv-session').textContent = st.serverSignedIn ? 'Sesión del servidor iniciada (guardada cifrada).' : 'Sin sesión en el servidor.'
   $('#srv-logout').disabled = !st.serverSignedIn
   $('#about-version').textContent = S.version
+  renderPetLabels()
 }
 
 async function saveSetting(patch) {
@@ -976,6 +1156,7 @@ async function start() {
   newChatView()
   api.onEvent(onEvent)
   wireSettings()
+  wirePetPicker()
 
   for (const b of document.querySelectorAll('#conn-switch button')) { b.addEventListener('click', () => switchConn(b.dataset.conn)) }
   $('#new-chat').addEventListener('click', newChatView)
@@ -1002,7 +1183,11 @@ async function start() {
   petEl.addEventListener('click', () => pet.flash('waving', 2))
   petEl.addEventListener('mouseenter', () => { if (pet.base === 'idle') { pet.flash('waving', 1) } })
 
-  await Promise.all([pet.load(PET_URL), welcomePet.load(PET_URL)]).catch(() => {})
+  try {
+    await applyPet(init.pet || DEFAULT_PET)
+  } catch {
+    await applyPet(DEFAULT_PET).catch(() => {})
+  }
   pet.flash('waving', 2)
   welcomePet.setBase('idle')
   welcomePet.flash('waving', 3)

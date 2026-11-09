@@ -78,3 +78,38 @@ test('modelos locales: direcciones de casa, de VPN y de la nube', () => {
   assert.equal(isLocalUrl('https://openrouter.ai/api/v1'), false)
   assert.equal(isLocalUrl(''), false)
 })
+
+test('mascotas: solo petdex.dev, PNG/WebP, rutas seguras', () => {
+  const { isPetdexUrl, sheetType, fold, Pets } = require('../src/main/pets')
+  assert.equal(isPetdexUrl('https://assets.petdex.dev/pets/a/sprite.webp'), true)
+  assert.equal(isPetdexUrl('http://assets.petdex.dev/pets/a/sprite.webp'), false)
+  assert.equal(isPetdexUrl('https://petdex.dev.evil.com/x.png'), false)
+  assert.equal(isPetdexUrl('https://evilpetdex.dev/x.png'), false)
+  assert.equal(sheetType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0])), 'png')
+  assert.equal(sheetType(Buffer.from('RIFF\0\0\0\0WEBPVP8 ')), 'webp')
+  assert.equal(sheetType(Buffer.from('<html>')), null)
+  assert.equal(fold('Criatura Pequeña Ñandú'), 'criatura pequena nandu')
+  const p = new Pets({ dataDir: 'C:/x', bundledDir: 'C:/nada', log: { info() {}, warn() {} } })
+  assert.equal(p.fileFor('pets/torty/sprite.webp'), require('node:path').join('C:/x', 'pets', 'torty', 'sprite.webp'))
+  assert.equal(p.fileFor('pets/../../secretos/sprite.png'), null)
+  assert.equal(p.fileFor('pets/torty/pet.json'), null)
+  assert.equal(p.fileFor('pets/TORTY/sprite.png'), null)
+})
+
+test('mascotas: búsqueda por nombre, autor y tipo, con páginas', async () => {
+  const { Pets } = require('../src/main/pets')
+  const p = new Pets({ dataDir: require('node:os').tmpdir() + '/hp-test-' + process.pid, bundledDir: 'C:/nada', log: { info() {}, warn() {} } })
+  p.adopt([
+    { slug: 'gato', name: 'Gatito Ñu', kind: 'creature', author: 'ana', sheet: 'https://assets.petdex.dev/pets/gato-1/sprite.webp' },
+    { slug: 'robot', name: 'Robot', kind: 'object', author: 'luis', sheet: 'https://assets.petdex.dev/pets/robot-1/sprite.png' },
+    { slug: 'heroe', name: 'Héroe', kind: 'character', author: 'ana', sheet: 'https://assets.petdex.dev/pets/heroe-1/sprite.webp' }
+  ])
+  assert.equal((await p.search({ q: 'nu' })).total, 1)
+  assert.equal((await p.search({ q: 'heroe' })).items[0].slug, 'heroe')
+  assert.equal((await p.search({ q: 'ana' })).total, 2)
+  assert.equal((await p.search({ kind: 'object' })).items[0].slug, 'robot')
+  const page = await p.search({ offset: 1, limit: 1 })
+  assert.equal(page.items.length, 1)
+  assert.equal(page.items[0].preview, 'https://assets.petdex.dev/pets/robot/preview.webp')
+  assert.deepEqual(page.kinds, { creature: 1, object: 1, character: 1 })
+})

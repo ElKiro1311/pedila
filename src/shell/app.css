@@ -228,6 +228,44 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .icon-btn { position: absolute; top: 10px; right: 12px; border: 0; background: transparent; color: var(--muted); font-size: 1rem; border-radius: 8px; padding: 4px 8px; }
 .icon-btn:hover { background: var(--surface-2); color: var(--text); }
 
+/* Mascota en Ajustes */
+.pet-current { display: flex; align-items: center; gap: 16px; margin: 4px 0 10px; }
+.pet-current .grow { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+#settings-pet { width: 96px; height: 104px; image-rendering: pixelated; background: var(--surface-2); border-radius: 12px; }
+.pet-name { font-weight: 600; font-size: 1.02rem; }
+#choose-pet { margin-top: 6px; }
+
+/* Selector de mascota */
+#pet-dialog { width: min(920px, 94vw); height: min(660px, 90vh); }
+.pet-picker { display: flex; flex-direction: column; height: 100%; }
+.pp-head { display: flex; align-items: center; gap: 16px; padding: 14px 18px 10px; position: relative; }
+.pp-head h2 { margin: 0; font-size: 1.1rem; }
+.pp-head .icon-btn { position: static; margin-left: auto; }
+.pp-filters { display: flex; gap: 12px; padding: 0 18px 10px; flex-wrap: wrap; }
+#pp-search { flex: 1; min-width: 220px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 9px; padding: 7px 10px; outline: none; }
+#pp-search:focus { border-color: var(--accent); }
+.pp-body { flex: 1; overflow-y: auto; padding: 4px 18px 12px; min-height: 0; }
+.pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 10px; }
+.pet-card { border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 10px 8px 8px; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+.pet-card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.pet-card.sel { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.pet-card .n { font-size: .85rem; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pet-card .a { font-size: .74rem; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pet-card .badge { font-size: .7rem; color: var(--accent); font-weight: 600; }
+.pp-more { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 14px 0 4px; }
+.pp-status { text-align: center; margin-top: 24px; }
+.pp-foot { display: flex; align-items: center; gap: 14px; padding: 10px 18px 14px; border-top: 1px solid var(--line); }
+.pp-sel { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.pp-credit { flex: 1; text-align: right; }
+
+/* Tira animada de una mascota: la vista previa de Petdex (6 cuadros) o la fila «idle» de una hoja */
+.strip { --w: 72px; --h: 78px; --cols: 6; --rows: 1; width: var(--w); height: var(--h); flex: none;
+  background-repeat: no-repeat; background-size: calc(var(--w) * var(--cols)) calc(var(--h) * var(--rows));
+  image-rendering: pixelated; animation: strip 1.1s steps(6) infinite; }
+.strip.big { --w: 60px; --h: 65px; }
+.strip.missing { animation: none; background: var(--surface-2); border-radius: 10px; display: grid; place-items: center; color: var(--muted); font-size: .72rem; }
+@keyframes strip { from { background-position-x: 0; } to { background-position-x: calc(var(--w) * -6); } }
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }

@@ -31,8 +31,16 @@ const transcript = [
   ] }
 ]
 
+const DEMO_PET = { slug: 'code-default', name: 'codux', author: 'duxphp', kind: 'object', url: 'assets/pets/default/sprite.png', bundled: true }
+const DEMO_CATALOG = [
+  { slug: 'code-default', name: 'codux', kind: 'object', author: 'duxphp' },
+  { slug: 'torty', name: 'Torty', kind: 'creature', author: 'petdex' },
+  { slug: 'pan-chan', name: 'Pan-chan', kind: 'character', author: 'petdex' },
+  { slug: 'you', name: 'You', kind: 'character', author: 'petdex' }
+].map(p => ({ ...p, installed: p.slug === 'code-default', preview: `https://assets.petdex.dev/pets/${p.slug}/preview.webp` }))
+
 export const demoApi = {
-  init: () => ok({ version: '0.1.0', demo: true, dark: matchMedia('(prefers-color-scheme: dark)').matches, settings, connections: [{ id: 'local', name: 'Este PC', state: 'ready', detail: '' }, { id: 'server', name: 'Servidor', state: 'login', detail: '' }] }),
+  init: () => ok({ version: '0.2.0', demo: true, pet: DEMO_PET, dark: matchMedia('(prefers-color-scheme: dark)').matches, settings, connections: [{ id: 'local', name: 'Este PC', state: 'ready', detail: '' }, { id: 'server', name: 'Servidor', state: 'login', detail: '' }] }),
   sessions: conn => (conn === 'server' ? Promise.resolve({ ok: false, error: 'Hay que iniciar sesión', needLogin: true }) : ok(sessions[conn])),
   transcript: (_c, sid) => ok(sid === 'd1' ? transcript : []),
   attach: () => ok({ running: false }),
@@ -69,6 +77,9 @@ export const demoApi = {
     return ok(settings)
   },
   viewing: () => ok(true),
+  petsSearch: ({ q = '', kind = '' } = {}) => { const items = DEMO_CATALOG.filter(p => (!kind || p.kind === kind) && (!q || p.name.toLowerCase().includes(q.toLowerCase()))); return ok({ total: items.length, all: DEMO_CATALOG.length, kinds: { character: 2, creature: 1, object: 1 }, items }) },
+  petsInstalled: () => ok([DEMO_PET]),
+  petUse: slug => (slug === 'code-default' ? ok(DEMO_PET) : Promise.resolve({ ok: false, error: 'En la demostración no se descargan mascotas.' })),
   openLogs: () => ok(true),
   testNotify: () => ok(true),
   onEvent: cb => { listeners.add(cb); return () => listeners.delete(cb) }

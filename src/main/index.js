@@ -12,14 +12,15 @@ const { LocalTransport } = require('./local')
 const { RemoteTransport } = require('./remote')
 const { Connection } = require('./connection')
 const notify = require('./notify')
+const { Pets } = require('./pets')
 
 const APP_ID = 'org.hermespanel.app'
 const TOAST_CLSID = '{6B1E3C2A-9F4D-4E7B-A1C5-3D8F2B6E9A41}'
 const SRC = path.join(__dirname, '..')
 const ROOTS = { shell: path.join(SRC, 'shell'), assets: path.join(SRC, 'assets') }
 const SHELL_URL = 'app://shell/index.html'
-const CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.woff2': 'font/woff2' }
+const CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://assets.petdex.dev; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.json': 'application/json', '.woff2': 'font/woff2' }
 
 app.setName('Hermes Panel')
 app.setAppUserModelId(APP_ID)
@@ -28,6 +29,11 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: t
 // Solo en desarrollo y a propósito: puerto de depuración para mis pruebas (nunca en el instalable).
 if (!app.isPackaged && /^\d{4,5}$/.test(process.env.HERMES_PANEL_CDP || '')) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.HERMES_PANEL_CDP)
+}
+// Solo en desarrollo: otra carpeta de datos (ajustes, sesión, mascotas) para probar sin tocar la
+// de verdad; también deja abrir esta copia junto a la app instalada.
+if (!app.isPackaged && process.env.HERMES_PANEL_DATA) {
+  app.setPath('userData', process.env.HERMES_PANEL_DATA)
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -42,6 +48,7 @@ function main() {
   let quitting = false
   let settings = null
   let viewing = { conn: null, sid: null, title: '' }
+  let pets = null
   const conns = {}
   const titles = new Map() // `${conn}:${sid}` → título conocido (para los avisos)
   const startHidden = process.argv.includes('--oculto')
@@ -75,6 +82,7 @@ function main() {
       s.setPermissionCheckHandler((_wc, perm) => allowed(perm))
     }
 
+    pets = new Pets({ dataDir: app.getPath('userData'), bundledDir: path.join(ROOTS.assets, 'pets', 'default'), log })
     protocol.handle('app', serveApp)
 
     const remote = new RemoteTransport({ settings, secrets, log })
@@ -111,9 +119,16 @@ function main() {
     // política de seguridad las admita y el lienzo de la mascota se pueda leer.
     let rel = decodeURIComponent(u.pathname).replace(/^\/+/, '') || 'index.html'
     let root = ROOTS.shell
-    if (rel.startsWith('assets/')) { root = ROOTS.assets; rel = rel.slice('assets/'.length) }
-    const file = path.normalize(path.join(root, rel))
-    if (!file.startsWith(root + path.sep)) { return new Response('no', { status: 403 }) }
+    let file
+    if (rel.startsWith('pets/')) {
+      // Mascotas descargadas de Petdex (en los datos del usuario).
+      file = pets && pets.fileFor(rel)
+      if (!file) { return new Response('no', { status: 404 }) }
+    } else {
+      if (rel.startsWith('assets/')) { root = ROOTS.assets; rel = rel.slice('assets/'.length) }
+      file = path.normalize(path.join(root, rel))
+      if (!file.startsWith(root + path.sep)) { return new Response('no', { status: 403 }) }
+    }
     try {
       const res = await net.fetch(pathToFileURL(file).toString())
       const headers = new Headers({ 'Content-Type': TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' })
@@ -296,6 +311,7 @@ function main() {
       demo,
       dark: isDark(),
       toastsOff: await windowsToastsOff(),
+      pet: pets.resolve(settings.data.pet.slug),
       settings: settings.publicView(),
       connections: Object.values(conns).map(c => c.publicState())
     }))
@@ -355,6 +371,17 @@ function main() {
       viewing = { conn: typeof id === 'string' ? id : null, sid: typeof sid === 'string' ? sid : null, title: typeof title === 'string' ? title.slice(0, 120) : '' }
       if (viewing.conn && viewing.sid && viewing.title) { titles.set(`${viewing.conn}:${viewing.sid}`, viewing.title) }
       return true
+    })
+    handle('hp:pets-search', params => {
+      const p = params && typeof params === 'object' ? params : {}
+      return pets.search({ q: typeof p.q === 'string' ? p.q.slice(0, 100) : '', kind: typeof p.kind === 'string' ? p.kind.slice(0, 40) : '', offset: Number(p.offset) || 0, limit: Number(p.limit) || 30 })
+    })
+    handle('hp:pets-installed', () => pets.installed())
+    handle('hp:pet-use', async slug => {
+      if (typeof slug !== 'string') { throw new Error('mascota no válida') }
+      const pet = await pets.install(slug)
+      settings.patch({ pet: { slug: pet.slug } })
+      return pet
     })
     handle('hp:open-logs', () => shell.openPath(log.dir() || app.getPath('userData')))
     handle('hp:test-notify', () => {

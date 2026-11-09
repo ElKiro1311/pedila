@@ -1,7 +1,7 @@
 {
   "name": "hermes-panel",
   "productName": "Hermes Panel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Una ventana sencilla, en español, para usar Hermes Agent: el de este PC y el de tu servidor",
   "author": "Hermes Panel",
