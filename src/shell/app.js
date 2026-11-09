@@ -161,10 +161,12 @@ function applyLook() {
   document.documentElement.style.setProperty('--scale', String(L.textSize / 100))
   $('#pet-stage').hidden = !S.settings.pet.visible
   $('#pet').className = S.settings.pet.size === 'normal' ? '' : S.settings.pet.size
+  applyPanel()
 }
 
 // ── Conexiones ───────────────────────────────────────────────────────────────────────────────
 function renderConnSwitch() {
+  schedulePanel()
   for (const b of document.querySelectorAll('#conn-switch button')) {
     const c = b.dataset.conn
     b.classList.toggle('active', c === S.active)
@@ -323,6 +325,7 @@ function setTopbar() {
   warn.hidden = !(ch && pct >= 80 && !S.ctxHidden.has(key(ch.conn, ch.sid)))
   if (!warn.hidden) { $('#ctx-warn-text').textContent = `Este chat va por el ${pct} % de su memoria. Si cambias de tema, mejor sigue en uno nuevo.` }
   document.title = ch && ch.title ? `${ch.title} · Pedila` : 'Pedila'
+  schedulePanel()
 }
 
 function newChatView() {
@@ -918,6 +921,8 @@ function onEvent(evt) {
       break
     case 'info':
       if (evt.model) { ch.model = evt.model }
+      if (evt.provider) { ch.provider = evt.provider }
+      if (evt.contextMax) { ch.contextMax = evt.contextMax }
       break
     case 'usage':
       ch.usage = { used: evt.used, max: evt.max, out: evt.out, outStart: ch.usage && ch.usage.outStart !== undefined && ch.live && !ch.live.done ? ch.usage.outStart : (ch.usage && ch.usage.out) || 0 }
@@ -952,6 +957,9 @@ function onEvent(evt) {
   }
   if (['turn-start', 'complete', 'running', 'title'].includes(evt.kind)) { renderList() }
   updatePet()
+  // El panel: al acabar una respuesta, el uso se recalcula (Hermes tarda un poco en guardar los tokens).
+  if (evt.kind === 'complete') { setTimeout(() => loadPanelUsage(evt.conn, true), 1500) }
+  schedulePanel()
 }
 
 // ── Mascota ──────────────────────────────────────────────────────────────────────────────────
@@ -1501,6 +1509,7 @@ function updateExtrasPills() {
   rp.disabled = Boolean(ch)
   rp.textContent = `🧠 ${(REASONING.find(r => r[0] === S.reasoning) || REASONING[0])[1]}`
   rp.title = ch ? 'El razonamiento se elige al empezar un chat nuevo' : 'Cuánto piensa Hermes en el chat nuevo (pulsa para cambiar)'
+  schedulePanel()
 }
 
 function renderAttach() {
@@ -1576,6 +1585,136 @@ function chime() {
       o.stop(now + at + 0.5)
     }
   } catch {}
+}
+
+// ── Panel derecho: uso y parámetros ──────────────────────────────────────────────────────────
+// Como las tarjetas de Claude Panel: lo que pasa ahora, el chat abierto y el uso, siempre a la vista.
+const P = { usage: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, raf: 0 }
+const panelOn = () => S.settings && S.settings.window && S.settings.window.sidePanel !== false
+
+function applyPanel() {
+  const on = panelOn()
+  $('#app').classList.toggle('with-panel', on)
+  const b = $('#panel-toggle')
+  b.classList.toggle('active', on)
+  b.setAttribute('aria-pressed', String(on))
+  schedulePanel()
+}
+
+function schedulePanel() {
+  if (P.raf || !panelOn()) { return }
+  P.raf = requestAnimationFrame(() => { P.raf = 0; renderPanel() })
+}
+
+/** El resumen de uso de una conexión, como mucho una vez por minuto (o al acabar una respuesta). */
+async function loadPanelUsage(conn, force = false) {
+  if (P.loading[conn] || (!force && Date.now() - P.at[conn] < 60000)) { return }
+  if (!S.conns[conn] || S.conns[conn].state !== 'ready') { return }
+  P.loading[conn] = true
+  try { P.usage[conn] = await call(api.usage, conn); P.at[conn] = Date.now() } catch { P.at[conn] = Date.now() } finally { P.loading[conn] = false }
+  schedulePanel()
+}
+
+const spKv = pairs => el('dl', { class: 'sp-kv' }, ...pairs.filter(Boolean).flatMap(([k, v, t]) => [el('dt', { text: k }), el('dd', { text: v, title: t || v })]))
+
+function hermesNow() {
+  const all = [...S.chats.values()]
+  const live = all.filter(c => (c.live && !c.live.done) || c.running)
+  if (all.some(c => c.prompts.size)) { return { cls: 'need', text: 'Hermes te necesita', live } }
+  if (live.some(c => c.live && !c.live.done && c.live.blocks.some(b => b.type === 'tool' && !b.done))) { return { cls: 'busy', text: 'Usando herramientas', live } }
+  if (live.length) { return { cls: 'busy', text: 'Trabajando', live } }
+  return { cls: 'idle', text: 'Tranquilo', live }
+}
+
+function panelChatCard() {
+  const ch = currentChat()
+  if (!ch) {
+    return el('section', { class: 'sp-card' }, el('h4', { text: 'Este chat' }),
+      el('p', { class: 'muted small', text: `Chat nuevo en ${CONN_NAMES[S.current.conn]}. Al empezar verás aquí su memoria, sus tokens y su velocidad.` }))
+  }
+  const u = ch.usage || {}
+  const max = u.max || ch.contextMax || 0
+  const pct = u.used && max ? Math.min(100, Math.round(u.used / max * 100)) : 0
+  const row = (S.sessions[ch.conn] || []).find(r => r.id === ch.sid) || {}
+  const turns = [...(ch.transcript || []), ...(ch.live ? [ch.live] : [])]
+  const tools = turns.reduce((n, t) => n + ((t.blocks || []).filter(b => b.type === 'tool').length), 0)
+  const last = [...(ch.transcript || [])].reverse().find(t => t.role === 'assistant' && t.stats)
+  const ring = el('div', { class: 'sp-ring' + (pct >= 80 ? ' warn' : ''), style: `--p:${pct}`, title: 'Memoria del chat: Hermes resume lo antiguo al 85 %' }, el('span', { text: max ? pct + '%' : '—' }))
+  return el('section', { class: 'sp-card' }, el('h4', { text: 'Este chat' }),
+    el('div', { class: 'sp-ctx' }, ring, el('div', { class: 'sp-ctx-txt' },
+      el('b', { text: 'Memoria usada' }),
+      el('span', { class: 'muted', text: max ? `${kfmt(u.used || 0)} de ${kfmt(max)} tokens` : 'Aún sin datos' }))),
+    spKv([
+      ['Modelo', ch.model || '—'],
+      ch.provider ? ['Proveedor', ch.provider] : null,
+      ['Mensajes', String(row.messages || turns.length || 0)],
+      ['Tokens leídos', kfmt(row.inputTokens || 0)],
+      ['Tokens escritos', kfmt(row.outputTokens || u.out || 0)],
+      ['Herramientas', String(tools)],
+      last ? ['Última respuesta', statsText(last.stats) || '—'] : null
+    ]))
+}
+
+function panelNowCard() {
+  const now = hermesNow()
+  const model = $('#model-pill') ? $('#model-pill').textContent.replace(/^Modelo:\s*/, '') : ''
+  return el('section', { class: 'sp-card' }, el('h4', { text: 'Ahora' }),
+    el('div', { class: 'sp-state' }, el('span', { class: 'dot ' + now.cls }), el('span', { text: now.text })),
+    spKv([
+      ['Chats en marcha', String(now.live.length)],
+      ['Solo consultar', S.readOnly ? 'sí' : 'no'],
+      // El razonamiento y el modelo se eligen al empezar un chat; con uno abierto, el modelo sale en «Este chat».
+      ['Razonamiento (chat nuevo)', (REASONING.find(r => r[0] === S.reasoning) || REASONING[0])[1]],
+      !currentChat() ? ['Modelo (chat nuevo)', model || '—'] : null
+    ]))
+}
+
+function panelUsageCard() {
+  const conn = S.active
+  const u = P.usage[conn]
+  loadPanelUsage(conn)
+  const head = el('h4', {}, el('span', { class: 'grow', text: `Uso · ${CONN_NAMES[conn]}` }), el('button', { class: 'sp-link', text: 'Ver todo', onclick: () => openUsage(conn) }))
+  if (!u) { return el('section', { class: 'sp-card' }, head, el('p', { class: 'muted small', text: S.conns[conn] && S.conns[conn].state === 'ready' ? 'Calculando…' : 'Sin conexión.' })) }
+  const days = u.days.slice(-14)
+  const max = Math.max(1, ...days.map(d => d.chats))
+  const today = u.today || { chats: 0, input: 0, output: 0 }
+  const week = u.week || { chats: 0, input: 0, output: 0 }
+  return el('section', { class: 'sp-card' }, head,
+    el('div', { class: 'sp-nums' },
+      el('div', { class: 'sp-num' }, el('b', { text: String(today.chats) }), el('span', { text: 'chats hoy' })),
+      el('div', { class: 'sp-num' }, el('b', { text: kfmt(today.input + today.output) }), el('span', { text: 'tokens hoy' })),
+      el('div', { class: 'sp-num' }, el('b', { text: String(week.chats) }), el('span', { text: 'chats en 7 días' })),
+      el('div', { class: 'sp-num' }, el('b', { text: kfmt(week.input + week.output) }), el('span', { text: 'tokens en 7 días' }))),
+    el('div', { class: 'sp-spark', title: 'Chats por día, últimos 14 días' }, ...days.map(d => el('div', { class: d.chats ? '' : 'zero', style: `height:${d.chats ? Math.max(8, Math.round(d.chats / max * 100)) : 4}%`, title: `${d.date}: ${d.chats} chats · ${kfmt(d.input + d.output)} tokens` }))),
+    el('div', { class: 'sp-spark-l' }, el('span', { text: 'hace 14 días' }), el('span', { text: 'hoy' })))
+}
+
+function panelModelsCard() {
+  const u = P.usage[S.active]
+  if (!u || !u.models.length) { return null }
+  const top = u.models.slice(0, 4)
+  const max = Math.max(1, ...top.map(m => m.chats))
+  return el('section', { class: 'sp-card' }, el('h4', { text: 'Modelos más usados' }),
+    ...top.map(m => el('div', { class: 'sp-model', title: `${m.model}: ${m.chats} chats · ${kfmt(m.input)} leídos · ${kfmt(m.output)} escritos` },
+      el('span', { class: 'n', text: m.model }), el('span', { class: 'muted', text: `${m.chats} chats` }),
+      el('div', { class: 'bar' }, el('i', { style: `width:${Math.round(m.chats / max * 100)}%` })))))
+}
+
+function panelConnsCard() {
+  return el('section', { class: 'sp-card' }, el('h4', { text: 'Conexiones' }),
+    ...Object.keys(CONN_NAMES).filter(c => S.conns[c]).map(c => {
+      const st = S.conns[c]
+      const what = { ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', error: 'error', off: 'apagado' }[st.state] || st.state
+      return el('div', { class: 'sp-conn', title: connLabel(c) }, el('span', { class: 'dot ' + st.state }), el('span', { text: CONN_NAMES[c] }), el('span', { class: 's', text: st.state === 'ready' && st.detail ? `${what} · ${st.detail}` : what }))
+    }))
+}
+
+function renderPanel() {
+  if (!panelOn() || !S.settings) { return }
+  const body = $('#panel-body')
+  const top = body.scrollTop
+  body.replaceChildren(...[panelNowCard(), panelChatCard(), panelUsageCard(), panelModelsCard(), panelConnsCard()].filter(Boolean))
+  body.scrollTop = top
 }
 
 // ── Tu uso ───────────────────────────────────────────────────────────────────────────────────
@@ -1685,6 +1824,9 @@ function wireExtras() {
     }, 400)
   })
   $('#open-usage').addEventListener('click', () => openUsage())
+  $('#panel-toggle').addEventListener('click', () => saveSetting({ window: { sidePanel: !panelOn() } }).then(applyPanel))
+  // Al acabar una respuesta se recalcula el uso; además, cada 2 minutos.
+  setInterval(() => { if (panelOn()) { loadPanelUsage(S.active, true) } }, 120000)
   for (const b of document.querySelectorAll('#usage-tabs button')) { b.addEventListener('click', () => openUsage(b.dataset.conn)) }
   $('#usage-close').addEventListener('click', () => $('#usage-dialog').close())
   $('#archived-close').addEventListener('click', () => $('#archived-dialog').close())

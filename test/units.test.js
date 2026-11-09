@@ -128,3 +128,20 @@ test('mascotas: búsqueda por nombre, autor y tipo, con páginas', async () => {
   assert.equal(page.items[0].preview, 'https://assets.petdex.dev/pets/robot/preview.webp')
   assert.deepEqual(page.kinds, { creature: 1, object: 1, character: 1 })
 })
+
+test('uso: resúmenes de hoy y de los últimos 7 días', () => {
+  const { usageStats } = require('../src/main/extras')
+  const now = new Date(2026, 10, 9, 15, 0, 0).getTime()
+  const h = 3600e3
+  const rows = [
+    { startedAt: now - 2 * h, messages: 4, inputTokens: 1000, outputTokens: 100, model: 'a' },
+    { startedAt: now - 3 * 24 * h, messages: 2, inputTokens: 500, outputTokens: 50, model: 'a' },
+    { startedAt: now - 20 * 24 * h, messages: 6, inputTokens: 9000, outputTokens: 900, model: 'b' }
+  ]
+  const u = usageStats(rows, now)
+  assert.deepEqual(u.today, { chats: 1, messages: 4, input: 1000, output: 100 })
+  assert.deepEqual(u.week, { chats: 2, messages: 6, input: 1500, output: 150 })
+  assert.equal(u.days.length, 30)
+  assert.equal(u.days[29].date, '2026-11-09')
+  assert.equal(u.chats, 3)
+})

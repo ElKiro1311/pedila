@@ -72,7 +72,11 @@ function usageStats(rows, now = Date.now()) {
   const start = new Date(now)
   start.setHours(0, 0, 0, 0)
   const days = []
-  for (let i = 29; i >= 0; i--) { days.push({ date: new Date(start.getTime() - i * day).toISOString().slice(0, 10), chats: 0 }) }
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(start.getTime() - i * day)
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    days.push({ date, chats: 0, messages: 0, input: 0, output: 0 })
+  }
   const models = {}
   let input = 0
   let output = 0
@@ -80,7 +84,12 @@ function usageStats(rows, now = Date.now()) {
   for (const r of rows) {
     const t = ms(r.startedAt || r.lastActive)
     const idx = 29 - Math.floor((start.getTime() - new Date(t).setHours(0, 0, 0, 0)) / day)
-    if (idx >= 0 && idx < 30) { days[idx].chats++ }
+    if (idx >= 0 && idx < 30) {
+      days[idx].chats++
+      days[idx].messages += r.messages || 0
+      days[idx].input += r.inputTokens || 0
+      days[idx].output += r.outputTokens || 0
+    }
     const m = r.model || 'desconocido'
     models[m] = models[m] || { chats: 0, input: 0, output: 0 }
     models[m].chats++
@@ -90,7 +99,11 @@ function usageStats(rows, now = Date.now()) {
     output += r.outputTokens || 0
     messages += r.messages || 0
   }
+  // Hoy y los últimos 7 días (cada chat cuenta en el día en que empezó).
+  const sum = list => list.reduce((a, d) => ({ chats: a.chats + d.chats, messages: a.messages + d.messages, input: a.input + d.input, output: a.output + d.output }), { chats: 0, messages: 0, input: 0, output: 0 })
   return {
+    today: sum(days.slice(-1)),
+    week: sum(days.slice(-7)),
     chats: rows.length,
     messages,
     input,

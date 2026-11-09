@@ -89,7 +89,7 @@ export const demoApi = {
     return ok({ ok: true })
   },
   attachImage: () => ok({ ok: true }),
-  usage: () => ok({ chats: 3, messages: 22, input: 120000, output: 8000, days: Array.from({ length: 30 }, (_, i) => ({ date: `d${i}`, chats: i % 4 })), models: [{ model: 'qwen3-32b', chats: 2, input: 90000, output: 6000 }] }),
+  usage: () => ok({ chats: 3, messages: 22, input: 120000, output: 8000, today: { chats: 2, messages: 8, input: 41000, output: 3200 }, week: { chats: 9, messages: 40, input: 210000, output: 15000 }, days: Array.from({ length: 30 }, (_, i) => ({ date: `día ${i + 1}`, chats: i % 4, messages: i % 4 * 3, input: i % 4 * 9000, output: i % 4 * 700 })), models: [{ model: 'qwen3-32b', chats: 12, input: 90000, output: 6000 }, { model: 'gemma-3-27b', chats: 5, input: 30000, output: 2000 }, { model: 'qwen3-8b', chats: 2, input: 3000, output: 400 }] }),
   exportChat: () => ok({ saved: false }),
   showFile: () => ok(true),
   updateCheck: () => ok({ available: false }),

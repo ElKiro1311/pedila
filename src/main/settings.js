@@ -38,7 +38,8 @@ function defaults() {
     // Dirección de una carpeta con version.json para buscar versiones nuevas ('' = no buscar).
     updates: { url: '', auto: true },
     pet: { visible: true, size: 'normal', slug: DEFAULT_PET },
-    window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false },
+    // sidePanel: el panel derecho con el uso y los parámetros.
+    window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false, sidePanel: true },
     secrets: { server: null }
   }
 }
@@ -102,6 +103,7 @@ function sanitize(raw) {
   s.window.maximized = bool(w.maximized, false)
   s.window.closeToTray = bool(w.closeToTray, true)
   s.window.openAtLogin = bool(w.openAtLogin, false)
+  s.window.sidePanel = bool(w.sidePanel, true)
   const sec = isObj(raw.secrets) ? raw.secrets : {}
   s.secrets.server = typeof sec.server === 'string' && sec.server.length < 20000 ? sec.server : null
   return s

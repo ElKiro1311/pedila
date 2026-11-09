@@ -30,11 +30,17 @@
       </div>
     </aside>
 
+    <aside id="side-panel" aria-label="Uso y parámetros">
+      <header class="sp-head drag"><span class="sp-title">Panel</span></header>
+      <div id="panel-body" class="sp-body"></div>
+    </aside>
+
     <main id="main">
       <header id="topbar" class="drag">
         <div id="chat-title">Nuevo chat</div>
         <div id="chat-meta" class="muted small"></div>
         <button id="chat-actions" class="icon-btn top-act" title="Opciones del chat" aria-label="Opciones del chat" hidden>⋯</button>
+        <button id="panel-toggle" class="icon-btn top-act" title="Mostrar u ocultar el panel de uso" aria-label="Panel de uso" aria-pressed="true">◨</button>
       </header>
       <div id="ctx-bar" hidden><div></div></div>
       <div id="update-bar" class="bar" hidden></div>
