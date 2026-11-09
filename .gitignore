@@ -2,8 +2,10 @@ node_modules/
 dist/
 *.log
 
-# Se generan al preparar la app (npm run assets): el arte es de Petdex y las librerías salen de node_modules
+# Se generan al preparar la app (npm run assets): iconos desde docs/icono.png, la mascota desde
+# docs/mascota y las librerías desde node_modules. La carpeta default es para arte de Petdex.
 src/assets/pets/default/
+src/assets/pets/pedila/
 src/assets/icon.png
 src/assets/tray.png
 src/assets/tray@2x.png

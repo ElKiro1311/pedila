@@ -1,5 +1,5 @@
 'use strict'
-// Mascotas: la que trae la app (src/assets/pets/default) y las que eliges del catálogo de Petdex
+// Mascotas: la que trae la app (src/assets/pets/pedila, dibujo propio) y las que eliges del catálogo de Petdex
 // (https://petdex.dev/api/manifest), que se guardan en %APPDATA%\Pedila\pets\<slug>\.
 // Solo se descarga de petdex.dev (https), con tamaño máximo y comprobando que sea PNG o WebP.
 const fs = require('node:fs')
@@ -55,7 +55,8 @@ class Pets {
     try {
       const meta = JSON.parse(fs.readFileSync(path.join(this.bundledDir, 'pet.json'), 'utf8'))
       const file = meta.spritesheetPath || 'sprite.png'
-      return { slug: meta.slug, name: meta.displayName || meta.slug, kind: meta.kind || '', author: meta.submittedBy || '', url: `assets/pets/default/${file}`, bundled: true }
+      if (!/^sprite\.(png|webp)$/.test(file)) { return null }
+      return { slug: meta.slug, name: meta.displayName || meta.slug, kind: meta.kind || '', author: meta.submittedBy || '', url: `assets/pets/${path.basename(this.bundledDir)}/${file}`, bundled: true, own: meta.own === true }
     } catch {
       return null
     }

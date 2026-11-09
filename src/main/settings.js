@@ -5,17 +5,21 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
-const ACCENTS = ['violeta', 'turquesa', 'ambar', 'rosa', 'azul']
+// 'tema' = el color del tema elegido; los demás lo sustituyen.
+const ACCENTS = ['tema', 'oro', 'violeta', 'turquesa', 'ambar', 'rosa', 'azul']
+// Paletas de color; cada una tiene modo claro y oscuro. «clasico» es la de las versiones 0.x anteriores.
+const PALETTES = ['mensajera', 'clasico', 'egeo', 'anfora', 'olivo']
+// Modo: el del sistema, oscuro o claro.
 const THEMES = ['system', 'dark', 'light']
 const PET_SIZES = ['pequena', 'normal', 'grande']
-// La mascota que trae la app (Codux, de petdex.dev); las demás se eligen del catálogo de Petdex.
-const DEFAULT_PET = 'code-default'
+// La mascota que trae la app: Pedila, la mensajera (dibujo propio); las demás se eligen del catálogo de Petdex.
+const DEFAULT_PET = 'pedila'
 const SLUG = /^[a-z0-9][a-z0-9-]{0,100}$/
 
 function defaults() {
   return {
     schema: 1,
-    look: { theme: 'system', accent: 'violeta', textSize: 100 },
+    look: { palette: 'mensajera', theme: 'system', accent: 'tema', textSize: 100 },
     // Direcciones del `hermes dashboard` de tu servidor (se rellenan en Ajustes → Servidor).
     server: { urls: [], enabled: true },
     local: { enabled: true },
@@ -56,8 +60,11 @@ function sanitize(raw) {
   if (!isObj(raw)) { return d }
   const s = d
   const look = isObj(raw.look) ? raw.look : {}
+  // Ajustes de antes de la 0.5 (sin paleta): pasan al tema y la mascota nuevos, como una instalación nueva.
+  const upgrade = isObj(raw.look) && look.palette === undefined
+  s.look.palette = pick(look.palette, PALETTES, d.look.palette)
   s.look.theme = pick(look.theme, THEMES, d.look.theme)
-  s.look.accent = pick(look.accent, ACCENTS, d.look.accent)
+  s.look.accent = upgrade ? 'tema' : pick(look.accent, ACCENTS, d.look.accent)
   s.look.textSize = clampInt(look.textSize, 80, 140, d.look.textSize)
   const server = isObj(raw.server) ? raw.server : {}
   const urls = Array.isArray(server.urls) ? server.urls.map(validUrl).filter(Boolean).slice(0, 4) : []
@@ -87,7 +94,7 @@ function sanitize(raw) {
   const pet = isObj(raw.pet) ? raw.pet : {}
   s.pet.visible = bool(pet.visible, true)
   s.pet.size = pick(pet.size, PET_SIZES, 'normal')
-  s.pet.slug = typeof pet.slug === 'string' && SLUG.test(pet.slug) ? pet.slug : DEFAULT_PET
+  s.pet.slug = typeof pet.slug === 'string' && SLUG.test(pet.slug) && !(upgrade && pet.slug === 'code-default') ? pet.slug : DEFAULT_PET
   const w = isObj(raw.window) ? raw.window : {}
   const b = isObj(w.bounds) ? w.bounds : null
   s.window.bounds = b && [b.x, b.y, b.width, b.height].every(Number.isFinite) && b.width >= 600 && b.height >= 420
@@ -147,4 +154,4 @@ class Settings {
   }
 }
 
-module.exports = { Settings, sanitize, defaults, ACCENTS, THEMES, PET_SIZES, DEFAULT_PET, SLUG }
+module.exports = { Settings, sanitize, defaults, ACCENTS, PALETTES, THEMES, PET_SIZES, DEFAULT_PET, SLUG }

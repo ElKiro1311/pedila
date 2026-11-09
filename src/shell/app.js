@@ -106,9 +106,56 @@ function kfmt(n) {
 }
 
 // ── Aspecto ──────────────────────────────────────────────────────────────────────────────────
+// Temas (paletas). El primero es el predeterminado; «Clásico» es el de las primeras versiones.
+const PALETTES = [
+  { id: 'mensajera', name: 'Mensajera', desc: 'Tinta, grises y oro, como Pedila.', pet: true },
+  { id: 'clasico', name: 'Clásico', desc: 'El de siempre: grises fríos y violeta.' },
+  { id: 'egeo', name: 'Egeo', desc: 'Azul noche del mar y oro.' },
+  { id: 'anfora', name: 'Ánfora', desc: 'Negro y terracota, como la cerámica griega.' },
+  { id: 'olivo', name: 'Olivo', desc: 'Verdes de olivar, tranquilos.' }
+]
+
+function lookMode() {
+  const L = S.settings.look
+  return L.theme === 'system' ? (S.dark ? 'dark' : 'light') : L.theme
+}
+
+/** Las tarjetas del menú de temas: cada una se pinta con su paleta, en el modo actual. */
+function renderThemeGrid() {
+  const grid = $('#theme-grid')
+  if (!grid) { return }
+  const mode = lookMode()
+  if (!grid.childElementCount) {
+    for (const p of PALETTES) {
+      const card = el('button', { class: 'theme-card', role: 'radio', 'data-palette': p.id, title: p.name },
+        el('div', { class: 'tp' },
+          el('div', { class: 'tp-side' }, el('i'), el('i'), el('i'), el('i')),
+          el('div', { class: 'tp-main' }, el('div', { class: 'tp-b in' }), el('div', { class: 'tp-b out' }), el('div', { class: 'tp-b in' }),
+            p.pet ? el('div', { class: 'tp-pet' }) : null,
+            el('div', { class: 'tp-in' }, el('span', { class: 'tp-send' })))),
+        el('div', { class: 'theme-meta' },
+          el('span', { class: 'theme-name' }, p.name, p.id === PALETTES[0].id ? el('em', {}, 'predeterminado') : null),
+          el('span', { class: 'theme-desc' }, p.desc),
+          el('span', { class: 'theme-dots' }, el('span', { style: 'background: var(--bg)' }), el('span', { style: 'background: var(--surface-2)' }), el('span', { style: 'background: var(--text)' }), el('span', { style: 'background: var(--accent)' }))))
+      // Al elegir un tema se vuelve a su color de acento.
+      card.addEventListener('click', () => saveSetting({ look: { palette: p.id, accent: 'tema' } }))
+      grid.append(card)
+    }
+  }
+  for (const card of grid.children) {
+    card.dataset.mode = mode
+    const on = card.dataset.palette === S.settings.look.palette
+    card.classList.toggle('active', on)
+    card.setAttribute('aria-checked', String(on))
+    const pet = card.querySelector('.tp-pet')
+    if (pet) { pet.style.backgroundImage = `url("${PEDILA_SHEET}")` }
+  }
+}
+
 function applyLook() {
   const L = S.settings.look
-  const mode = L.theme === 'system' ? (S.dark ? 'dark' : 'light') : L.theme
+  const mode = lookMode()
+  document.documentElement.dataset.palette = L.palette
   document.documentElement.dataset.mode = mode
   document.documentElement.dataset.accent = L.accent
   document.documentElement.style.setProperty('--scale', String(L.textSize / 100))
@@ -911,10 +958,11 @@ function onEvent(evt) {
 const pet = new Pet($('#pet'))
 const welcomePet = new Pet($('#welcome-pet'))
 const settingsPet = new Pet($('#settings-pet'))
-const DEFAULT_PET = { slug: 'code-default', name: 'codux', author: 'duxphp', kind: 'object', url: '', bundled: false }
+const PEDILA_SHEET = 'assets/pets/pedila/sprite.webp'
+const DEFAULT_PET = { slug: 'pedila', name: 'Pedila', author: '', kind: 'character', url: PEDILA_SHEET, bundled: true, own: true }
 const KIND_NAMES = { character: 'personaje', creature: 'criatura', object: 'objeto' }
 const petName = p => { const n = (p && p.name) || 'mascota'; return n.charAt(0).toUpperCase() + n.slice(1) }
-const petBy = p => (p && p.author ? `de ${p.author} en Petdex` : 'de Petdex')
+const petBy = p => (p && p.own ? 'la mensajera, dibujo propio de Pedila' : p && p.author ? `de ${p.author} en Petdex` : 'de Petdex')
 
 function updatePet() {
   let base = 'idle'
@@ -923,7 +971,7 @@ function updatePet() {
   if (all.some(c => c.prompts.size)) { base = 'waiting' } else if (relevant.some(c => c.live && !c.live.done && c.live.blocks.some(b => b.type === 'tool' && !b.done))) { base = 'review' } else if (relevant.some(c => (c.live && !c.live.done) || c.running)) { base = 'running' }
   pet.setBase(base)
   const name = petName(S.pet)
-  const what = { idle: `${name} está tranquilo`, waiting: 'Hermes te necesita', review: 'Hermes está usando herramientas', running: 'Hermes está trabajando' }[base]
+  const what = { idle: `${name} está ${S.pet && S.pet.own ? 'tranquila' : 'tranquilo'}`, waiting: 'Hermes te necesita', review: 'Hermes está usando herramientas', running: 'Hermes está trabajando' }[base]
   $('#pet').title = what
 }
 
@@ -1162,6 +1210,7 @@ function renderSettings() {
   $('#srv-session').textContent = st.serverSignedIn ? 'Sesión del servidor iniciada (guardada cifrada).' : 'Sin sesión en el servidor.'
   $('#srv-logout').disabled = !st.serverSignedIn
   $('#about-version').textContent = S.version
+  renderThemeGrid()
   renderPetLabels()
   renderSnippetSettings()
   $('#upd-url').value = (st.updates && st.updates.url) || ''

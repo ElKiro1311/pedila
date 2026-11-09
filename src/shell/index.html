@@ -22,7 +22,7 @@
         <input id="search" type="search" placeholder="Buscar chats" autocomplete="off" spellcheck="false">
       </div>
       <nav id="chat-list" aria-label="Chats"></nav>
-      <div id="pet-stage"><canvas id="pet" width="192" height="208" title="Codux"></canvas></div>
+      <div id="pet-stage"><canvas id="pet" width="192" height="208" title="Pedila"></canvas></div>
       <div class="side-bottom">
         <button id="open-settings" class="btn-ghost">⚙ Ajustes</button>
         <button id="open-usage" class="btn-ghost" title="Tu uso">📊</button>
@@ -107,10 +107,12 @@
       <div class="settings-body">
         <section data-sec="apariencia">
           <h3>Apariencia</h3>
-          <div class="row"><span>Tema</span><div class="segmented" data-set="look.theme">
+          <p class="muted small theme-intro">Elige un tema: el cambio se ve al momento. Cada uno tiene versión oscura y clara.</p>
+          <div id="theme-grid" class="theme-grid" role="radiogroup" aria-label="Tema"></div>
+          <div class="row"><span>Modo</span><div class="segmented" data-set="look.theme">
             <button data-v="system">Sistema</button><button data-v="dark">Oscuro</button><button data-v="light">Claro</button></div></div>
           <div class="row"><span>Color de acento</span><div class="swatches" data-set="look.accent">
-            <button data-v="violeta" title="Violeta"></button><button data-v="azul" title="Azul"></button><button data-v="turquesa" title="Turquesa"></button><button data-v="ambar" title="Ámbar"></button><button data-v="rosa" title="Rosa"></button></div></div>
+            <button data-v="tema" title="El del tema"></button><button data-v="oro" title="Oro"></button><button data-v="violeta" title="Violeta"></button><button data-v="azul" title="Azul"></button><button data-v="turquesa" title="Turquesa"></button><button data-v="ambar" title="Ámbar"></button><button data-v="rosa" title="Rosa"></button></div></div>
           <div class="row"><span>Tamaño del texto</span><div class="segmented" data-set="look.textSize">
             <button data-v="90">90 %</button><button data-v="100">100 %</button><button data-v="110">110 %</button><button data-v="125">125 %</button></div></div>
         </section>

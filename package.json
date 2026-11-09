@@ -1,7 +1,7 @@
 {
   "name": "pedila",
   "productName": "Pedila",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "private": true,
   "description": "Pedila: una ventana sencilla para usar Hermes Agent (el de tu PC y el de tu servidor). Cliente no oficial.",
   "author": "Pedila",
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test \"test/*.test.js\"",
-    "assets": "electron scripts/make-icon.js && node scripts/vendor.mjs",
+    "assets": "electron scripts/make-icon.js && electron scripts/make-pet.js && node scripts/vendor.mjs",
     "dist": "npm run assets && electron-builder --win nsis --x64"
   },
   "dependencies": {},
@@ -25,7 +25,7 @@
     "productName": "Pedila",
     "files": [
       "src/**",
-      "!src/assets/pets/**",
+      "!src/assets/pets/default/**",
       "package.json"
     ],
     "directories": {

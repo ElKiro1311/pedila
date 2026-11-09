@@ -2,7 +2,7 @@
 
 <p align="center"><img src="docs/icono.png" width="112" alt="Icono de Pedila: una sandalia alada a toda velocidad, en tinta con un toque de oro"></p>
 
-<h1 align="center">Pedila</h1>
+<h1 align="center">Pedila, la mensajera</h1>
 
 <p align="center"><b>Una ventana sencilla, en español, para usar <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>: el de tu PC y el de tu servidor.</b><br>
 <i>Cliente no oficial. Pedila no está hecho ni respaldado por Nous Research.</i></p>
@@ -19,7 +19,11 @@
 
 Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, esté en tu PC o en tu servidor.
 
-**El icono y el banner** son esas sandalias, dibujadas en tinta al estilo manga con el oro como único color: en el icono, una sandalia alada a toda velocidad; en el banner, una mensajera que cruza el cielo con una carta. Los generó el propio Hermes con un modelo de imágenes en local (Qwen-Image), y después se recortaron para la app ([`docs/icono.png`](docs/icono.png), [`docs/banner.jpg`](docs/banner.jpg)).
+**Pedila, la mensajera.** En la app las sandalias cobran vida: Pedila es una chica que se las calza y corre con tus mensajes de un lado a otro. Es la mascota de la app. Espera tranquila con su carta, corre mientras Hermes trabaja, lee su pergamino cuando Hermes usa herramientas, te ofrece la carta cuando Hermes necesita tu permiso, salta de alegría cuando termina y se pone triste si algo falla.
+
+<p align="center"><img src="docs/mascota/quieta.png" height="150" alt="Pedila, de pie con su carta"> <img src="docs/mascota/correr-a.png" height="130" alt="Pedila corriendo con la carta"> <img src="docs/mascota/lee.png" height="150" alt="Pedila leyendo un pergamino"> <img src="docs/mascota/salto.png" height="140" alt="Pedila saltando de alegría"></p>
+
+**El icono, el banner y Pedila** están dibujados en tinta al estilo manga, con el oro de las sandalias como único color: en el icono, una sandalia alada a toda velocidad; en el banner, Pedila cruzando el cielo con una carta. Los generó el propio Hermes con un modelo de imágenes en local (Qwen-Image), y después se recortaron para la app ([`docs/icono.png`](docs/icono.png), [`docs/banner.jpg`](docs/banner.jpg), [`docs/mascota/`](docs/mascota)). Las poses de Pedila se pidieron sobre fondo verde; `scripts/make-pet.js` quita el verde y monta la hoja animada.
 
 ## Qué hace
 
@@ -46,7 +50,14 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - «Tu uso», calculado solo con tus datos;
   - bandeja del sistema y atajo **Ctrl+Alt+H**;
   - actualizaciones desde GitHub Releases;
-  - una mascota de [Petdex](https://petdex.dev) que reacciona a lo que hace Hermes. Se elige entre más de 5.000.
+  - Pedila, la mascota, que reacciona a lo que hace Hermes; si prefieres otra, se elige entre más de 5.000 de [Petdex](https://petdex.dev).
+- **Temas:** cinco, cada uno en modo oscuro y claro, con vista previa en Ajustes → Apariencia:
+  - **Mensajera** (predeterminado): tinta, grises y oro, como Pedila;
+  - **Clásico**: grises fríos y violeta, el de las primeras versiones;
+  - **Egeo**: azul noche y oro;
+  - **Ánfora**: negro y terracota;
+  - **Olivo**: verdes tranquilos.
+  - El color de acento puede ser el del tema o uno a elegir.
 
 ## Instalar
 
@@ -73,7 +84,7 @@ Los cambios sobre un chat (renombrar, fijar, archivar, borrar) usan las edicione
 
 ```
 npm install                # si falta el binario de Electron: node node_modules/electron/install.js
-npm run assets             # iconos desde docs/icono.png y copia de marked/DOMPurify
+npm run assets             # iconos desde docs/icono.png, la hoja de Pedila desde docs/mascota y copia de marked/DOMPurify
 npm test                   # pruebas de las piezas puras
 npm start                  # abre la app
 npm run dist               # instalador en dist/ (NSIS por usuario)
@@ -92,15 +103,16 @@ Solo en desarrollo:
 - Código de Pedila: [MIT](LICENSE).
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) es de Nous Research (MIT). Pedila no incluye su código; usa la misma vía que su app de escritorio.
 - [Electron](https://www.electronjs.org/) (MIT), [marked](https://marked.js.org/) (MIT) y [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0).
-- **Mascotas:** son de sus autores en [Petdex](https://petdex.dev) y la app las descarga de allí; no vienen en el repositorio ni en el instalador. La predeterminada es «Codux», de duxphp.
+- **Pedila**, la mascota, es del proyecto (MIT, como el código) y viaja en el instalador.
+- **Las demás mascotas** son de sus autores en [Petdex](https://petdex.dev) y la app las descarga de allí cuando las eliges; no vienen en el repositorio ni en el instalador.
 - El texto griego es de Homero (dominio público). La traducción es del proyecto.
 
 ---
 
 ### English
 
-**Pedila** (Greek *πέδιλα*, Hermes' winged sandals, Latin *talaria*) is an unofficial Windows desktop client for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It talks to the Hermes on this PC (the same one Hermes Desktop uses) and to a remote `hermes dashboard`.
+**Pedila** (Greek *πέδιλα*, Hermes' winged sandals, Latin *talaria*) is an unofficial Windows desktop client, with Pedila the messenger girl as its mascot, for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It talks to the Hermes on this PC (the same one Hermes Desktop uses) and to a remote `hermes dashboard`.
 
-Features: live chat, tool and permission cards, chat management (pin, rename, archive, delete), full-text search, images, a «read-only» mode, a reasoning level, snippets, usage stats, a tray icon and a Petdex pet.
+Features: live chat, tool and permission cards, chat management (pin, rename, archive, delete), full-text search, images, a «read-only» mode, a reasoning level, snippets, usage stats, a tray icon, five themes (dark and light) and an animated pet: Pedila by default, or any of 5,000+ from Petdex.
 
 The UI is in Spanish. Not affiliated with Nous Research. Code under the MIT license.

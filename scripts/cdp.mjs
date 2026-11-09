@@ -2,6 +2,7 @@
 // PEDILA_CDP=<puerto>.
 //   node scripts/cdp.mjs <puerto> eval "<expresión JS>"
 //   node scripts/cdp.mjs <puerto> close
+//   node scripts/cdp.mjs <puerto> shot <archivo.png>   (captura solo la página de la app)
 const [port, cmd, arg] = process.argv.slice(2)
 const base = `http://127.0.0.1:${port}`
 
@@ -20,6 +21,14 @@ if (cmd === 'close') {
   const v = await (await fetch(base + '/json/version')).json()
   try { await rpcOn(v.webSocketDebuggerUrl, 'Browser.close', {}) } catch {}
   console.log('cerrada')
+} else if (cmd === 'shot') {
+  const targets = await (await fetch(base + '/json/list')).json()
+  const page = targets.find(t => t.type === 'page' && t.url.startsWith('app://shell'))
+  if (!page) { console.log('no hay página app://shell'); process.exit(1) }
+  const r = await rpcOn(page.webSocketDebuggerUrl, 'Page.captureScreenshot', { format: 'png' })
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(arg, Buffer.from(r.data, 'base64'))
+  console.log('captura', arg)
 } else if (cmd === 'eval') {
   const targets = await (await fetch(base + '/json/list')).json()
   const page = targets.find(t => t.type === 'page' && t.url.startsWith('app://shell'))

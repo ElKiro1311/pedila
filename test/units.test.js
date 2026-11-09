@@ -7,7 +7,7 @@ const { normalizeTranscript, sessionRow, argsSummary } = require('../src/main/co
 const { decide } = require('../src/main/notify')
 
 test('ajustes: valores fuera de rango y claves desconocidas', () => {
-  const s = sanitize({ look: { theme: 'neón', accent: 'rosa', textSize: 400 }, raro: 1, notify: { minDurationSec: -5, sound: 'sí' }, server: { urls: ['javascript:alert(1)', 'http://a:b@x', 'http://192.168.1.50:9119/ruta'] } })
+  const s = sanitize({ look: { palette: 'egeo', theme: 'neón', accent: 'rosa', textSize: 400 }, raro: 1, notify: { minDurationSec: -5, sound: 'sí' }, server: { urls: ['javascript:alert(1)', 'http://a:b@x', 'http://192.168.1.50:9119/ruta'] } })
   assert.equal(s.look.theme, 'system')
   assert.equal(s.look.accent, 'rosa')
   assert.equal(s.look.textSize, 140)
@@ -16,6 +16,21 @@ test('ajustes: valores fuera de rango y claves desconocidas', () => {
   assert.equal(s.notify.sound, true)
   assert.deepEqual(s.server.urls, ['http://192.168.1.50:9119'])
   assert.deepEqual(sanitize(null), defaults())
+  assert.equal(s.look.palette, 'egeo')
+  assert.equal(sanitize({ look: { palette: 'neón' } }).look.palette, 'mensajera')
+})
+
+test('ajustes: al pasar desde antes de la 0.5 se estrenan el tema y la mascota nuevos', () => {
+  const viejo = sanitize({ look: { theme: 'dark', accent: 'violeta', textSize: 110 }, pet: { slug: 'code-default', visible: true } })
+  assert.equal(viejo.look.palette, 'mensajera')
+  assert.equal(viejo.look.accent, 'tema')
+  assert.equal(viejo.look.theme, 'dark')
+  assert.equal(viejo.look.textSize, 110)
+  assert.equal(viejo.pet.slug, 'pedila')
+  // Otra mascota elegida a mano se respeta; y con los ajustes ya nuevos, Codux también.
+  assert.equal(sanitize({ look: { theme: 'dark' }, pet: { slug: 'gato-x' } }).pet.slug, 'gato-x')
+  assert.equal(sanitize({ look: { palette: 'clasico', accent: 'violeta' }, pet: { slug: 'code-default' } }).pet.slug, 'code-default')
+  assert.equal(sanitize({ look: { palette: 'clasico', accent: 'violeta' } }).look.accent, 'violeta')
 })
 
 test('ajustes: ventana demasiado pequeña se descarta', () => {

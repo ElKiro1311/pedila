@@ -99,7 +99,7 @@ function main() {
       s.setPermissionCheckHandler((_wc, perm) => allowed(perm))
     }
 
-    pets = new Pets({ dataDir: app.getPath('userData'), bundledDir: path.join(ROOTS.assets, 'pets', 'default'), log })
+    pets = new Pets({ dataDir: app.getPath('userData'), bundledDir: path.join(ROOTS.assets, 'pets', 'pedila'), log })
     ensureDefaultPet()
     protocol.handle('app', serveApp)
 
@@ -168,8 +168,15 @@ function main() {
     return nativeTheme.shouldUseDarkColors
   }
 
+  // Fondo de cada tema [oscuro, claro]: el de la ventana mientras carga y el de la barra de título.
+  const WINDOW_BG = { mensajera: ['#0e0e0f', '#f4f3ef'], clasico: ['#14141a', '#f4f4f8'], egeo: ['#0b1120', '#eef2f8'], anfora: ['#120d0b', '#f6ede3'], olivo: ['#0f120e', '#f2f4ee'] }
+  function windowBg() {
+    const pair = WINDOW_BG[settings.data.look.palette] || WINDOW_BG.mensajera
+    return isDark() ? pair[0] : pair[1]
+  }
+
   function overlay() {
-    return isDark() ? { color: '#14141a', symbolColor: '#e6e6ee', height: 40 } : { color: '#f4f4f8', symbolColor: '#26262e', height: 40 }
+    return { color: windowBg(), symbolColor: isDark() ? '#e6e6ee' : '#26262e', height: 40 }
   }
 
   function onScreen(b) {
@@ -193,7 +200,7 @@ function main() {
       show: false,
       title: 'Pedila',
       icon: path.join(ROOTS.assets, 'icon.png'),
-      backgroundColor: isDark() ? '#14141a' : '#f4f4f8',
+      backgroundColor: windowBg(),
       titleBarStyle: 'hidden',
       titleBarOverlay: overlay(),
       webPreferences: {
@@ -341,9 +348,10 @@ function main() {
     if (!ok) { log.warn('el atajo Ctrl+Alt+H ya lo usa otra app') }
   }
 
-  // La mascota no viaja en el instalador (el arte es de su autor en Petdex): la primera vez se baja.
+  // Pedila viaja en el instalador; si la mascota elegida es de Petdex y falta (datos copiados de otro
+  // PC, por ejemplo), se vuelve a bajar.
   async function ensureDefaultPet() {
-    if (pets.resolve(settings.data.pet.slug)) { return }
+    if (pets.installed().some(p => p.slug === settings.data.pet.slug)) { return }
     try {
       const pet = await pets.install(settings.data.pet.slug)
       log.info(`[mascotas] descargada la mascota predeterminada: ${pet.slug}`)
@@ -492,6 +500,7 @@ function main() {
         const before = JSON.stringify(settings.data.server.urls)
         settings.patch(patch)
         nativeTheme.themeSource = settings.data.look.theme
+        if (patch.look && win && !win.isDestroyed()) { try { win.setTitleBarOverlay(overlay()); win.setBackgroundColor(windowBg()) } catch {} }
         if (app.isPackaged) {
           app.setLoginItemSettings({ openAtLogin: settings.data.window.openAtLogin, args: ['--oculto'] })
         }
