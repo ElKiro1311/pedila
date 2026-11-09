@@ -1,10 +1,9 @@
-// Hermes Panel: la pantalla. Sin Node; habla con el proceso principal por window.hp (preload).
+// Pedila: la pantalla. Sin Node; habla con el proceso principal por window.hp (preload).
 import { Pet, loadSheet } from './pet.js'
 
 const demo = new URLSearchParams(location.search).get('demo') === '1'
 const api = demo ? (await import('./demo.js')).demoApi : window.hp
 const $ = sel => document.querySelector(sel)
-const PET_URL = 'assets/pets/default/sprite.png'
 const CONN_NAMES = { local: 'Este PC', server: 'Servidor' }
 const CHOICE_LABELS = { once: 'Permitir una vez', session: 'Permitir en este chat', always: 'Permitir siempre', deny: 'Denegar' }
 
@@ -276,7 +275,7 @@ function setTopbar() {
   const warn = $('#ctx-warn')
   warn.hidden = !(ch && pct >= 80 && !S.ctxHidden.has(key(ch.conn, ch.sid)))
   if (!warn.hidden) { $('#ctx-warn-text').textContent = `Este chat va por el ${pct} % de su memoria. Si cambias de tema, mejor sigue en uno nuevo.` }
-  document.title = ch && ch.title ? `${ch.title} · Hermes Panel` : 'Hermes Panel'
+  document.title = ch && ch.title ? `${ch.title} · Pedila` : 'Pedila'
 }
 
 function newChatView() {
@@ -772,6 +771,9 @@ function onEvent(evt) {
     case 'focus-chat':
       if (evt.sid) { openChat(evt.conn, evt.sid) }
       return
+    case 'pet':
+      if (evt.pet) { applyPet(evt.pet, { greet: true }).then(() => { $('#pet-stage').hidden = !S.settings.pet.visible }).catch(() => {}) }
+      return
     case 'focus-input':
       $('#input').focus()
       return
@@ -909,7 +911,7 @@ function onEvent(evt) {
 const pet = new Pet($('#pet'))
 const welcomePet = new Pet($('#welcome-pet'))
 const settingsPet = new Pet($('#settings-pet'))
-const DEFAULT_PET = { slug: 'code-default', name: 'codux', author: 'duxphp', kind: 'object', url: PET_URL, bundled: true }
+const DEFAULT_PET = { slug: 'code-default', name: 'codux', author: 'duxphp', kind: 'object', url: '', bundled: false }
 const KIND_NAMES = { character: 'personaje', creature: 'criatura', object: 'objeto' }
 const petName = p => { const n = (p && p.name) || 'mascota'; return n.charAt(0).toUpperCase() + n.slice(1) }
 const petBy = p => (p && p.author ? `de ${p.author} en Petdex` : 'de Petdex')
@@ -1270,10 +1272,17 @@ async function start() {
   petEl.addEventListener('click', () => pet.flash('waving', 2))
   petEl.addEventListener('mouseenter', () => { if (pet.base === 'idle') { pet.flash('waving', 1) } })
 
-  try {
-    await applyPet(init.pet || DEFAULT_PET)
-  } catch {
-    await applyPet(DEFAULT_PET).catch(() => {})
+  if (init.pet) {
+    await applyPet(init.pet).catch(() => {})
+  } else {
+    // Primera vez: la mascota se está descargando de Petdex; aparece en cuanto llega.
+    $('#pet-stage').hidden = true
+    for (let i = 0; i < 20 && !S.pet; i++) {
+      await new Promise(r => setTimeout(r, 3000))
+      const mine = await call(api.petsInstalled).catch(() => [])
+      const p = (mine || []).find(x => x.slug === S.settings.pet.slug) || (mine || [])[0]
+      if (p) { await applyPet(p, { greet: true }).catch(() => {}); $('#pet-stage').hidden = !S.settings.pet.visible }
+    }
   }
   pet.flash('waving', 2)
   welcomePet.setBase('idle')
@@ -1351,7 +1360,7 @@ async function renameChat(conn, sid) {
 
 async function deleteChat(conn, sid) {
   const title = chat(conn, sid).title || rowOf(conn, sid).title
-  const yes = await askBox({ title: '¿Borrar este chat?', text: `«${title}» desaparecerá de Hermes Panel y de Hermes Desktop, con todos sus mensajes. No se puede deshacer. (Si solo quieres quitarlo de en medio, mejor «Archivar».)`, ok: 'Borrar', danger: true })
+  const yes = await askBox({ title: '¿Borrar este chat?', text: `«${title}» desaparecerá de Pedila y de Hermes Desktop, con todos sus mensajes. No se puede deshacer. (Si solo quieres quitarlo de en medio, mejor «Archivar».)`, ok: 'Borrar', danger: true })
   if (yes) { await mutateChat(conn, sid, 'delete') }
 }
 
@@ -1379,7 +1388,7 @@ async function mutateChat(conn, sid, op, value) {
 
 function chatMarkdown(conn, sid) {
   const ch = chat(conn, sid)
-  const lines = [`# ${ch.title || 'Chat'}`, '', `_Exportado de Hermes Panel · ${CONN_NAMES[conn]}${ch.model ? ' · ' + ch.model : ''} · ${new Date().toLocaleString('es')}_`, '']
+  const lines = [`# ${ch.title || 'Chat'}`, '', `_Exportado de Pedila · ${CONN_NAMES[conn]}${ch.model ? ' · ' + ch.model : ''} · ${new Date().toLocaleString('es')}_`, '']
   const turns = [...ch.transcript, ...(ch.live && ch.live.done ? [liveToTurn(ch.live)] : [])]
   for (const t of turns) {
     if (t.role === 'user') { lines.push('## Tú', '', t.text, ''); continue }
@@ -1552,7 +1561,7 @@ async function openUsage(conn = S.active) {
 // ── Actualizaciones ──────────────────────────────────────────────────────────────────────────
 function showUpdate(version, notes) {
   const b = $('#update-bar')
-  b.replaceChildren(el('div', { class: 'grow' }, el('strong', { text: `Hay una versión nueva de Hermes Panel (${version}). ` }), el('span', { class: 'muted', text: notes || '' })),
+  b.replaceChildren(el('div', { class: 'grow' }, el('strong', { text: `Hay una versión nueva de Pedila (${version}). ` }), el('span', { class: 'muted', text: notes || '' })),
     el('button', { class: 'btn-primary', text: 'Actualizar y reiniciar', onclick: async e => {
       e.target.disabled = true
       e.target.textContent = 'Descargando…'

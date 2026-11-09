@@ -1,5 +1,5 @@
 // Herramienta de pruebas en desarrollo (no va en el instalable): habla con la app abierta con
-// HERMES_PANEL_CDP=<puerto>.
+// PEDILA_CDP=<puerto>.
 //   node scripts/cdp.mjs <puerto> eval "<expresión JS>"
 //   node scripts/cdp.mjs <puerto> close
 const [port, cmd, arg] = process.argv.slice(2)

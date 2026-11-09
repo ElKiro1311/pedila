@@ -1,5 +1,5 @@
 'use strict'
-// Ajustes en %APPDATA%\Hermes Panel\settings.json. Guardado atómico (tmp + rename); al cargar se
+// Ajustes en %APPDATA%\Pedila\settings.json. Guardado atómico (tmp + rename); al cargar se
 // quitan las claves desconocidas, los valores se ajustan a su rango y un archivo ilegible se
 // renombra a .broken y se usan los valores por defecto.
 const fs = require('node:fs')

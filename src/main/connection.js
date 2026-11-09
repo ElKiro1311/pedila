@@ -360,7 +360,7 @@ class Connection extends EventEmitter {
     }
     // Lo demás (sudo, secretos, tutoriales, vista previa…) no existe en esta app: se rechaza al
     // momento para que Hermes no se quede esperando hasta su plazo.
-    sock.respondError(rq.id, -32601, 'not supported by Hermes Panel')
+    sock.respondError(rq.id, -32601, 'not supported by Pedila')
   }
 
   addPrompt(key, prompt) {
@@ -537,6 +537,8 @@ class Connection extends EventEmitter {
   async answer(key, value) {
     const pr = this.prompts.get(key)
     if (!pr) { return { ok: false, gone: true } }
+    if (pr.kind === 'approval' && !(Array.isArray(pr.choices) ? pr.choices : ['once', 'deny']).includes(value)) { throw new Error('respuesta de permiso no válida') }
+    if (pr.kind === 'clarify' && !(typeof value === 'string' || (value && typeof value === 'object'))) { throw new Error('respuesta no válida') }
     if (pr.serverRequestId !== undefined) {
       const result = pr.kind === 'approval' ? { choice: value } : { answers: value, outcome: 'submitted' }
       pr.sock.respond(pr.serverRequestId, result)

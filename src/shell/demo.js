@@ -1,4 +1,4 @@
-// Modo demostración (solo en desarrollo, HERMES_PANEL_DEMO=1): datos inventados para revisar el
+// Modo demostración (solo en desarrollo, PEDILA_DEMO=1): datos inventados para revisar el
 // diseño sin tocar ningún Hermes ni mostrar chats de verdad.
 const listeners = new Set()
 const emit = evt => setTimeout(() => { for (const l of listeners) { l(evt) } }, 0)

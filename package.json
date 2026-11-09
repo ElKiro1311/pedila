@@ -1,16 +1,16 @@
 {
-  "name": "hermes-panel",
-  "productName": "Hermes Panel",
-  "version": "0.3.0",
+  "name": "pedila",
+  "productName": "Pedila",
+  "version": "0.4.0",
   "private": true,
-  "description": "Una ventana sencilla, en español, para usar Hermes Agent: el de este PC y el de tu servidor",
-  "author": "Hermes Panel",
-  "license": "UNLICENSED",
+  "description": "Pedila: una ventana sencilla para usar Hermes Agent (el de tu PC y el de tu servidor). Cliente no oficial.",
+  "author": "Pedila",
+  "license": "MIT",
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test \"test/*.test.js\"",
-    "assets": "node scripts/fetch-pet.mjs && electron scripts/make-icon.js && node scripts/vendor.mjs",
+    "assets": "electron scripts/make-icon.js && node scripts/vendor.mjs",
     "dist": "npm run assets && electron-builder --win nsis --x64"
   },
   "dependencies": {},
@@ -21,10 +21,11 @@
     "marked": "18.1.3"
   },
   "build": {
-    "appId": "org.hermespanel.app",
-    "productName": "Hermes Panel",
+    "appId": "org.pedila.app",
+    "productName": "Pedila",
     "files": [
       "src/**",
+      "!src/assets/pets/**",
       "package.json"
     ],
     "directories": {
@@ -44,7 +45,7 @@
     "nsis": {
       "oneClick": true,
       "perMachine": false,
-      "artifactName": "HermesPanel-Setup-${version}.${ext}",
+      "artifactName": "Pedila-Setup-${version}.${ext}",
       "deleteAppDataOnUninstall": false
     },
     "electronFuses": {
@@ -56,5 +57,6 @@
       "onlyLoadAppFromAsar": true,
       "grantFileProtocolExtraPrivileges": false
     }
-  }
+  },
+  "repository": "https://github.com/ElKiro1311/pedila"
 }

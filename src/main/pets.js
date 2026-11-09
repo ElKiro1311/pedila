@@ -1,12 +1,12 @@
 'use strict'
 // Mascotas: la que trae la app (src/assets/pets/default) y las que eliges del catálogo de Petdex
-// (https://petdex.dev/api/manifest), que se guardan en %APPDATA%\Hermes Panel\pets\<slug>\.
+// (https://petdex.dev/api/manifest), que se guardan en %APPDATA%\Pedila\pets\<slug>\.
 // Solo se descarga de petdex.dev (https), con tamaño máximo y comprobando que sea PNG o WebP.
 const fs = require('node:fs')
 const path = require('node:path')
 
 const MANIFEST_URL = 'https://petdex.dev/api/manifest'
-const UA = { 'User-Agent': 'hermes-panel-petdex' }
+const UA = { 'User-Agent': 'pedila-petdex' }
 const SLUG = /^[a-z0-9][a-z0-9-]{0,100}$/
 const MAX_SHEET = 15 * 1024 * 1024
 const MEMORY_TTL = 60 * 60 * 1000

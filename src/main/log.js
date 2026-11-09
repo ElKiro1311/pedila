@@ -1,5 +1,5 @@
 'use strict'
-// Registro en %APPDATA%\Hermes Panel\logs\hermes-panel.log (rota a .1 al pasar de 2 MB).
+// Registro en %APPDATA%\Pedila\logs\pedila.log (rota a .1 al pasar de 2 MB).
 // Nunca recibe contraseñas, cookies ni tickets: quien llama pasa solo datos seguros.
 const fs = require('node:fs')
 const path = require('node:path')
@@ -9,7 +9,7 @@ const MAX = 2 * 1024 * 1024
 
 function init(dir) {
   fs.mkdirSync(dir, { recursive: true })
-  file = path.join(dir, 'hermes-panel.log')
+  file = path.join(dir, 'pedila.log')
   try {
     if (fs.statSync(file).size > MAX) { fs.renameSync(file, file + '.1') }
   } catch {}
@@ -18,7 +18,7 @@ function init(dir) {
 function line(level, parts) {
   const text = parts.map(p => (typeof p === 'string' ? p : safeJson(p))).join(' ')
   const out = `${new Date().toISOString()} ${level} ${text}\n`
-  if (process.env.HERMES_PANEL_DEBUG) { process.stdout.write(out) }
+  if (process.env.PEDILA_DEBUG) { process.stdout.write(out) }
   if (!file) { return }
   try { fs.appendFileSync(file, out) } catch {}
 }

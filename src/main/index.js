@@ -1,5 +1,5 @@
 'use strict'
-// Hermes Panel: proceso principal. Ventana con su propio protocolo app://, bandeja, avisos de
+// Pedila: proceso principal. Ventana con su propio protocolo app://, bandeja, avisos de
 // Windows y dos conexiones con Hermes («Este PC» y «Servidor»).
 const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, protocol, net, nativeTheme, shell, nativeImage, session, screen, globalShortcut, dialog } = require('electron')
 const path = require('node:path')
@@ -15,7 +15,7 @@ const notify = require('./notify')
 const { Pets } = require('./pets')
 const extras = require('./extras')
 
-const APP_ID = 'org.hermespanel.app'
+const APP_ID = 'org.pedila.app'
 const TOAST_CLSID = '{6B1E3C2A-9F4D-4E7B-A1C5-3D8F2B6E9A41}'
 const SRC = path.join(__dirname, '..')
 const ROOTS = { shell: path.join(SRC, 'shell'), assets: path.join(SRC, 'assets') }
@@ -23,18 +23,34 @@ const SHELL_URL = 'app://shell/index.html'
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://assets.petdex.dev; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.json': 'application/json', '.woff2': 'font/woff2' }
 
-app.setName('Hermes Panel')
+app.setName('Pedila')
+// Mudanza desde «Hermes Panel» (nombre anterior): se copia la carpeta entera, incluido «Local State»,
+// que guarda la clave con la que safeStorage cifró la sesión del servidor. La vieja se deja como copia.
+if (!process.env.PEDILA_DATA) {
+  try {
+    const appData = app.getPath('appData')
+    const oldDir = path.join(appData, 'Hermes Panel')
+    const newDir = path.join(appData, 'Pedila')
+    if (fs.existsSync(path.join(oldDir, 'settings.json')) && !fs.existsSync(newDir)) {
+      fs.cpSync(oldDir, newDir, { recursive: true, filter: src => !/[\\/](Cache|Code Cache|GPUCache|DawnCache|DawnGraphiteCache|DawnWebGPUCache|logs)([\\/]|$)/.test(src) })
+      const f = path.join(newDir, 'settings.json')
+      const j = JSON.parse(fs.readFileSync(f, 'utf8'))
+      if (j.updates && typeof j.updates.url === 'string') { j.updates.url = j.updates.url.replace(/[/]hermes-panel$/, '/pedila') }
+      fs.writeFileSync(f, JSON.stringify(j, null, 2))
+    }
+  } catch {}
+}
 app.setAppUserModelId(APP_ID)
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
 
 // Solo en desarrollo y a propósito: puerto de depuración para mis pruebas (nunca en el instalable).
-if (!app.isPackaged && /^\d{4,5}$/.test(process.env.HERMES_PANEL_CDP || '')) {
-  app.commandLine.appendSwitch('remote-debugging-port', process.env.HERMES_PANEL_CDP)
+if (!app.isPackaged && /^\d{4,5}$/.test(process.env.PEDILA_CDP || '')) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.PEDILA_CDP)
 }
 // Solo en desarrollo: otra carpeta de datos (ajustes, sesión, mascotas) para probar sin tocar la
 // de verdad; también deja abrir esta copia junto a la app instalada.
-if (!app.isPackaged && process.env.HERMES_PANEL_DATA) {
-  app.setPath('userData', process.env.HERMES_PANEL_DATA)
+if (!app.isPackaged && process.env.PEDILA_DATA) {
+  app.setPath('userData', process.env.PEDILA_DATA)
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -53,7 +69,7 @@ function main() {
   const conns = {}
   const titles = new Map() // `${conn}:${sid}` → título conocido (para los avisos)
   const startHidden = process.argv.includes('--oculto')
-  const demo = !app.isPackaged && process.env.HERMES_PANEL_DEMO === '1'
+  const demo = !app.isPackaged && process.env.PEDILA_DEMO === '1'
 
   app.on('second-instance', () => showWindow())
 
@@ -69,7 +85,7 @@ function main() {
 
   app.whenReady().then(async () => {
     log.init(path.join(app.getPath('userData'), 'logs'))
-    log.info(`Hermes Panel ${app.getVersion()} · Electron ${process.versions.electron} · empaquetada=${app.isPackaged}`)
+    log.info(`Pedila ${app.getVersion()} · Electron ${process.versions.electron} · empaquetada=${app.isPackaged}`)
     settings = new Settings(app.getPath('userData'))
     settings.load()
     nativeTheme.themeSource = settings.data.look.theme
@@ -84,6 +100,7 @@ function main() {
     }
 
     pets = new Pets({ dataDir: app.getPath('userData'), bundledDir: path.join(ROOTS.assets, 'pets', 'default'), log })
+    ensureDefaultPet()
     protocol.handle('app', serveApp)
 
     const remote = new RemoteTransport({ settings, secrets, log })
@@ -123,7 +140,8 @@ function main() {
     if (u.hostname !== 'shell') { return new Response('no', { status: 404 }) }
     // Todo sale del mismo origen (app://shell): las imágenes de /assets/ también, para que la
     // política de seguridad las admita y el lienzo de la mascota se pueda leer.
-    let rel = decodeURIComponent(u.pathname).replace(/^\/+/, '') || 'index.html'
+    let rel
+    try { rel = decodeURIComponent(u.pathname).replace(/^\/+/, '') || 'index.html' } catch { return new Response('no', { status: 400 }) }
     let root = ROOTS.shell
     let file
     if (rel.startsWith('pets/')) {
@@ -173,7 +191,7 @@ function main() {
       minWidth: 720,
       minHeight: 480,
       show: false,
-      title: 'Hermes Panel',
+      title: 'Pedila',
       icon: path.join(ROOTS.assets, 'icon.png'),
       backgroundColor: isDark() ? '#14141a' : '#f4f4f8',
       titleBarStyle: 'hidden',
@@ -231,7 +249,7 @@ function main() {
   function createTray() {
     const img = nativeImage.createFromPath(path.join(ROOTS.assets, 'tray.png'))
     tray = new Tray(img.isEmpty() ? nativeImage.createFromPath(path.join(ROOTS.assets, 'icon.png')).resize({ width: 16, height: 16 }) : img)
-    tray.setToolTip('Hermes Panel')
+    tray.setToolTip('Pedila')
     tray.on('click', () => showWindow())
     refreshTray()
   }
@@ -240,9 +258,9 @@ function main() {
     if (!tray) { return }
     const label = c => ({ ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', error: 'error', off: 'apagado' })[c.state] || c.state
     const lines = Object.values(conns).map(c => `${c.name}: ${label(c)}`)
-    tray.setToolTip(['Hermes Panel', ...lines].join('\n'))
+    tray.setToolTip(['Pedila', ...lines].join('\n'))
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Abrir Hermes Panel', click: () => showWindow() },
+      { label: 'Abrir Pedila', click: () => showWindow() },
       { label: 'Nuevo chat', click: () => { showWindow(); send({ kind: 'new-chat' }) } },
       { type: 'separator' },
       ...Object.values(conns).map(c => ({ label: `${c.name}: ${label(c)}`, enabled: false })),
@@ -323,12 +341,31 @@ function main() {
     if (!ok) { log.warn('el atajo Ctrl+Alt+H ya lo usa otra app') }
   }
 
+  // La mascota no viaja en el instalador (el arte es de su autor en Petdex): la primera vez se baja.
+  async function ensureDefaultPet() {
+    if (pets.resolve(settings.data.pet.slug)) { return }
+    try {
+      const pet = await pets.install(settings.data.pet.slug)
+      log.info(`[mascotas] descargada la mascota predeterminada: ${pet.slug}`)
+      send({ kind: 'pet', pet })
+    } catch (e) {
+      log.warn('[mascotas] no pude bajar la mascota predeterminada:', e.message)
+    }
+  }
+
+  const REPO = (() => {
+    try {
+      const m = String(require('../../package.json').repository || '').match(/github\.com[/:]([\w.-]+[/][\w.-]+?)(?:\.git)?$/)
+      return m ? m[1] : ''
+    } catch { return '' }
+  })()
+
   let pendingUpdate = null
   async function autoCheckUpdate(manual = false) {
     const u = settings.data.updates
-    if (!u.url || (!u.auto && !manual)) { return null }
+    if (!u.auto && !manual) { return null }
     try {
-      const r = await extras.checkUpdate(u.url, app.getVersion())
+      const r = await extras.checkUpdate(u.url, app.getVersion(), REPO)
       if (r.available) {
         pendingUpdate = r
         send({ kind: 'update', version: r.version, notes: r.notes })
@@ -425,9 +462,9 @@ function main() {
     handle('hp:update-check', () => autoCheckUpdate(true))
     handle('hp:update-install', async () => {
       const u = settings.data.updates
-      const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion())
+      const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion(), REPO)
       if (!info || !info.available) { throw new Error('no hay versión nueva') }
-      await extras.installUpdate(u.url, info, log)
+      await extras.installUpdate(info, log)
       setTimeout(() => { quitting = true; app.quit() }, 600)
       return true
     })
@@ -481,7 +518,7 @@ function main() {
     })
     handle('hp:open-logs', () => shell.openPath(log.dir() || app.getPath('userData')))
     handle('hp:test-notify', () => {
-      notify.show({ Notification, log, icon: path.join(ROOTS.assets, 'icon.png'), silent: !settings.data.notify.sound, title: 'Hermes Panel', body: 'Así se verán los avisos cuando Hermes termine o te necesite.', onClick: () => showWindow() })
+      notify.show({ Notification, log, icon: path.join(ROOTS.assets, 'icon.png'), silent: !settings.data.notify.sound, title: 'Pedila', body: 'Así se verán los avisos cuando Hermes termine o te necesite.', onClick: () => showWindow() })
       return Notification.isSupported()
     })
   }
@@ -508,7 +545,7 @@ function main() {
   // Los avisos de Windows necesitan el AUMID y el CLSID en el acceso directo del menú Inicio.
   function fixStartMenuShortcut() {
     if (!app.isPackaged || process.platform !== 'win32') { return }
-    const lnk = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Hermes Panel.lnk')
+    const lnk = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Pedila.lnk')
     try {
       if (!fs.existsSync(lnk)) { return }
       const cur = shell.readShortcutLink(lnk)

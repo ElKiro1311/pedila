@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://assets.petdex.dev; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
-  <title>Hermes Panel</title>
+  <title>Pedila</title>
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
     <aside id="sidebar">
       <div class="side-top drag">
         <img class="brand-icon" src="assets/tray@2x.png" alt="">
-        <span class="brand">Hermes Panel</span>
+        <span class="brand">Pedila</span>
       </div>
       <div id="conn-switch" class="segmented" role="tablist" aria-label="Qué Hermes usar">
         <button role="tab" data-conn="local"><span class="dot"></span>Este PC</button>
@@ -124,7 +124,7 @@
         </section>
         <section data-sec="avisos" hidden>
           <h3>Avisos de Windows</h3>
-          <p id="toasts-off" class="note-warn" hidden>Tus notificaciones de Windows están <strong>apagadas</strong> (Configuración → Sistema → Notificaciones), así que ninguna app puede mostrarlas. Mientras tanto, el botón de Hermes Panel en la barra de tareas parpadea cuando Hermes termina o te necesita.</p>
+          <p id="toasts-off" class="note-warn" hidden>Tus notificaciones de Windows están <strong>apagadas</strong> (Configuración → Sistema → Notificaciones), así que ninguna app puede mostrarlas. Mientras tanto, el botón de Pedila en la barra de tareas parpadea cuando Hermes termina o te necesita.</p>
           <label class="toggle"><input type="checkbox" data-set="notify.enabled"><span>Activar los avisos</span></label>
           <label class="toggle"><input type="checkbox" data-set="notify.done"><span>Cuando Hermes termina</span></label>
           <label class="toggle"><input type="checkbox" data-set="notify.needs"><span>Cuando Hermes te necesita (permiso o pregunta)</span></label>
@@ -166,12 +166,14 @@
         </section>
         <section data-sec="acerca" hidden>
           <h3>Acerca de</h3>
-          <p><strong>Hermes Panel</strong> <span id="about-version"></span></p>
+          <p><strong>Pedila</strong> <span id="about-version"></span></p>
           <p class="muted">Una ventana sencilla para tu Hermes: el de este PC (el mismo que usa Hermes Desktop, con los mismos chats) y el del servidor.</p>
+          <p class="muted small"><b>Pedila</b> (πέδιλα) son las sandalias aladas de Hermes: «las hermosas sandalias, inmortales, de oro, que lo llevaban sobre el mar y sobre la tierra sin límites, tan rápido como los soplos del viento» (Homero, <i>Odisea</i> V, 44-46).</p>
+          <p class="muted small">Cliente no oficial para Hermes Agent; no está hecho ni respaldado por Nous Research. Código bajo licencia MIT.</p>
           <p class="muted small" id="about-pet"></p>
           <button id="open-logs" class="btn-ghost">Abrir carpeta de registros</button>
           <h4>Actualizaciones</h4>
-          <label class="field">Carpeta de actualizaciones (con su version.json)<input id="upd-url" spellcheck="false" placeholder="http://servidor:8185/hermes-panel"></label>
+          <label class="field">Carpeta de actualizaciones (con su version.json)<input id="upd-url" spellcheck="false" placeholder="http://servidor:8185/pedila"></label>
           <label class="toggle"><input type="checkbox" data-set="updates.auto"><span>Buscar versiones nuevas al abrir y cada 6 horas</span></label>
           <div class="row-buttons"><button id="upd-save" class="btn-ghost">Guardar dirección</button><button id="upd-check" class="btn-ghost">Buscar actualizaciones</button><span id="upd-status" class="muted small"></span></div>
         </section>
