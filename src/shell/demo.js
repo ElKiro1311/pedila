@@ -28,6 +28,11 @@ const transcript = [
   { role: 'assistant', reasoning: 'El usuario quiere una receta sencilla. Busco una versión clásica española.', blocks: [
     { type: 'tool', name: 'web_search', args: 'receta lentejas estofadas 4 personas', done: true, summary: '5 resultados', seconds: 2.4 },
     { type: 'text', text: '¡Claro! **Lentejas estofadas** para 4:\n\n| Ingrediente | Cantidad |\n|---|---|\n| Lentejas pardinas | 400 g |\n| Chorizo | 1 |\n| Zanahoria | 2 |\n\n1. Sofríe la cebolla y el pimiento.\n2. Añade las lentejas y cubre con agua.\n3. Cuece **35 minutos** a fuego medio.\n\n```bash\n# temporizador\nsleep 2100 && echo "¡Lentejas listas!"\n```' }
+  ] },
+  { role: 'user', text: 'Hazme un dibujo del plato.' },
+  { role: 'assistant', blocks: [
+    { type: 'tool', name: 'image_generate', args: 'a steaming bowl of Spanish lentil stew', done: true, summary: 'imagen lista', seconds: 30.4 },
+    { type: 'text', text: 'Aquí tienes:\n\nMEDIA:C:\\Users\\demo\\AppData\\Local\\hermes\\cache\\generated\\images\\lentejas.png\n\nUn plato de lentejas humeante.' }
   ] }
 ]
 
@@ -89,6 +94,7 @@ export const demoApi = {
     return ok({ ok: true })
   },
   attachImage: () => ok({ ok: true }),
+  media: () => ok('assets/icon.png'),
   usage: () => ok({ chats: 3, messages: 22, input: 120000, output: 8000, today: { chats: 2, messages: 8, input: 41000, output: 3200 }, week: { chats: 9, messages: 40, input: 210000, output: 15000 }, days: Array.from({ length: 30 }, (_, i) => ({ date: `día ${i + 1}`, chats: i % 4, messages: i % 4 * 3, input: i % 4 * 9000, output: i % 4 * 700 })), models: [{ model: 'qwen3-32b', chats: 12, input: 90000, output: 6000 }, { model: 'gemma-3-27b', chats: 5, input: 30000, output: 2000 }, { model: 'qwen3-8b', chats: 2, input: 3000, output: 400 }] }),
   exportChat: () => ok({ saved: false }),
   showFile: () => ok(true),

@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('hp', {
   mutate: (conn, sid, op, value) => call('hp:mutate', conn, sid, op, value),
   attachImage: (conn, sid, b64, name) => call('hp:attach-image', conn, sid, b64, name),
   usage: conn => call('hp:usage', conn),
+  media: (conn, file) => call('hp:media', conn, file),
   exportChat: (name, markdown) => call('hp:export', name, markdown),
   showFile: file => call('hp:show-file', file),
   updateCheck: () => call('hp:update-check'),

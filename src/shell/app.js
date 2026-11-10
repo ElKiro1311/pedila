@@ -62,9 +62,57 @@ function el(tag, attrs = {}, ...kids) {
   return n
 }
 
+// Hermes entrega las imágenes (image_generate, capturas…) con una línea «MEDIA:<ruta>». Esa línea se
+// cambia por un hueco que fillMedia llena con la imagen, pedida al gateway de esa conexión.
+const MEDIA_LINE = /^[ \t]*`?MEDIA:[ \t]*(\S[^\n`]*?\.(?:png|jpe?g|gif|webp|bmp))`?[ \t]*$/gim
+
 function md(text) {
-  const html = window.marked.parse(String(text || ''), { gfm: true, breaks: true })
+  const src = String(text || '').replace(MEDIA_LINE, (_, p) => `\n\n<div class="media-img" data-media="${encodeURIComponent(p.trim())}"></div>\n\n`)
+  const html = window.marked.parse(src, { gfm: true, breaks: true })
   return window.DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, ADD_ATTR: ['target'] })
+}
+
+// Imágenes ya traídas, por conexión y ruta: una promesa mientras llega, luego el data URL (o null si falló;
+// el fallo se olvida a los 30 s para reintentar). Así los repintados del chat en vivo no las vuelven a pedir.
+const mediaCache = new Map()
+
+function fillMedia(root, conn) {
+  for (const box of root.querySelectorAll('.media-img[data-media]')) {
+    let file
+    try { file = decodeURIComponent(box.dataset.media) } catch { continue }
+    const name = file.split(/[\\/]/).pop()
+    const show = url => {
+      box.replaceChildren()
+      box.classList.remove('loading')
+      if (!url) { box.classList.add('fail'); box.textContent = `🖼 No pude cargar la imagen ${name}`; return }
+      const img = el('img', { src: url, alt: name, title: name })
+      img.addEventListener('click', () => openImage(url, name))
+      box.append(img)
+    }
+    const k = conn + '\n' + file
+    let c = mediaCache.get(k)
+    if (typeof c === 'string' || c === null) { show(c); continue }
+    box.classList.add('loading')
+    box.textContent = 'Cargando imagen…'
+    if (!c) {
+      c = call(api.media, conn, file).catch(() => null).then(url => {
+        mediaCache.set(k, url || null)
+        if (!url) { setTimeout(() => { if (mediaCache.get(k) === null) { mediaCache.delete(k) } }, 30000) }
+        return url || null
+      })
+      mediaCache.set(k, c)
+    }
+    c.then(show)
+  }
+}
+
+/** La imagen a pantalla completa; un clic o Esc la cierra. */
+function openImage(url, name) {
+  const close = () => { box.remove(); document.removeEventListener('keydown', onKey, true) }
+  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close() } }
+  const box = el('div', { class: 'image-view', role: 'dialog', 'aria-label': name, onclick: close }, el('img', { src: url, alt: name }))
+  document.addEventListener('keydown', onKey, true)
+  document.body.append(box)
 }
 
 function decorate(root) {
@@ -427,6 +475,7 @@ function renderBlocks(blocks) {
       const d = el('div', { class: 'md' })
       d.innerHTML = md(b.text)
       decorate(d)
+      fillMedia(d, S.current.conn)
       out.push(d)
     } else if (b.type === 'tool') {
       out.push(renderTool(b))

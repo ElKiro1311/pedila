@@ -457,6 +457,10 @@ function main() {
       if (typeof b64 !== 'string' || b64.length > 15 * 1024 * 1024 * 1.4) { throw new Error('imagen demasiado grande (máximo 15 MB)') }
       return connOf(id).attachImage(sidOf(sid), b64, typeof name === 'string' ? name.replace(/[^\w. -]/g, '_').slice(0, 80) : 'imagen.png')
     })
+    handle('hp:media', (id, file) => {
+      if (typeof file !== 'string' || !file.trim() || file.length > 1024) { throw new Error('ruta no válida') }
+      return connOf(id).media(file.trim())
+    })
     handle('hp:usage', async id => extras.usageStats(await connOf(id).allSessions(2000, 'include')))
     handle('hp:export', async (name, markdown) => {
       if (typeof markdown !== 'string' || markdown.length > 20 * 1024 * 1024) { throw new Error('nada que exportar') }

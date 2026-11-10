@@ -448,6 +448,18 @@ class Connection extends EventEmitter {
     return { path: str(r && r.path), mime: str(r && (r.mime || r.mime_type)) }
   }
 
+  /** Una imagen que Hermes nombró con «MEDIA:<ruta>» (image_generate, capturas…). La ruta es del equipo
+   *  donde corre Hermes, así que se pide a su gateway: GET /api/media solo sirve imágenes de sus carpetas
+   *  de medios (images, screenshots, cache) y la devuelve como data URL. */
+  async media(file) {
+    const r = await this.transport.fetchJson(`/api/media?path=${encodeURIComponent(file)}`)
+    const url = r.json && r.json.data_url
+    if (r.status !== 200 || typeof url !== 'string' || !/^data:image\/(png|jpeg|gif|webp|bmp);base64,/.test(url)) {
+      throw new Error(r.status === 403 ? 'la imagen está fuera de las carpetas de Hermes' : r.status === 404 ? 'la imagen ya no existe' : `no pude traer la imagen (${r.status})`)
+    }
+    return url
+  }
+
   async transcript(sid) {
     const r = await this.transport.fetchJson(`/api/sessions/${encodeURIComponent(sid)}/messages?limit=400&order=latest`)
     if (r.status === 404) { return [] }
