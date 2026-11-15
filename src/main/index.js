@@ -465,6 +465,7 @@ function main() {
       if (typeof file !== 'string' || !file.trim() || file.length > 1024) { throw new Error('ruta no válida') }
       return connOf(id).media(file.trim())
     })
+    handle('hp:subagents', (id, sid) => connOf(id).subagents(sidOf(sid)))
     handle('hp:usage', async id => {
       const c = connOf(id)
       // Qué chats están trabajando (si este Hermes lo sabe decir; si no, null y el panel sigue igual).

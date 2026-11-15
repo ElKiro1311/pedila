@@ -49,6 +49,8 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
 - **Más:**
   - un panel a la derecha, como el de Claude Panel, con lo que hace Hermes, la memoria y los tokens del chat abierto, el uso de hoy y de 7 días, los modelos más usados y las conexiones (se pliega con ◨);
   - la hora de la última respuesta de Hermes y el tiempo que ha pasado desde entonces (o, si está trabajando, desde cuándo), aunque la tarea la empezara Hermes Desktop;
+  - «Tareas», como en Claude Code: el plan de Hermes (su lista de tareas, con subtareas) y cuánto lleva hecho, lo que está haciendo ahora, las herramientas en marcha y sus subagentes;
+  - la lista de chats y el panel se ensanchan o estrechan arrastrando su raya (o con las flechas; doble clic: el ancho de siempre);
   - «Tu uso», calculado solo con tus datos;
   - bandeja del sistema y atajo **Ctrl+Alt+H**;
   - actualizaciones desde GitHub Releases;

@@ -35,7 +35,7 @@ const key = (conn, sid) => `${conn}|${sid}`
 function chat(conn, sid) {
   const k = key(conn, sid)
   if (!S.chats.has(k)) {
-    S.chats.set(k, { conn, sid, title: '', transcript: [], loaded: false, live: null, running: false, prompts: new Map(), model: '', usage: null })
+    S.chats.set(k, { conn, sid, title: '', transcript: [], loaded: false, live: null, running: false, prompts: new Map(), model: '', usage: null, todos: null, subagents: new Map() })
   }
   return S.chats.get(k)
 }
@@ -860,7 +860,7 @@ function onEvent(evt) {
       // enganches) y su final no llegaría nunca. Se vuelven a enganchar: si siguen, llegará; si ya
       // acabaron, dejan de contar como «en marcha». Lo ya escrito se vuelve a leer al abrirlos.
       for (const c of S.chats.values()) {
-        if (c === ch || c.conn !== evt.conn || !busy(c)) { continue }
+        if (c === ch || c.conn !== evt.conn || !(busy(c) || liveSubs(c))) { continue }
         c.live = null
         const settle = running => {
           c.running = running
@@ -919,6 +919,7 @@ function onEvent(evt) {
       ch.running = true
       // Cuándo empezó la tarea (si se envió desde aquí ya está puesta, con la hora del envío).
       if (!ch.turnAt) { ch.turnAt = Date.now() }
+      for (const [id, sa] of ch.subagents) { if (sa.state !== 'running' && sa.state !== 'queued') { ch.subagents.delete(id) } }
       break
     }
     case 'delta': {
@@ -942,7 +943,13 @@ function onEvent(evt) {
       if (ch.live && !ch.live.done && evt.text) { ch.live.status = 'Pensando' }
       break
     case 'status':
-      if (ch.live && !ch.live.done && evt.text) { ch.live.status = evt.text.replace(/[.…]+$/, '') }
+      if (evt.text && busy(ch) && (!ch.live || ch.live.done)) { ensureLive() }
+      if (ch.live && !ch.live.done && evt.text) {
+        // Al resumir lo antiguo del chat (puede tardar minutos) se dice en castellano y se cuenta el rato.
+        const text = evt.statusKind === 'compacting' ? COMPACT_TEXT : evt.text.replace(/[.…]+$/, '')
+        if (text === COMPACT_TEXT && ch.live.status !== COMPACT_TEXT) { ch.live.compactAt = Date.now() }
+        ch.live.status = text
+      }
       break
     case 'tool': {
       const L = ensureLive()
@@ -951,11 +958,11 @@ function onEvent(evt) {
       // el bloque que se estaba preparando con el mismo nombre se reutiliza.
       if (!b && evt.phase === 'start') { b = L.blocks.find(x => x.type === 'tool' && x.generating && !x.done && x.name === evt.name) }
       if (!b) {
-        b = { type: 'tool', id: evt.id, name: evt.name, args: evt.args || '', done: false, generating: evt.phase === 'generating' }
+        b = { type: 'tool', id: evt.id, name: evt.name, args: evt.args || '', done: false, generating: evt.phase === 'generating', startedAt: Date.now() }
         L.blocks.push(b)
         L.cut = true
       }
-      if (evt.phase === 'start') { b.generating = false; if (evt.id) { b.id = evt.id } }
+      if (evt.phase === 'start') { if (b.generating) { b.startedAt = Date.now() } b.generating = false; if (evt.id) { b.id = evt.id } }
       if (evt.args) { b.args = evt.args }
       if (evt.name) { b.name = evt.name }
       if (evt.phase === 'progress') { b.percent = evt.percent; b.message = evt.message }
@@ -996,6 +1003,30 @@ function onEvent(evt) {
       // Al enviar a un chat sin enganchar, el enganche dice «parado» antes de empezar: la hora del envío se queda.
       if (!evt.running && !busy(ch)) { ch.turnAt = 0 }
       break
+    case 'todos': {
+      // La lista entera. Los avisos en vivo y la foto al engancharse mandan siempre (Hermes puede volver
+      // a numerar desde 1 tras reiniciarse o tras una hora parado); la leída del historial solo gana si
+      // no es más vieja o si el chat no está trabajando.
+      const cur = ch.todos
+      if (evt.history && busy(ch) && cur && evt.revision != null && cur.revision != null && evt.revision < cur.revision) { break }
+      ch.todos = { items: Array.isArray(evt.todos) ? evt.todos : [], revision: evt.revision ?? (cur ? cur.revision : null) }
+      break
+    }
+    case 'subagent': {
+      const prev = ch.subagents.get(evt.id) || { id: evt.id, goal: '', state: 'queued', tools: 0, since: Date.now(), index: evt.index }
+      const sa = { ...prev, goal: evt.goal || prev.goal, index: evt.index, count: evt.count }
+      if (evt.phase === 'start' || ((evt.phase === 'tool' || evt.phase === 'progress') && !['running', 'done', 'failed'].includes(sa.state))) { sa.state = 'running'; sa.since = sa.since && evt.phase !== 'start' ? sa.since : Date.now() }
+      sa.misses = 0
+      if (evt.phase === 'tool' && evt.tool) { sa.tool = evt.tool }
+      if (evt.phase === 'progress' && evt.text) { sa.text = evt.text }
+      if (evt.tools != null) { sa.tools = evt.tools }
+      if (evt.phase === 'complete') {
+        sa.state = ['failed', 'error', 'timeout'].includes(evt.status) ? 'failed' : ['interrupted', 'cancelled', 'canceled'].includes(evt.status) ? 'stopped' : 'done'
+        sa.seconds = evt.seconds != null ? evt.seconds : (Date.now() - sa.since) / 1000
+      }
+      ch.subagents.set(evt.id, sa)
+      break
+    }
     case 'info':
       if (evt.model) { ch.model = evt.model }
       if (evt.provider) { ch.provider = evt.provider }
@@ -1365,6 +1396,7 @@ async function start() {
   S.dark = init.dark
   S.version = init.version
   setHour12(init.hour12)
+  applyWidths()
   document.querySelector('#toasts-off').hidden = !init.toastsOff
   $('#version').textContent = `v${init.version}${init.demo ? ' · demo' : ''}`
   for (const c of init.connections) { S.conns[c.id] = { state: c.state, detail: c.detail } }
@@ -1667,12 +1699,13 @@ function chime() {
 
 // ── Panel derecho: uso y parámetros ──────────────────────────────────────────────────────────
 // Como las tarjetas de Claude Panel: lo que pasa ahora, el chat abierto y el uso, siempre a la vista.
-const P = { usage: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, done: { local: null, server: null }, raf: 0, day: '' }
+const P = { usage: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, done: { local: null, server: null }, raf: 0, day: '', hold: false, held: false, reconciling: false }
 const panelOn = () => S.settings && S.settings.window && S.settings.window.sidePanel !== false
 
 function applyPanel() {
   const on = panelOn()
   $('#app').classList.toggle('with-panel', on)
+  applyWidths()
   const b = $('#panel-toggle')
   b.classList.toggle('active', on)
   b.setAttribute('aria-pressed', String(on))
@@ -1680,6 +1713,7 @@ function applyPanel() {
 }
 
 function schedulePanel() {
+  if (P.hold) { P.held = true; return }
   if (P.raf || !panelOn()) { return }
   P.raf = requestAnimationFrame(() => { P.raf = 0; renderPanel() })
 }
@@ -1703,6 +1737,7 @@ function hermesNow() {
   if (all.some(c => c.prompts.size) || remote.some(a => a.status === 'waiting')) { return { cls: 'need', text: 'Hermes te necesita', live, remote } }
   if (live.some(c => c.live && !c.live.done && c.live.blocks.some(b => b.type === 'tool' && !b.done))) { return { cls: 'busy', text: 'Usando herramientas', live, remote } }
   if (live.length || remote.length) { return { cls: 'busy', text: 'Trabajando', live, remote } }
+  if (all.some(c => liveSubs(c))) { return { cls: 'busy', text: 'Subagentes trabajando', live, remote } }
   return { cls: 'idle', text: 'Tranquilo', live, remote }
 }
 
@@ -1821,7 +1856,7 @@ function remoteBusy(conn) {
   })
 }
 
-/** Cada 20 s: los «25 min» del panel al día; al cambiar de día se repinta (hoy → ayer). */
+/** Cada segundo: los relojes del panel («25 min», «40 s») al día; al cambiar de día se repinta (hoy → ayer). */
 function tickPanel() {
   if (!panelOn()) { return }
   const d = new Date().toDateString()
@@ -1876,10 +1911,245 @@ function renderPanel() {
   const top = body.scrollTop
   // Con el foco en una tarjeta que se puede pulsar, al repintar se le devuelve (teclado).
   const focused = body.contains(document.activeElement) ? document.activeElement.getAttribute('data-focus') : null
-  body.replaceChildren(...[panelNowCard(), panelChatCard(), panelUsageCard(), panelModelsCard(), panelConnsCard()].filter(Boolean))
+  body.replaceChildren(...[panelNowCard(), panelTasksCard(), panelChatCard(), panelUsageCard(), panelModelsCard(), panelConnsCard()].filter(Boolean))
   body.scrollTop = top
   P.day = new Date().toDateString()
   if (focused) { body.querySelector(`[data-focus="${focused}"]`)?.focus({ preventScroll: true }) }
+}
+
+// ── Tareas: el plan de Hermes y lo que está haciendo (como en Claude Code) ──────────────────
+// El plan sale de su herramienta todo_list (avisos todo.updated, o el último resultado guardado);
+// lo demás, de lo que ya llega del turno: estado, herramientas en marcha y subagentes.
+const COMPACT_TEXT = 'Resumiendo la memoria del chat'
+const TODO_ICON = { completed: '✓', in_progress: '●', pending: '○', cancelled: '✕' }
+const TODO_NAME = { completed: 'Hecha', in_progress: 'En curso', pending: 'Pendiente', cancelled: 'Cancelada' }
+const SUB_ICON = { running: '⟳', queued: '○', done: '✓', failed: '✕', stopped: '■', gone: '–' }
+const liveSubs = c => { let n = 0; for (const sa of c.subagents.values()) { if (sa.state === 'running' || sa.state === 'queued') { n++ } } return n }
+
+/**
+ * Los subagentes que Pedila cree vivos se comparan cada 10 s con los que Hermes tiene de verdad
+ * (subagent.list): un hijo que nunca arrancó, o cuyo aviso de fin se perdió (reconexión, reinicio
+ * del gateway), deja de salir «trabajando» para siempre. Dos faltas seguidas = «terminó».
+ */
+async function reconcileSubagents() {
+  if (P.reconciling) { return }
+  P.reconciling = true
+  try { await reconcileOnce() } finally { P.reconciling = false }
+}
+
+async function reconcileOnce() {
+  for (const c of S.chats.values()) {
+    if (!liveSubs(c) || !S.conns[c.conn] || S.conns[c.conn].state !== 'ready') { continue }
+    let list
+    try { list = await call(api.subagents, c.conn, c.sid) } catch { continue }
+    if (!Array.isArray(list)) { continue }
+    const byId = new Map(list.map(x => [x.id, x]))
+    let changed = false
+    for (const sa of c.subagents.values()) {
+      if (sa.state !== 'running' && sa.state !== 'queued') { continue }
+      const live = byId.get(sa.id)
+      if (live) {
+        sa.misses = 0
+        if (live.tools != null && live.tools !== sa.tools) { sa.tools = live.tools; changed = true }
+        if (live.tool && live.tool !== sa.tool) { sa.tool = live.tool; changed = true }
+      } else if ((sa.misses = (sa.misses || 0) + 1) >= 2) {
+        sa.state = 'gone'
+        sa.seconds = (Date.now() - sa.since) / 1000
+        changed = true
+      }
+    }
+    if (changed) { schedulePanel(); updatePet() }
+  }
+}
+
+/** El chat del que se enseñan las tareas: el abierto si tiene algo; si no, uno de esta conexión con Hermes trabajando. */
+function taskChat() {
+  const has = c => c && ((c.todos && c.todos.items.length) || busy(c) || c.subagents.size)
+  const cur = currentChat()
+  if (has(cur)) { return cur }
+  const working = [...S.chats.values()].filter(c => c.conn === S.active && (busy(c) || liveSubs(c)))
+  return working.find(c => busy(c) && c.todos && c.todos.items.length) || working.find(c => busy(c)) || working[0] || null
+}
+
+/** Las tareas en su orden, cada subtarea debajo de la suya (sangrada). */
+function todoRows(items) {
+  const ids = new Set(items.map(t => t.id))
+  const kids = new Map()
+  for (const t of items) {
+    if (t.parent && t.parent !== t.id && ids.has(t.parent)) { kids.set(t.parent, [...(kids.get(t.parent) || []), t]) }
+  }
+  const out = []
+  const seen = new Set()
+  const walk = (t, depth) => {
+    if (seen.has(t) || depth > 6) { return }
+    seen.add(t)
+    out.push({ t, depth })
+    for (const k of kids.get(t.id) || []) { walk(k, depth + 1) }
+  }
+  for (const t of items) { if (!t.parent || !ids.has(t.parent)) { walk(t, 0) } }
+  for (const t of items) { if (!seen.has(t)) { out.push({ t, depth: 0 }) } }
+  return out
+}
+
+function panelTasksCard() {
+  const ch = taskChat()
+  const items = ch && ch.todos ? ch.todos.items : []
+  const counted = items.filter(t => t.status !== 'cancelled')
+  const done = counted.filter(t => t.status === 'completed').length
+  const head = el('h4', {}, el('span', { text: 'Tareas' }), counted.length ? el('span', { class: 'sp-count', title: `${done} de ${counted.length} hechas`, text: `${done}/${counted.length}` }) : null)
+  if (!ch) {
+    // Lo que Hermes hace fuera de esta ventana no trae su plan: un clic lo abre aquí y entonces sí.
+    const other = remoteBusy(S.active).map(a => listedRow(S.active, a.id)).find(Boolean)
+    return el('section', { class: 'sp-card' }, head, other
+      ? el('button', { class: 'sp-hint', 'data-focus': 'tasks-other', text: `Hermes está trabajando en «${other.title || 'un chat'}». Ábrelo para ver su plan y su progreso.`, onclick: () => openChat(S.active, other.id) })
+      : el('p', { class: 'sp-hint', text: 'Nada en marcha. Cuando Hermes trabaje en algo, aquí verás su plan, lo que está haciendo y cuánto lleva.' }))
+  }
+  const running = busy(ch)
+  const parts = [head]
+  if (ch !== currentChat()) {
+    parts.push(el('button', { class: 'sp-where', 'data-focus': 'tasks-where', title: 'Abrir este chat', text: `En «${ch.title || 'otro chat'}»`, onclick: () => openChat(ch.conn, ch.sid) }))
+  }
+  if (counted.length) {
+    parts.push(el('div', { class: 'sp-progress', role: 'progressbar', 'aria-label': 'Tareas hechas', 'aria-valuemin': '0', 'aria-valuemax': String(counted.length), 'aria-valuenow': String(done) },
+      el('i', { style: `width:${Math.round(done / counted.length * 100)}%` })))
+  }
+  if (items.length) {
+    parts.push(el('ul', { class: 'sp-todo' }, ...todoRows(items).map(({ t, depth }) => el('li', {
+      class: t.status + (running && t.status === 'in_progress' ? ' live' : ''),
+      style: depth ? `padding-left:${depth * 14}px` : null,
+      title: TODO_NAME[t.status] || ''
+    }, el('span', { class: 'i', text: TODO_ICON[t.status] || '○' }), el('span', { class: 't', text: t.content })))))
+    const waiting = liveSubs(ch)
+    if (!running && waiting) { parts.push(el('p', { class: 'sp-note', text: `Esperando a ${waiting === 1 ? 'un subagente' : waiting + ' subagentes'}.` })) }
+    else if (!running && done < counted.length) { parts.push(el('p', { class: 'sp-note', text: 'Se quedó con pasos sin hacer.' })) }
+  }
+  if (running) {
+    const L = ch.live && !ch.live.done ? ch.live : null
+    const status = L ? L.status : 'Trabajando'
+    const tools = L ? L.blocks.filter(b => b.type === 'tool') : []
+    const since = L && L.status === COMPACT_TEXT && L.compactAt ? L.compactAt : 0
+    parts.push(el('div', { class: 'sp-now' + (items.length ? '' : ' solo') }, el('span', { class: 'spin' }), el('span', { class: 't', title: status, text: status }),
+      since ? el('span', { class: 'w', title: 'Lo que lleva resumiendo', 'data-span': since, text: span(Date.now() - since) })
+        : tools.length ? el('span', { class: 'w', title: 'Herramientas usadas en esta respuesta', text: `${tools.length} herr.` }) : null))
+    for (const b of tools.filter(b => !b.done).slice(-4)) {
+      parts.push(el('div', { class: 'sp-run running' }, el('span', { class: 'i', text: '⟳' }),
+        el('span', { class: 't' }, el('b', { text: b.name || 'herramienta' }), b.args ? el('span', { class: 'd', title: b.args, text: b.args }) : null),
+        b.startedAt ? el('span', { class: 'w', 'data-span': b.startedAt, text: span(Date.now() - b.startedAt) }) : null))
+    }
+  }
+  const subs = [...ch.subagents.values()].sort((a, b) => (a.index || 0) - (b.index || 0))
+  if (subs.length) {
+    parts.push(el('div', { class: 'sp-sub-h', text: `Subagentes · ${subs.filter(x => x.state === 'done').length}/${subs.length}` }))
+    for (const sa of subs) {
+      const what = sa.state === 'running' ? (sa.tool ? `usando ${sa.tool}` : sa.text || 'trabajando')
+        : { queued: 'en cola', failed: 'falló', stopped: 'parado', gone: 'terminó' }[sa.state] || 'hecho'
+      const goal = sa.goal || `Subagente ${(sa.index || 0) + 1}`
+      parts.push(el('div', { class: 'sp-run ' + sa.state }, el('span', { class: 'i', text: SUB_ICON[sa.state] || '○' }),
+        el('span', { class: 't' }, el('b', { title: goal, text: goal }), el('span', { class: 'd', text: what + (sa.tools ? ` · ${sa.tools} herr.` : '') })),
+        sa.state === 'running' ? el('span', { class: 'w', 'data-span': sa.since, text: span(Date.now() - sa.since) })
+          : sa.seconds != null ? el('span', { class: 'w', text: span(sa.seconds * 1000) }) : null))
+    }
+  }
+  if (!items.length && !running && !subs.length) { parts.push(el('p', { class: 'sp-hint', text: 'Nada en marcha.' })) }
+  return el('section', { class: 'sp-card' }, ...parts)
+}
+
+// ── Anchos ajustables: la lista de chats y el panel derecho ──────────────────────────────────
+// Se arrastra su raya (o flechas con el foco en ella; Inicio, Intro o doble clic: el ancho de
+// siempre). Mismos límites que settings.js. Al chat le quedan siempre al menos MAIN_MIN píxeles:
+// con la ventana estrecha cede primero el panel (hasta su mínimo) y después la lista, sin tocar lo
+// guardado; así lo que se ve al soltar una raya es lo que queda.
+const MAIN_MIN = 420
+const WIDTHS = {
+  side: { key: 'sideWidth', def: 286, min: 240, max: 520, css: '--side-w', box: '#sidebar', dir: 1 },
+  panel: { key: 'panelWidth', def: 300, min: 240, max: 680, css: '--panel-w', box: '#side-panel', dir: -1 }
+}
+const widthOf = d => { const v = S.settings && S.settings.window ? S.settings.window[d.key] : null; return Number.isFinite(v) ? v : d.def }
+// ≤ 900 px el CSS esconde el panel y las rayas y fija la lista: ahí no se ajusta nada.
+const narrow = () => innerWidth <= 900
+const panelShown = () => panelOn() && !narrow()
+
+/** Los anchos que caben: los guardados, o encogidos (primero el panel) para dejar MAIN_MIN al chat. */
+function fittedWidths(side = widthOf(WIDTHS.side), panel = widthOf(WIDTHS.panel)) {
+  const room = Math.max(0, innerWidth - MAIN_MIN)
+  if (!panelShown()) { return { side: Math.max(WIDTHS.side.min, Math.min(side, room)), panel } }
+  if (side + panel > room) { panel = Math.max(WIDTHS.panel.min, room - side) }
+  if (side + panel > room) { side = Math.max(WIDTHS.side.min, room - panel) }
+  return { side, panel }
+}
+
+function applyWidths() {
+  const fit = fittedWidths()
+  for (const [name, d] of Object.entries(WIDTHS)) {
+    $('#app').style.setProperty(d.css, fit[name] + 'px')
+    const h = document.querySelector(`.resizer[data-side="${name}"]`)
+    if (h) { h.setAttribute('aria-valuenow', String(fit[name])); h.setAttribute('aria-valuemin', String(d.min)); h.setAttribute('aria-valuemax', String(d.max)) }
+  }
+}
+
+function wireResizers() {
+  for (const h of document.querySelectorAll('.resizer')) {
+    const name = h.dataset.side
+    const d = WIDTHS[name]
+    if (!d) { continue }
+    // Lo más que puede crecer ahora sin quitar sitio a la otra columna: su máximo, o lo que deje
+    // al chat con MAIN_MIN. La otra no se mueve mientras se arrastra.
+    const ceiling = () => {
+      const other = name === 'side' ? (panelShown() ? $('#side-panel').getBoundingClientRect().width : 0) : $('#sidebar').getBoundingClientRect().width
+      return Math.max(d.min, Math.min(d.max, Math.floor(innerWidth - MAIN_MIN - other)))
+    }
+    const show = (px, top = ceiling()) => {
+      const v = Math.round(Math.min(top, Math.max(d.min, px)))
+      $('#app').style.setProperty(d.css, v + 'px')
+      h.setAttribute('aria-valuenow', String(v))
+      // Con la ventana justa, al estrechar la lista el panel recupera su ancho a la vez (no de golpe al soltar).
+      if (name === 'side' && panelShown()) { $('#app').style.setProperty(WIDTHS.panel.css, fittedWidths(v).panel + 'px') }
+      return v
+    }
+    const save = v => saveSetting({ window: { [d.key]: v } }).then(applyWidths)
+    h.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || narrow()) { return }
+      e.preventDefault()
+      try { h.setPointerCapture(e.pointerId) } catch {}
+      // Desde el ancho que se ve (con la ventana estrecha puede ser menor que el guardado).
+      const startX = e.clientX
+      const startW = $(d.box).getBoundingClientRect().width
+      const top = ceiling()
+      let last = null
+      h.classList.add('active')
+      document.body.classList.add('resizing')
+      const move = ev => { last = show(startW + d.dir * (ev.clientX - startX), top) }
+      const end = () => {
+        h.removeEventListener('pointermove', move)
+        h.removeEventListener('pointerup', end)
+        h.removeEventListener('pointercancel', end)
+        h.classList.remove('active')
+        document.body.classList.remove('resizing')
+        // Solo si se movió de verdad: un intento de ensanchar que no cabía no guarda el ancho apretado.
+        if (last !== null && last !== Math.round(startW) && last !== widthOf(d)) { save(last) }
+      }
+      h.addEventListener('pointermove', move)
+      h.addEventListener('pointerup', end)
+      h.addEventListener('pointercancel', end)
+    })
+    h.addEventListener('dblclick', () => { if (!narrow()) { show(d.def); save(null) } })
+    h.addEventListener('keydown', e => {
+      if (narrow()) { return }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault()
+        const step = (e.shiftKey ? 48 : 16) * (e.key === 'ArrowRight' ? 1 : -1) * d.dir
+        const before = Math.round($(d.box).getBoundingClientRect().width)
+        const v = show(before + step)
+        if (v !== before) { save(v) }
+      } else if (e.key === 'Home' || e.key === 'Enter') {
+        e.preventDefault()
+        show(d.def)
+        save(null)
+      }
+    })
+  }
+  let fitRaf = 0
+  addEventListener('resize', () => { if (!fitRaf) { fitRaf = requestAnimationFrame(() => { fitRaf = 0; applyWidths() }) } })
 }
 
 // ── Tu uso ───────────────────────────────────────────────────────────────────────────────────
@@ -1990,9 +2260,18 @@ function wireExtras() {
   })
   $('#open-usage').addEventListener('click', () => openUsage())
   $('#panel-toggle').addEventListener('click', () => saveSetting({ window: { sidePanel: !panelOn() } }).then(applyPanel))
+  wireResizers()
   // Al acabar una respuesta se recalcula el uso; además, cada 2 minutos.
   setInterval(() => { if (panelOn()) { loadPanelUsage(S.active, true) } }, 120000)
-  setInterval(tickPanel, 20000)
+  // Los relojes del panel enseñan segundos: se ponen al día cada segundo (solo su texto).
+  setInterval(tickPanel, 1000)
+  setInterval(() => { if (panelOn()) { reconcileSubagents() } }, 10000)
+  // Mientras se pulsa algo del panel no se rehace (el clic acabaría en un botón que ya no existe).
+  $('#panel-body').addEventListener('pointerdown', () => { P.hold = true })
+  const release = () => { if (P.hold) { P.hold = false; if (P.held) { P.held = false; schedulePanel() } } }
+  addEventListener('pointerup', release, true)
+  addEventListener('pointercancel', release, true)
+  addEventListener('blur', release)
   for (const b of document.querySelectorAll('#usage-tabs button')) { b.addEventListener('click', () => openUsage(b.dataset.conn)) }
   $('#usage-close').addEventListener('click', () => $('#usage-dialog').close())
   $('#archived-close').addEventListener('click', () => $('#archived-dialog').close())

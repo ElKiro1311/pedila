@@ -15,6 +15,9 @@ const PET_SIZES = ['pequena', 'normal', 'grande']
 // La mascota que trae la app: Pedila, la mensajera (dibujo propio); las demás se eligen del catálogo de Petdex.
 const DEFAULT_PET = 'pedila'
 const SLUG = /^[a-z0-9][a-z0-9-]{0,100}$/
+// Anchos que se pueden dar a la lista de chats y al panel derecho (la pantalla usa los mismos).
+const SIDE_WIDTH = [240, 520]
+const PANEL_WIDTH = [240, 680]
 
 function defaults() {
   return {
@@ -38,8 +41,9 @@ function defaults() {
     // Dirección de una carpeta con version.json para buscar versiones nuevas ('' = no buscar).
     updates: { url: '', auto: true },
     pet: { visible: true, size: 'normal', slug: DEFAULT_PET },
-    // sidePanel: el panel derecho con el uso y los parámetros.
-    window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false, sidePanel: true },
+    // sidePanel: el panel derecho con el uso y los parámetros. sideWidth / panelWidth: el ancho de la
+    // lista de chats y del panel en píxeles, ajustado arrastrando su raya (null = el de siempre).
+    window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false, sidePanel: true, sideWidth: null, panelWidth: null },
     secrets: { server: null }
   }
 }
@@ -104,6 +108,8 @@ function sanitize(raw) {
   s.window.closeToTray = bool(w.closeToTray, true)
   s.window.openAtLogin = bool(w.openAtLogin, false)
   s.window.sidePanel = bool(w.sidePanel, true)
+  s.window.sideWidth = clampInt(w.sideWidth, SIDE_WIDTH[0], SIDE_WIDTH[1], null)
+  s.window.panelWidth = clampInt(w.panelWidth, PANEL_WIDTH[0], PANEL_WIDTH[1], null)
   const sec = isObj(raw.secrets) ? raw.secrets : {}
   s.secrets.server = typeof sec.server === 'string' && sec.server.length < 20000 ? sec.server : null
   return s
@@ -156,4 +162,4 @@ class Settings {
   }
 }
 
-module.exports = { Settings, sanitize, defaults, ACCENTS, PALETTES, THEMES, PET_SIZES, DEFAULT_PET, SLUG }
+module.exports = { Settings, sanitize, defaults, ACCENTS, PALETTES, THEMES, PET_SIZES, DEFAULT_PET, SLUG, SIDE_WIDTH, PANEL_WIDTH }

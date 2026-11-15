@@ -217,3 +217,49 @@ test('formatos: horas de 12 o 24, días y ratos', async () => {
   assert.equal(f.ago(now + 90e3, now), 'hace un momento')
   assert.equal(f.ago(now - 25 * 60e3, now), 'hace 25 min')
 })
+
+test('ajustes: anchos de la lista de chats y del panel', () => {
+  assert.equal(sanitize({}).window.sideWidth, null)
+  assert.equal(sanitize({}).window.panelWidth, null)
+  const s = sanitize({ window: { sideWidth: 333.4, panelWidth: 9999 } })
+  assert.equal(s.window.sideWidth, 333)
+  assert.equal(s.window.panelWidth, 680)
+  assert.equal(sanitize({ window: { sideWidth: 50, panelWidth: 'ancho' } }).window.sideWidth, 240)
+  assert.equal(sanitize({ window: { sideWidth: 50, panelWidth: 'ancho' } }).window.panelWidth, null)
+  assert.equal(sanitize({ window: { sideWidth: null } }).window.sideWidth, null)
+})
+
+test('tareas: la última lista de un chat guardado, como la reconstruye Hermes', () => {
+  const { todoStateOf, todoSnapshot, isTodoCall } = require('../src/main/connection')
+  const plan = (rev, st) => JSON.stringify({ todos: [{ id: '1', content: 'Leer el código', status: 'completed' }, { id: '2', content: '  Compilar\n otra vez ', status: st, parent: '1' }], revision: rev, summary: {} })
+  const rows = [
+    { id: 1, role: 'user', content: 'haz esto' },
+    { id: 2, role: 'assistant', tool_calls: [{ id: 'a', function: { name: 'todo_list', arguments: '{"todos":[]}' } }] },
+    { id: 3, role: 'tool', tool_call_id: 'a', content: plan(1, 'pending') },
+    // A través del puente del buscador de herramientas (todo_list va «diferida» por defecto).
+    { id: 4, role: 'assistant', tool_calls: [{ id: 'b', function: { name: 'tool_call', arguments: JSON.stringify({ calls: [{ name: 'todo_list', arguments: {} }] }) } }] },
+    { id: 5, role: 'tool', tool_call_id: 'b', content: plan(2, 'in_progress') },
+    // Un resultado suelto, sin su llamada, no cuenta (aunque sea más nuevo).
+    { id: 6, role: 'tool', tool_call_id: 'zz', content: plan(9, 'cancelled') }
+  ]
+  const st = todoStateOf(rows)
+  assert.equal(st.revision, 2)
+  assert.deepEqual(st.todos, [{ id: '1', content: 'Leer el código', status: 'completed', parent: '' }, { id: '2', content: 'Compilar otra vez', status: 'in_progress', parent: '1' }])
+  assert.equal(todoStateOf(rows.slice(0, 1)), null)
+  // Si el resultado más nuevo es una lista vacía sin revisión, no hay plan (no resucita uno viejo).
+  const vacio = [...rows, { id: 7, role: 'assistant', tool_calls: [{ id: 'c', function: { name: 'todo_list', arguments: '{}' } }] }, { id: 8, role: 'tool', tool_call_id: 'c', content: '{"todos": [], "revision": 0}' }]
+  assert.equal(todoStateOf(vacio), null)
+  // Uno ilegible se salta y vale el anterior.
+  const roto = [...rows, { id: 7, role: 'assistant', tool_calls: [{ id: 'd', function: { name: 'todo_list', arguments: '{}' } }] }, { id: 8, role: 'tool', tool_call_id: 'd', content: '{"todos": [roto' }]
+  assert.equal(todoStateOf(roto).revision, 2)
+  assert.equal(todoStateOf([rows[0], rows[5]]), null)
+  // Sin plan: lista vacía sin revisión; con revisión, es un «borrado» que sí cuenta.
+  assert.equal(todoSnapshot({ todos: [], revision: 0 }), null)
+  assert.deepEqual(todoSnapshot({ todos: [], revision: 3 }), { todos: [], revision: 3 })
+  assert.equal(todoSnapshot({ todos: [{ id: 'x', content: 'a', status: 'raro' }] }).todos[0].status, 'pending')
+  assert.equal(todoSnapshot(null), null)
+  assert.equal(isTodoCall({ function: { name: 'tool_call', arguments: '{"name":"todo_list"}' } }), true)
+  assert.equal(isTodoCall({ function: { name: 'tool_call', arguments: '{"calls":[{"name":"todo_list"},{"name":"terminal"}]}' } }), false)
+  assert.equal(isTodoCall({ function: { name: 'terminal', arguments: '{"command":"todo"}' } }), false)
+  assert.equal(isTodoCall({ function: { name: 'tool_call', arguments: '{roto' } }), false)
+})

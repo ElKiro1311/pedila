@@ -52,11 +52,13 @@ input, textarea { font: inherit; color: inherit; }
 .drag { -webkit-app-region: drag; }
 .drag button, .drag input, .drag a { -webkit-app-region: no-drag; }
 
-#app { display: grid; grid-template-columns: 286px 1fr; grid-template-areas: "side main"; height: 100vh; }
+/* Anchos de la lista de chats y del panel: los pone la pantalla (rayas arrastrables) y los encoge
+   con la ventana estrecha para que al chat le queden al menos 420 px. */
+#app { --side-w: 286px; --panel-w: 300px; position: relative; display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); grid-template-areas: "side main"; height: 100vh; }
 #sidebar { grid-area: side; }
 #main { grid-area: main; }
 #side-panel { grid-area: panel; display: none; }
-#app.with-panel { grid-template-columns: 286px 1fr 300px; grid-template-areas: "side main panel"; }
+#app.with-panel { grid-template-columns: var(--side-w) minmax(0, 1fr) var(--panel-w); grid-template-areas: "side main panel"; }
 #app.with-panel #side-panel { display: flex; }
 /* Con el panel abierto, los botones de la ventana quedan encima del panel y no del chat. */
 #app.with-panel #topbar { padding-right: 18px; }
@@ -413,5 +415,51 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .sp-conn { display: flex; align-items: center; gap: 8px; font-size: .84rem; padding: 3px 0; }
 .sp-conn .s { margin-left: auto; color: var(--muted); font-size: .78rem; }
 #panel-toggle.active { color: var(--accent); }
-@media (max-width: 1060px) { #app.with-panel { grid-template-columns: 240px 1fr 260px; } }
-@media (max-width: 900px) { #app.with-panel { grid-template-columns: 1fr; grid-template-areas: "main"; } #app.with-panel #side-panel { display: none; } }
+@media (max-width: 900px) {
+  #app.with-panel { grid-template-columns: 240px minmax(0, 1fr); grid-template-areas: "side main"; }
+  #app.with-panel #side-panel { display: none; }
+  #app.with-panel #topbar { padding-right: 150px; }
+  .resizer { display: none !important; }
+}
+
+/* Rayas para ajustar el ancho de la lista de chats y del panel (arrastrar, flechas o doble clic). */
+.resizer { position: absolute; top: 0; bottom: 0; width: 6px; z-index: 6; cursor: col-resize; -webkit-app-region: no-drag; touch-action: none; outline: none; }
+.resizer[data-side="side"] { left: calc(var(--side-w) - 3px); }
+.resizer[data-side="panel"] { right: calc(var(--panel-w) - 3px); display: none; }
+#app.with-panel .resizer[data-side="panel"] { display: block; }
+.resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background .12s; }
+.resizer:hover::after, .resizer:focus-visible::after, body.resizing .resizer.active::after { background: var(--accent); width: 2px; left: 2.5px; }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing * { cursor: col-resize !important; }
+
+/* Tareas: el plan de Hermes (su todo_list) y lo que está haciendo, como en Claude Code. */
+.sp-count { margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+.sp-where { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 0; margin: -2px 0 8px; color: var(--muted); font-size: .76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.sp-where:hover { color: var(--accent); }
+.sp-progress { height: 5px; border-radius: 3px; background: var(--surface-3); overflow: hidden; margin: 0 0 9px; }
+.sp-progress > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.sp-todo { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: .84rem; line-height: 1.35; }
+.sp-todo li { display: grid; grid-template-columns: 16px 1fr; gap: 6px; align-items: start; overflow-wrap: anywhere; }
+.sp-todo li .i { text-align: center; color: var(--muted); font-weight: 700; }
+.sp-todo li.completed .i { color: var(--ok); }
+.sp-todo li.completed .t { color: var(--muted); }
+.sp-todo li.in_progress .i { color: var(--accent); }
+.sp-todo li.in_progress .t { font-weight: 600; }
+.sp-todo li.in_progress.live .i { animation: pulse 1.1s infinite; }
+.sp-todo li.cancelled .t { color: var(--muted); text-decoration: line-through; }
+.sp-note { margin: 8px 0 0; font-size: .76rem; color: var(--muted); }
+.sp-now { display: grid; grid-template-columns: 16px 1fr auto; gap: 6px; align-items: center; font-size: .84rem; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+.sp-now.solo { margin-top: 0; padding-top: 0; border-top: 0; }
+.sp-now .w, .sp-run .w { color: var(--muted); font-variant-numeric: tabular-nums; font-size: .78rem; white-space: nowrap; }
+.sp-now .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.sp-sub-h { margin: 9px 0 4px; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.sp-run { display: grid; grid-template-columns: 16px 1fr auto; gap: 6px; align-items: start; font-size: .8rem; margin-top: 4px; }
+.sp-run .i { text-align: center; color: var(--muted); }
+.sp-run.running .i { color: var(--accent); }
+.sp-run.done .i { color: var(--ok); }
+.sp-run.failed .i { color: var(--bad); }
+.sp-run .t { min-width: 0; }
+.sp-run .t b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-hint { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 0; margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.4; }
+button.sp-hint:hover { color: var(--accent); }
+.sp-run .t .d { display: block; color: var(--muted); font-size: .76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

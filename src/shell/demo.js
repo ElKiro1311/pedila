@@ -47,13 +47,28 @@ const DEMO_CATALOG = [
 export const demoApi = {
   init: () => ok({ version: '0.2.0', demo: true, hour12: true, pet: DEMO_PET, dark: matchMedia('(prefers-color-scheme: dark)').matches, settings, connections: [{ id: 'local', name: 'Este PC', state: 'ready', detail: '' }, { id: 'server', name: 'Servidor', state: 'login', detail: '' }] }),
   sessions: conn => (conn === 'server' ? Promise.resolve({ ok: false, error: 'Hay que iniciar sesión', needLogin: true }) : ok(sessions[conn])),
-  transcript: (_c, sid) => ok(sid === 'd1' ? transcript : []),
+  transcript: (conn, sid) => {
+    // Como en Hermes: al leer un chat guardado sale también su última lista de tareas.
+    if (sid === 'd1') { emit({ conn, sid, kind: 'todos', history: true, revision: 3, todos: [{ id: '1', content: 'Buscar una receta clásica de lentejas', status: 'completed' }, { id: '2', content: 'Ajustar las cantidades para 4 personas', status: 'completed' }, { id: '3', content: 'Dibujar el plato', status: 'completed' }] }) }
+    return ok(sid === 'd1' ? transcript : [])
+  },
   attach: () => ok({ running: false }),
   newChat: () => ok({ sid: 'd' + Math.floor(Math.random() * 1e6) }),
   send: (conn, sid, text) => {
+    const plan = (a, b, c) => ({ kind: 'todos', revision: a === 'completed' ? (c === 'completed' ? 4 : 2) : 1, todos: [
+      { id: '1', content: 'Mirar el espacio libre de los discos', status: a },
+      { id: '2', content: 'Revisar las carpetas que más ocupan', status: b },
+      { id: '2a', content: 'Copias de seguridad antiguas', status: b, parent: '2' },
+      { id: '3', content: 'Resumirte cómo está todo', status: c }
+    ] })
+    demoApi._plan = plan
     const steps = [
       [200, { kind: 'turn-start' }],
+      [350, plan('in_progress', 'pending', 'pending')],
       [500, { kind: 'reasoning', text: 'Voy a mirar el estado del sistema antes de responder. ' }],
+      [700, { kind: 'subagent', phase: 'start', id: 's1', goal: 'Buscar archivos grandes en los discos', index: 0, count: 2 }],
+      [750, { kind: 'subagent', phase: 'spawn_requested', id: 's2', goal: 'Comprobar las copias de seguridad', index: 1, count: 2 }],
+      [800, { kind: 'subagent', phase: 'tool', id: 's1', goal: 'Buscar archivos grandes en los discos', index: 0, count: 2, tool: 'terminal', tools: 2 }],
       [900, { kind: 'tool', phase: 'start', id: 't1', name: 'terminal', args: 'df -h /' }],
       [1600, { kind: 'prompt', key: 'l:demo', promptKind: 'approval', command: 'df -h /', description: 'Leer el espacio libre de los discos', choices: ['once', 'session', 'always', 'deny'] }]
     ]
@@ -68,6 +83,15 @@ export const demoApi = {
     const reply = 'Tus discos están bien: **2,1 TB libres** de 8 TB. Nada de qué preocuparse por ahora.'
     let t = 300
     setTimeout(() => emit({ conn, sid: p.sid, kind: 'tool', phase: 'complete', id: 't1', name: 'terminal', summary: 'S.ficheros Tamaño Usados Disp Uso% / 8,0T 5,9T 2,1T 74%', seconds: 0.4 }), t)
+    const plan = demoApi._plan
+    if (plan) {
+      setTimeout(() => emit({ conn, sid: p.sid, ...plan('completed', 'in_progress', 'pending') }), t + 20)
+      setTimeout(() => emit({ conn, sid: p.sid, kind: 'subagent', phase: 'complete', id: 's1', goal: 'Buscar archivos grandes en los discos', index: 0, count: 2, status: 'completed', tools: 3, seconds: 4.2 }), t + 40)
+      setTimeout(() => emit({ conn, sid: p.sid, kind: 'subagent', phase: 'start', id: 's2', goal: 'Comprobar las copias de seguridad', index: 1, count: 2 }), t + 60)
+      setTimeout(() => emit({ conn, sid: p.sid, kind: 'subagent', phase: 'complete', id: 's2', goal: 'Comprobar las copias de seguridad', index: 1, count: 2, status: 'completed', tools: 1, seconds: 1.5 }), t + 900)
+      setTimeout(() => emit({ conn, sid: p.sid, ...plan('completed', 'completed', 'completed') }), t + 950)
+      t += 1000
+    }
     for (const word of reply.split(/(?<= )/)) { t += 60; setTimeout(() => emit({ conn, sid: p.sid, kind: 'delta', text: word }), t) }
     setTimeout(() => emit({ conn, sid: p.sid, kind: 'usage', used: 13425, max: 98304 }), t + 50)
     setTimeout(() => emit({ conn, sid: p.sid, kind: 'complete', text: reply, outcome: 'completed', ms: 4000 }), t + 120)
@@ -94,6 +118,7 @@ export const demoApi = {
     return ok({ ok: true })
   },
   attachImage: () => ok({ ok: true }),
+  subagents: () => ok(null),
   media: () => ok('assets/icon.png'),
   usage: () => ok({ chats: 3, messages: 22, input: 5120000, output: 98000, today: { chats: 2, messages: 8, input: 1062000, output: 28000 }, week: { chats: 9, messages: 40, input: 4210000, output: 105000 }, last: { at: now - 3 * 60e3, id: 'd1', title: 'Receta de lentejas para 4' }, days: Array.from({ length: 30 }, (_, i) => ({ date: `día ${i + 1}`, chats: i % 4, messages: i % 4 * 3, input: i % 4 * 9000, output: i % 4 * 700 })), models: [{ model: 'qwen3-32b', chats: 12, input: 90000, output: 6000 }, { model: 'gemma-3-27b', chats: 5, input: 30000, output: 2000 }, { model: 'qwen3-8b', chats: 2, input: 3000, output: 400 }] }),
   exportChat: () => ok({ saved: false }),

@@ -49,6 +49,64 @@ function argsSummary(args, argsText) {
   return cut(str(argsText).replace(/\s+/g, ' ').trim(), 140)
 }
 
+// ── Lista de tareas de Hermes (su herramienta todo_list, como la de Claude Code) ────────────────
+const TODO_TOOLS = new Set(['todo_list', 'todo'])
+const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled']
+
+/** {todos, revision} limpio para la interfaz, o null (una lista vacía sin revisión = no hay plan). */
+function todoSnapshot(v) {
+  if (!v || typeof v !== 'object' || !Array.isArray(v.todos)) { return null }
+  const todos = v.todos.filter(t => t && typeof t === 'object').slice(0, 256).map(t => ({
+    id: cut(str(t.id) || String(t.id ?? '') || '?', 80),
+    content: cut(str(t.content).replace(/\s+/g, ' ').trim(), 400),
+    status: TODO_STATUSES.includes(t.status) ? t.status : 'pending',
+    parent: cut(str(t.parent), 80)
+  })).filter(t => t.content)
+  const n = Number(v.revision)
+  const revision = Number.isFinite(n) ? n : null
+  if (!todos.length && !revision) { return null }
+  return { todos, revision }
+}
+
+/** ¿Es una llamada a la lista de tareas? También a través de `tool_call`, el puente del buscador de herramientas. */
+function isTodoCall(c) {
+  const fn = c && c.function ? c.function : c || {}
+  const name = str(fn.name || (c && c.name))
+  if (TODO_TOOLS.has(name)) { return true }
+  if (name !== 'tool_call') { return false }
+  let args = fn.arguments ?? (c && c.args)
+  try {
+    if (typeof args === 'string') { args = JSON.parse(args) }
+    let calls = args && (args.calls ?? (args.name ? [{ name: args.name }] : null))
+    if (typeof calls === 'string') { calls = JSON.parse(calls) }
+    if (calls && !Array.isArray(calls)) { calls = [calls] }
+    return Array.isArray(calls) && calls.length === 1 && TODO_TOOLS.has(str(calls[0] && calls[0].name))
+  } catch { return false }
+}
+
+/**
+ * La lista de tareas de un chat guardado: el resultado más reciente de una llamada a la herramienta
+ * (como hace Hermes al reanudar). Un resultado suelto sin su llamada no cuenta.
+ */
+function todoStateOf(rows) {
+  const ids = new Set()
+  for (const r of rows) {
+    if (!r || r.role !== 'assistant' || !Array.isArray(r.tool_calls)) { continue }
+    for (const c of r.tool_calls) { if (c && (c.id || c.tool_call_id) && isTodoCall(c)) { ids.add(c.id || c.tool_call_id) } }
+  }
+  if (!ids.size) { return null }
+  const newest = [...rows].filter(r => r && r.role === 'tool' && ids.has(r.tool_call_id)).sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0))
+  // Como Hermes: manda el resultado legible más nuevo, aunque sea una lista vacía (entonces, sin plan).
+  for (const r of newest) {
+    const text = contentText(r.content)
+    if (!text.includes('"todos"') || text.length > 512000) { continue }
+    let data
+    try { data = JSON.parse(text) } catch { continue }
+    return todoSnapshot(data)
+  }
+  return null
+}
+
 function toolCallsOf(row) {
   const calls = Array.isArray(row.tool_calls) ? row.tool_calls : []
   return calls.map(c => {
@@ -305,8 +363,36 @@ class Connection extends EventEmitter {
       case 'tool.progress':
         this.ui({ kind: 'tool', sid, phase: 'progress', id: str(p.tool_id), name: str(p.name), percent: typeof p.percent === 'number' ? p.percent : null, message: str(p.message) })
         break
-      case 'tool.complete':
+      case 'tool.complete': {
         this.ui({ kind: 'tool', sid, phase: 'complete', id: str(p.tool_id), name: str(p.name), summary: cut(str(p.summary || p.result_text).replace(/\s+/g, ' ').trim(), 200), seconds: typeof p.duration_s === 'number' ? p.duration_s : null })
+        const st = Array.isArray(p.todos) ? todoSnapshot(p) : null
+        if (st) { this.ui({ kind: 'todos', sid, ...st }) }
+        break
+      }
+      case 'todo.updated': {
+        // La lista entera tras cada cambio; la revisión deja descartar los avisos atrasados.
+        const st = todoSnapshot(p)
+        if (st) { this.ui({ kind: 'todos', sid, ...st }) }
+        break
+      }
+      case 'subagent.spawn_requested':
+      case 'subagent.start':
+      case 'subagent.progress':
+      case 'subagent.tool':
+      case 'subagent.complete':
+        // Los subagentes (delegate_task); su razonamiento y su texto letra a letra no hacen falta aquí.
+        this.ui({
+          kind: 'subagent', sid, phase: type.slice(9),
+          id: str(p.subagent_id) || `t${Number(p.task_index) || 0}`,
+          goal: cut(str(p.goal).replace(/\s+/g, ' ').trim(), 200),
+          index: Number(p.task_index) || 0,
+          count: Number(p.task_count) || 1,
+          status: str(p.status),
+          tool: str(p.tool_name),
+          text: cut(str(p.text).replace(/\s+/g, ' ').trim(), 160),
+          tools: Number.isFinite(p.tool_count) ? p.tool_count : null,
+          seconds: typeof p.duration_seconds === 'number' ? p.duration_seconds : null
+        })
         break
       case 'message.complete': {
         const started = this.turnStart.get(sid)
@@ -416,6 +502,23 @@ class Connection extends EventEmitter {
     return this.allSessions(1000, 'only')
   }
 
+  /**
+   * Los subagentes que siguen vivos en un chat enganchado (subagent.list, los dos protocolos), para
+   * cerrar en el panel los que ya no existen aunque su aviso de fin no llegara. null si no se puede saber.
+   */
+  async subagents(sid) {
+    const rec = this.live.get(sid)
+    if (!rec || !rec.liveId || this.state !== 'ready' || !this.socket) { return null }
+    const r = await this.socket.request('subagent.list', { session_id: rec.liveId }, 5000)
+    if (!r || !Array.isArray(r.subagents)) { return null }
+    return r.subagents.filter(x => x && x.subagent_id).map(x => ({
+      id: str(x.subagent_id),
+      status: str(x.status),
+      tool: str(x.last_tool),
+      tools: Number.isFinite(x.tool_count) ? x.tool_count : null
+    }))
+  }
+
   /** Búsqueda en el texto de todos los chats (la del propio gateway). */
   async search(q) {
     const r = await this.transport.fetchJson(`/api/sessions/search?q=${encodeURIComponent(q)}`)
@@ -481,7 +584,11 @@ class Connection extends EventEmitter {
     const r = await this.transport.fetchJson(`/api/sessions/${encodeURIComponent(sid)}/messages?limit=400&order=latest`)
     if (r.status === 404) { return [] }
     if (r.status !== 200 || !r.json) { throw new Error(`No pude leer el chat (${r.status})`) }
-    return normalizeTranscript(r.json.messages || [])
+    const rows = Array.isArray(r.json.messages) ? r.json.messages : []
+    // Su lista de tareas, si Hermes hizo una (para el panel, aunque el chat ya no esté en marcha).
+    const todos = todoStateOf(rows)
+    if (todos) { this.ui({ kind: 'todos', sid, history: true, ...todos }) }
+    return normalizeTranscript(rows)
   }
 
   async modelOptions() {
@@ -522,6 +629,9 @@ class Connection extends EventEmitter {
     for (const rq of Array.isArray(snap && snap.open_requests) ? snap.open_requests : []) {
       if (rq && rq.id !== undefined && typeof rq.method === 'string') { this.onServerRequest(this.socket, { id: rq.id, method: rq.method, params: rq.params || {} }) }
     }
+    // La lista de tareas que tenía el chat (los dos protocolos la mandan al reanudar).
+    const todos = todoSnapshot(snap && snap.todo_state)
+    if (todos) { this.ui({ kind: 'todos', sid, ...todos }) }
     this.ui({ kind: 'running', sid, running: out.running })
     return out
   }
@@ -588,4 +698,4 @@ class Connection extends EventEmitter {
   }
 }
 
-module.exports = { Connection, normalizeTranscript, sessionRow, argsSummary, isLocalUrl }
+module.exports = { Connection, normalizeTranscript, sessionRow, argsSummary, isLocalUrl, todoSnapshot, todoStateOf, isTodoCall }

@@ -82,6 +82,10 @@
       <div id="model-menu" class="menu" hidden></div>
       <div id="snip-menu" class="menu" hidden></div>
     </main>
+
+    <!-- Rayas para ajustar el ancho; van al final para que Electron no las tome por zona de arrastre de la ventana. -->
+    <div class="resizer" data-side="side" role="separator" aria-orientation="vertical" aria-label="Ancho de la lista de chats (arrastra, o flechas; doble clic: el de siempre)" tabindex="0"></div>
+    <div class="resizer" data-side="panel" role="separator" aria-orientation="vertical" aria-label="Ancho del panel (arrastra, o flechas; doble clic: el de siempre)" tabindex="0"></div>
   </div>
 
   <dialog id="login-dialog">
