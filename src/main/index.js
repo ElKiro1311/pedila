@@ -408,15 +408,19 @@ function main() {
       if (typeof s !== 'string' || !s || s.length > 200) { throw new Error('chat no válido') }
       return s
     }
-    handle('hp:init', async () => ({
-      version: app.getVersion(),
-      demo,
-      dark: isDark(),
-      toastsOff: await windowsToastsOff(),
-      pet: pets.resolve(settings.data.pet.slug),
-      settings: settings.publicView(),
-      connections: Object.values(conns).map(c => c.publicState())
-    }))
+    handle('hp:init', async () => {
+      const [toastsOff, hour12] = await Promise.all([windowsToastsOff(), windowsHour12()])
+      return {
+        version: app.getVersion(),
+        demo,
+        dark: isDark(),
+        toastsOff,
+        hour12,
+        pet: pets.resolve(settings.data.pet.slug),
+        settings: settings.publicView(),
+        connections: Object.values(conns).map(c => c.publicState())
+      }
+    })
     handle('hp:sessions', id => connOf(id).listSessions())
     handle('hp:transcript', (id, sid) => connOf(id).transcript(sidOf(sid)))
     handle('hp:attach', async (id, sid) => {
@@ -461,7 +465,14 @@ function main() {
       if (typeof file !== 'string' || !file.trim() || file.length > 1024) { throw new Error('ruta no válida') }
       return connOf(id).media(file.trim())
     })
-    handle('hp:usage', async id => extras.usageStats(await connOf(id).allSessions(2000, 'include')))
+    handle('hp:usage', async id => {
+      const c = connOf(id)
+      // Qué chats están trabajando (si este Hermes lo sabe decir; si no, null y el panel sigue igual).
+      const activeAt = Date.now()
+      // Solo con el socket listo: si no, «Tu uso» esperaría a que se reconecte.
+      const [rows, active] = await Promise.all([c.allSessions(2000, 'include'), c.state === 'ready' && c.socket ? c.activeList().catch(() => null) : null])
+      return { ...extras.usageStats(rows), active, activeAt }
+    })
     handle('hp:export', async (name, markdown) => {
       if (typeof markdown !== 'string' || markdown.length > 20 * 1024 * 1024) { throw new Error('nada que exportar') }
       const base = (typeof name === 'string' && name ? name : 'chat').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80) || 'chat'
@@ -544,6 +555,23 @@ function main() {
       require('node:child_process').execFile('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications', '/v', 'ToastEnabled'], { windowsHide: true, timeout: 5000 }, (err, out) => {
         if (err) { return resolve(false) }
         resolve(/ToastEnabled\s+REG_DWORD\s+0x0\b/i.test(String(out)))
+      })
+    })
+  }
+
+  // 12 o 24 horas, como el reloj de Windows: el formato corto de hora del usuario («h:mm tt» o
+  // «HH:mm»). Chromium no lo ve (usa el idioma de la app), así que se lee aquí.
+  function windowsHour12() {
+    const byLocale = () => {
+      try { return Boolean(new Intl.DateTimeFormat(app.getSystemLocale() || undefined, { hour: 'numeric' }).resolvedOptions().hour12) } catch { return false }
+    }
+    if (process.platform !== 'win32') { return Promise.resolve(byLocale()) }
+    return new Promise(resolve => {
+      require('node:child_process').execFile('reg', ['query', 'HKCU\\Control Panel\\International', '/v', 'sShortTime'], { windowsHide: true, timeout: 5000 }, (err, out) => {
+        const m = !err && /sShortTime\s+REG_SZ\s+(.+)/i.exec(String(out))
+        // Sin el texto entre comillas simples (literales del formato), «H» = 24 h y «h» = 12 h.
+        const f = m ? m[1].trim().replace(/'[^']*'/g, '') : ''
+        resolve(/H/.test(f) ? false : /h/.test(f) ? true : byLocale())
       })
     })
   }

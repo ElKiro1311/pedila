@@ -1,5 +1,6 @@
 // Pedila: la pantalla. Sin Node; habla con el proceso principal por window.hp (preload).
 import { Pet, loadSheet } from './pet.js'
+import { kfmt, setHour12, hhmm, full, dayLabel, span } from './fmt.mjs'
 
 const demo = new URLSearchParams(location.search).get('demo') === '1'
 const api = demo ? (await import('./demo.js')).demoApi : window.hp
@@ -148,11 +149,6 @@ function groupOf(ms) {
   return String(d.getFullYear())
 }
 
-function kfmt(n) {
-  if (!n) { return '0' }
-  return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'K' : String(n)
-}
-
 // ── Aspecto ──────────────────────────────────────────────────────────────────────────────────
 // Temas (paletas). El primero es el predeterminado; «Clásico» es el de las primeras versiones.
 const PALETTES = [
@@ -287,6 +283,8 @@ async function loadSessions(conn = S.active) {
   }
   S.listLoaded[conn] = true
   if (conn === S.active) { renderList() }
+  // El panel usa la lista (mensajes del chat, abrir la última tarea).
+  schedulePanel()
 }
 
 function renderList() {
@@ -666,6 +664,8 @@ async function onSendClick() {
     }
   }
   const c = chat(conn, sid)
+  // Con Hermes ya trabajando el mensaje va en cola: la tarea en marcha sigue contando desde antes.
+  if (!busy(c)) { c.turnAt = Date.now() }
   if (c.live && c.live.done) { c.transcript.push(liveToTurn(c.live)); c.live = null }
   c.transcript.push({ role: 'user', text: images.length ? `${text}\n📎 ${images.map(i => i.name).join(', ')}` : text })
   if (!c.live) { c.live = { blocks: [], reasoning: '', status: 'Enviando', done: false, startedAt: Date.now() } }
@@ -686,6 +686,7 @@ async function onSendClick() {
   } catch (e) {
     if (c.live) { c.live.error = e.needLogin ? 'Falta iniciar sesión en el servidor.' : `No se pudo enviar: ${e.message}`; c.live.done = true }
     c.running = false
+    c.turnAt = 0
     if (e.needLogin) { openLogin() }
     renderChat(true)
     updateComposer()
@@ -855,10 +856,29 @@ function onEvent(evt) {
           return call(api.attach, ch.conn, ch.sid)
         }).then(r => { if (r) { ch.running = r.running; updateComposer(); updatePet() } }).catch(() => {})
       }
+      // Los demás chats que estaban trabajando: el socket nuevo ya no los sigue (connect() olvida los
+      // enganches) y su final no llegaría nunca. Se vuelven a enganchar: si siguen, llegará; si ya
+      // acabaron, dejan de contar como «en marcha». Lo ya escrito se vuelve a leer al abrirlos.
+      for (const c of S.chats.values()) {
+        if (c === ch || c.conn !== evt.conn || !busy(c)) { continue }
+        c.live = null
+        const settle = running => {
+          c.running = running
+          if (!running) { c.turnAt = 0 }
+          renderList()
+          updatePet()
+          schedulePanel()
+        }
+        call(api.attach, c.conn, c.sid).then(r => settle(Boolean(r && r.running))).catch(() => settle(false))
+      }
       return
     }
     case 'sessions-changed':
-      if (evt.conn === S.active) { reloadSessionsSoon(evt.conn) }
+      if (evt.conn === S.active) {
+        reloadSessionsSoon(evt.conn)
+        // Con trabajo en marcha fuera de esta ventana, se mira enseguida si ya terminó (como mucho cada 10 s).
+        if (remoteBusy(evt.conn).length && Date.now() - P.at[evt.conn] > 10000) { loadPanelUsage(evt.conn, true) }
+      }
       return
     case 'theme':
       S.dark = evt.dark
@@ -897,6 +917,8 @@ function onEvent(evt) {
       const L = ensureLive()
       L.status = 'Pensando'
       ch.running = true
+      // Cuándo empezó la tarea (si se envió desde aquí ya está puesta, con la hora del envío).
+      if (!ch.turnAt) { ch.turnAt = Date.now() }
       break
     }
     case 'delta': {
@@ -948,6 +970,10 @@ function onEvent(evt) {
       for (const b of L.blocks) { if (b.type === 'tool') { b.done = true } }
       L.done = true
       ch.running = false
+      ch.turnAt = 0
+      // La hora exacta en que terminó (el panel la junta con la última actividad que da Hermes).
+      ch.doneAt = Date.now()
+      P.done[evt.conn] = { at: ch.doneAt, sid: evt.sid }
       {
         const out = evt.out || (ch.usage && ch.usage.out && ch.usage.outStart !== undefined ? ch.usage.out - ch.usage.outStart : 0)
         const streamMs = L.firstAt ? Date.now() - L.firstAt : 0
@@ -967,6 +993,8 @@ function onEvent(evt) {
     case 'running':
       ch.running = evt.running
       if (!evt.running && ch.live && !ch.live.done && ch.live.blocks.length) { ch.live.done = true }
+      // Al enviar a un chat sin enganchar, el enganche dice «parado» antes de empezar: la hora del envío se queda.
+      if (!evt.running && !busy(ch)) { ch.turnAt = 0 }
       break
     case 'info':
       if (evt.model) { ch.model = evt.model }
@@ -1336,6 +1364,7 @@ async function start() {
   S.settings = init.settings
   S.dark = init.dark
   S.version = init.version
+  setHour12(init.hour12)
   document.querySelector('#toasts-off').hidden = !init.toastsOff
   $('#version').textContent = `v${init.version}${init.demo ? ' · demo' : ''}`
   for (const c of init.connections) { S.conns[c.id] = { state: c.state, detail: c.detail } }
@@ -1638,7 +1667,7 @@ function chime() {
 
 // ── Panel derecho: uso y parámetros ──────────────────────────────────────────────────────────
 // Como las tarjetas de Claude Panel: lo que pasa ahora, el chat abierto y el uso, siempre a la vista.
-const P = { usage: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, raf: 0 }
+const P = { usage: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, done: { local: null, server: null }, raf: 0, day: '' }
 const panelOn = () => S.settings && S.settings.window && S.settings.window.sidePanel !== false
 
 function applyPanel() {
@@ -1669,10 +1698,12 @@ const spKv = pairs => el('dl', { class: 'sp-kv' }, ...pairs.filter(Boolean).flat
 function hermesNow() {
   const all = [...S.chats.values()]
   const live = all.filter(c => (c.live && !c.live.done) || c.running)
-  if (all.some(c => c.prompts.size)) { return { cls: 'need', text: 'Hermes te necesita', live } }
-  if (live.some(c => c.live && !c.live.done && c.live.blocks.some(b => b.type === 'tool' && !b.done))) { return { cls: 'busy', text: 'Usando herramientas', live } }
-  if (live.length) { return { cls: 'busy', text: 'Trabajando', live } }
-  return { cls: 'idle', text: 'Tranquilo', live }
+  // También lo que Hermes hace fuera de esta ventana (Hermes Desktop, o empezado antes de abrir Pedila).
+  const remote = remoteBusy(S.active)
+  if (all.some(c => c.prompts.size) || remote.some(a => a.status === 'waiting')) { return { cls: 'need', text: 'Hermes te necesita', live, remote } }
+  if (live.some(c => c.live && !c.live.done && c.live.blocks.some(b => b.type === 'tool' && !b.done))) { return { cls: 'busy', text: 'Usando herramientas', live, remote } }
+  if (live.length || remote.length) { return { cls: 'busy', text: 'Trabajando', live, remote } }
+  return { cls: 'idle', text: 'Tranquilo', live, remote }
 }
 
 function panelChatCard() {
@@ -1710,7 +1741,7 @@ function panelNowCard() {
   return el('section', { class: 'sp-card' }, el('h4', { text: 'Ahora' }),
     el('div', { class: 'sp-state' }, el('span', { class: 'dot ' + now.cls }), el('span', { text: now.text })),
     spKv([
-      ['Chats en marcha', String(now.live.length)],
+      ['Chats en marcha', String(now.live.length + now.remote.length)],
       ['Solo consultar', S.readOnly ? 'sí' : 'no'],
       // El razonamiento y el modelo se eligen al empezar un chat; con uno abierto, el modelo sale en «Este chat».
       ['Razonamiento (chat nuevo)', (REASONING.find(r => r[0] === S.reasoning) || REASONING[0])[1]],
@@ -1718,11 +1749,91 @@ function panelNowCard() {
     ]))
 }
 
+/**
+ * La primera fila de «Uso»: a qué hora respondió Hermes por última vez y cuánto hace, o, con
+ * Hermes trabajando, desde qué hora. El tiempo se pone al día solo (tickPanel), sin repintar.
+ */
+function panelLastTiles(conn, u) {
+  const now = Date.now()
+  const busyChats = [...S.chats.values()].filter(c => c.conn === conn && busy(c))
+  const remote = remoteBusy(conn)
+  const total = busyChats.length + remote.length
+  if (total) {
+    // Inicio: el envío o el comienzo del turno que vio Pedila; si el chat se abrió con Hermes ya
+    // trabajando, tu último mensaje guardado. De lo empezado fuera de esta ventana Hermes no da la hora.
+    const starts = busyChats.map(c => c.turnAt || toMs([...(c.transcript || [])].reverse().find(t => t.role === 'user' && t.ts)?.ts)).filter(t => t > 0 && t <= now + 60000)
+    const first = starts.length ? Math.min(...starts, now) : 0
+    const label = total > 1 ? `${total} tareas en marcha` : 'en marcha'
+    if (!first) {
+      // Un clic la abre aquí y entonces ya se ve desde cuándo trabaja.
+      const row = total === 1 && remote.length ? listedRow(conn, remote[0].id) : null
+      const open = row ? () => openChat(conn, row.id) : null
+      const names = remote.map(a => a.title || (listedRow(conn, a.id) || {}).title).filter(Boolean)
+      return [el('div', { class: 'sp-num sp-wide' + (open ? ' sp-go' : ''), title: open ? `Abrir «${row.title || 'el chat'}»` : names.join(' · '), ...opener(open, 'busy') },
+        el('b', { text: 'Trabajando ahora' }), el('span', { text: total > 1 ? label : 'una tarea en marcha' }))]
+    }
+    const day = dayLabel(first)
+    return [
+      el('div', { class: 'sp-num', title: `Empezó: ${full(first)}` }, el('b', { text: hhmm(first) }), el('span', { text: `empezó la tarea${day ? ' · ' + day : ''}` })),
+      el('div', { class: 'sp-num', title: 'Lo que lleva Hermes con esta tarea' }, el('b', { 'data-span': first, text: span(now - first) }), el('span', { text: label }))
+    ]
+  }
+  // Lo más reciente entre lo que vio terminar Pedila (al momento) y la última actividad que guarda
+  // Hermes (cuenta también lo hecho desde Hermes Desktop u otros sitios, y sobrevive a reinicios).
+  const fromHermes = u && u.last && u.last.at ? u.last : null
+  const mine = P.done[conn]
+  const last = mine && (!fromHermes || mine.at >= fromHermes.at) ? { at: mine.at, id: mine.sid, title: (S.chats.get(key(conn, mine.sid)) || {}).title || '' } : fromHermes
+  if (!last) { return [] }
+  const at = Math.min(last.at, now)
+  const day = dayLabel(at)
+  // Solo se abre si el chat está en la lista (no archivado ni borrado).
+  const row = last.id ? listedRow(conn, last.id) : null
+  const name = (row && row.title) || last.title || ''
+  const open = row ? () => openChat(conn, row.id) : null
+  return [
+    el('div', { class: 'sp-num' + (open ? ' sp-go' : ''), title: `${open ? `Abrir «${name || 'el chat'}»` : name || 'Última respuesta'} · ${full(at)}`, ...opener(open, 'last') },
+      el('b', { text: hhmm(at) }), el('span', { text: `última respuesta${day ? ' · ' + day : ''}` })),
+    el('div', { class: 'sp-num', title: 'El tiempo que ha pasado desde la última respuesta de Hermes' }, el('b', { 'data-span': at, text: span(now - at) }), el('span', { text: 'desde entonces' }))
+  ]
+}
+
+// El chat solo si está en la lista (ni archivado ni borrado); rowOf da uno de relleno.
+const listedRow = (conn, id) => (S.sessions[conn] || []).find(r => r.id === id) || null
+
+/** Atributos de una tarjeta del panel que abre un chat, con ratón o teclado. */
+function opener(open, focus) {
+  if (!open) { return {} }
+  return { role: 'button', tabindex: '0', 'data-focus': focus, onclick: open, onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() } } }
+}
+
+/**
+ * Chats en los que Hermes trabaja sin que esta ventana los siga (empezados en Hermes Desktop, o
+ * antes de abrir Pedila), según la última consulta a `session.active_list`. Lo que esta ventana
+ * sigue manda, y lo que vio terminar después de esa consulta ya no cuenta.
+ */
+function remoteBusy(conn) {
+  const u = P.usage[conn]
+  // Sin conexión, o con una consulta de hace más de 3 minutos, no se sabe: no se cuenta nada.
+  if (!u || !Array.isArray(u.active) || !S.conns[conn] || S.conns[conn].state !== 'ready' || Date.now() - (u.activeAt || 0) > 180000) { return [] }
+  return u.active.filter(a => {
+    const ch = S.chats.get(key(conn, a.id))
+    return !(ch && (busy(ch) || (ch.doneAt || 0) >= (u.activeAt || 0)))
+  })
+}
+
+/** Cada 20 s: los «25 min» del panel al día; al cambiar de día se repinta (hoy → ayer). */
+function tickPanel() {
+  if (!panelOn()) { return }
+  const d = new Date().toDateString()
+  if (P.day && P.day !== d) { schedulePanel(); return }
+  for (const n of document.querySelectorAll('#panel-body [data-span]')) { n.textContent = span(Date.now() - Number(n.dataset.span)) }
+}
+
 function panelUsageCard() {
   const conn = S.active
   const u = P.usage[conn]
   loadPanelUsage(conn)
-  const head = el('h4', {}, el('span', { class: 'grow', text: `Uso · ${CONN_NAMES[conn]}` }), el('button', { class: 'sp-link', text: 'Ver todo', onclick: () => openUsage(conn) }))
+  const head = el('h4', {}, el('span', { class: 'grow', text: `Uso · ${CONN_NAMES[conn]}` }), el('button', { class: 'sp-link', text: 'Ver todo', 'data-focus': 'usage-all', onclick: () => openUsage(conn) }))
   if (!u) { return el('section', { class: 'sp-card' }, head, el('p', { class: 'muted small', text: S.conns[conn] && S.conns[conn].state === 'ready' ? 'Calculando…' : 'Sin conexión.' })) }
   const days = u.days.slice(-14)
   const max = Math.max(1, ...days.map(d => d.chats))
@@ -1730,6 +1841,7 @@ function panelUsageCard() {
   const week = u.week || { chats: 0, input: 0, output: 0 }
   return el('section', { class: 'sp-card' }, head,
     el('div', { class: 'sp-nums' },
+      ...panelLastTiles(conn, u),
       el('div', { class: 'sp-num' }, el('b', { text: String(today.chats) }), el('span', { text: 'chats hoy' })),
       el('div', { class: 'sp-num' }, el('b', { text: kfmt(today.input + today.output) }), el('span', { text: 'tokens hoy' })),
       el('div', { class: 'sp-num' }, el('b', { text: String(week.chats) }), el('span', { text: 'chats en 7 días' })),
@@ -1746,7 +1858,7 @@ function panelModelsCard() {
   return el('section', { class: 'sp-card' }, el('h4', { text: 'Modelos más usados' }),
     ...top.map(m => el('div', { class: 'sp-model', title: `${m.model}: ${m.chats} chats · ${kfmt(m.input)} leídos · ${kfmt(m.output)} escritos` },
       el('span', { class: 'n', text: m.model }), el('span', { class: 'muted', text: `${m.chats} chats` }),
-      el('div', { class: 'bar' }, el('i', { style: `width:${Math.round(m.chats / max * 100)}%` })))))
+      el('div', { class: 'sp-bar' }, el('i', { style: `width:${Math.round(m.chats / max * 100)}%` })))))
 }
 
 function panelConnsCard() {
@@ -1762,8 +1874,12 @@ function renderPanel() {
   if (!panelOn() || !S.settings) { return }
   const body = $('#panel-body')
   const top = body.scrollTop
+  // Con el foco en una tarjeta que se puede pulsar, al repintar se le devuelve (teclado).
+  const focused = body.contains(document.activeElement) ? document.activeElement.getAttribute('data-focus') : null
   body.replaceChildren(...[panelNowCard(), panelChatCard(), panelUsageCard(), panelModelsCard(), panelConnsCard()].filter(Boolean))
   body.scrollTop = top
+  P.day = new Date().toDateString()
+  if (focused) { body.querySelector(`[data-focus="${focused}"]`)?.focus({ preventScroll: true }) }
 }
 
 // ── Tu uso ───────────────────────────────────────────────────────────────────────────────────
@@ -1876,6 +1992,7 @@ function wireExtras() {
   $('#panel-toggle').addEventListener('click', () => saveSetting({ window: { sidePanel: !panelOn() } }).then(applyPanel))
   // Al acabar una respuesta se recalcula el uso; además, cada 2 minutos.
   setInterval(() => { if (panelOn()) { loadPanelUsage(S.active, true) } }, 120000)
+  setInterval(tickPanel, 20000)
   for (const b of document.querySelectorAll('#usage-tabs button')) { b.addEventListener('click', () => openUsage(b.dataset.conn)) }
   $('#usage-close').addEventListener('click', () => $('#usage-dialog').close())
   $('#archived-close').addEventListener('click', () => $('#archived-dialog').close())

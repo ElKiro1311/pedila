@@ -81,7 +81,12 @@ function usageStats(rows, now = Date.now()) {
   let input = 0
   let output = 0
   let messages = 0
+  // La última tarea: el chat con la actividad más reciente (Hermes la da por su último mensaje, o
+  // por el latido que deja mientras trabaja), venga de Pedila, de Hermes Desktop o de otro sitio.
+  let last = null
   for (const r of rows) {
+    const la = ms(r.lastActive || r.startedAt)
+    if (la > 0 && (!last || la > last.at)) { last = { at: la, id: r.id || null, title: r.title || '' } }
     const t = ms(r.startedAt || r.lastActive)
     const idx = 29 - Math.floor((start.getTime() - new Date(t).setHours(0, 0, 0, 0)) / day)
     if (idx >= 0 && idx < 30) {
@@ -99,6 +104,8 @@ function usageStats(rows, now = Date.now()) {
     output += r.outputTokens || 0
     messages += r.messages || 0
   }
+  // Con el reloj de Hermes adelantado, la última actividad sería del futuro: como mucho, ahora.
+  if (last && last.at > now) { last.at = now }
   // Hoy y los últimos 7 días (cada chat cuenta en el día en que empezó).
   const sum = list => list.reduce((a, d) => ({ chats: a.chats + d.chats, messages: a.messages + d.messages, input: a.input + d.input, output: a.output + d.output }), { chats: 0, messages: 0, input: 0, output: 0 })
   return {
@@ -108,6 +115,7 @@ function usageStats(rows, now = Date.now()) {
     messages,
     input,
     output,
+    last,
     days,
     models: Object.entries(models).map(([model, v]) => ({ model, ...v })).sort((a, b) => b.chats - a.chats)
   }

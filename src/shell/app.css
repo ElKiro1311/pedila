@@ -398,14 +398,18 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .sp-num { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 7px 9px; display: flex; flex-direction: column; }
 .sp-num b { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
 .sp-num span { font-size: .72rem; color: var(--muted); }
+.sp-num.sp-wide { grid-column: 1 / -1; }
+.sp-num.sp-go { cursor: pointer; }
+.sp-num.sp-go:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.sp-num.sp-go:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sp-spark { display: flex; align-items: flex-end; gap: 2px; height: 42px; }
 .sp-spark > div { flex: 1; min-height: 2px; background: color-mix(in srgb, var(--accent) 75%, transparent); border-radius: 2px 2px 0 0; }
 .sp-spark > div.zero { background: var(--surface-3); }
 .sp-spark-l { display: flex; justify-content: space-between; font-size: .68rem; color: var(--muted); margin-top: 3px; }
 .sp-model { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: .82rem; margin-bottom: 6px; }
 .sp-model .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sp-model .bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
-.sp-model .bar > i { display: block; height: 100%; background: var(--accent); }
+.sp-model .sp-bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.sp-model .sp-bar > i { display: block; height: 100%; background: var(--accent); }
 .sp-conn { display: flex; align-items: center; gap: 8px; font-size: .84rem; padding: 3px 0; }
 .sp-conn .s { margin-left: auto; color: var(--muted); font-size: .78rem; }
 #panel-toggle.active { color: var(--accent); }

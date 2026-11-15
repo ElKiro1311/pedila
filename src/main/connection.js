@@ -395,6 +395,23 @@ class Connection extends EventEmitter {
     return (await this.allSessions(300)).filter(s => !s.archived)
   }
 
+  /**
+   * Los chats en los que Hermes está trabajando ahora mismo, los empezara quien los empezara
+   * (Pedila, Hermes Desktop…), sin engancharse a ellos: `session.active_list`, lo mismo que lee
+   * la barra lateral de Hermes Desktop. En el protocolo clásico `id` es el del socket y el
+   * guardado va en `session_key`; en el nuevo los dos son el guardado.
+   */
+  async activeList() {
+    const r = await this.rpc('session.active_list', {}, 5000)
+    return (Array.isArray(r && r.sessions) ? r.sessions : []).map(x => ({
+      // Primero el chat que esta ventana ya tiene enganchado a ese id (tras una compresión o con
+      // un chat de varios tramos, el id de Hermes puede no ser el de la fila de la lista).
+      id: this.liveToStored.get(str(x && x.id)) || str(x && x.session_key) || str(x && x.id),
+      status: str(x && x.status),
+      title: str(x && x.title)
+    })).filter(x => x.id && ['working', 'waiting', 'starting'].includes(x.status))
+  }
+
   async archived() {
     return this.allSessions(1000, 'only')
   }

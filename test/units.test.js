@@ -145,3 +145,75 @@ test('uso: resúmenes de hoy y de los últimos 7 días', () => {
   assert.equal(u.days[29].date, '2026-11-09')
   assert.equal(u.chats, 3)
 })
+
+test('uso: la última tarea es el chat con la actividad más reciente', () => {
+  const { usageStats } = require('../src/main/extras')
+  const now = new Date(2026, 10, 15, 15, 0, 0).getTime()
+  const rows = [
+    { id: 'a', title: 'Viejo', startedAt: (now - 5 * 3600e3) / 1000, lastActive: (now - 4 * 3600e3) / 1000 },
+    { id: 'b', title: 'Reciente', startedAt: (now - 3 * 3600e3) / 1000, lastActive: (now - 25 * 60e3) / 1000 },
+    { id: 'c', title: 'Sin actividad', startedAt: (now - 2 * 3600e3) / 1000, lastActive: null }
+  ]
+  const u = usageStats(rows, now)
+  assert.deepEqual(u.last, { at: now - 25 * 60e3, id: 'b', title: 'Reciente' })
+  // Si solo hay hora de inicio, cuenta esa; sin chats no hay última tarea.
+  assert.equal(usageStats([rows[2]], now).last.at, now - 2 * 3600e3)
+  assert.equal(usageStats([], now).last, null)
+  // Fechas en texto ISO (algunas versiones de Hermes) también valen.
+  assert.equal(usageStats([{ id: 'd', lastActive: new Date(now - 60e3).toISOString() }], now).last.at, now - 60e3)
+  // Con el reloj de Hermes adelantado no puede ser del futuro.
+  assert.equal(usageStats([{ id: 'e', lastActive: (now + 9 * 60e3) / 1000 }], now).last.at, now)
+})
+
+test('chats trabajando: active_list en los dos protocolos', async () => {
+  const { Connection } = require('../src/main/connection')
+  const fake = sessions => ({ rpc: async (m, p, t) => { assert.equal(m, 'session.active_list'); assert.ok(t <= 5000); return { sessions } }, liveToStored: new Map([['sock-1', 'A']]) })
+  // Nuevo: id y session_key son el guardado; solo cuenta lo que trabaja, espera o arranca.
+  assert.deepEqual(await Connection.prototype.activeList.call(fake([
+    { id: 'B', session_key: 'B', status: 'working', title: 'Uno' },
+    { id: 'C', session_key: 'C', status: 'idle' },
+    { id: 'D', session_key: 'D', status: 'waiting' },
+    { id: 'E', session_key: 'E', status: 'starting' }
+  ])), [{ id: 'B', status: 'working', title: 'Uno' }, { id: 'D', status: 'waiting', title: '' }, { id: 'E', status: 'starting', title: '' }])
+  // Clásico: id es el del socket; manda el chat que esta ventana ya tiene enganchado, y si no, session_key.
+  assert.deepEqual((await Connection.prototype.activeList.call(fake([{ id: 'sock-1', session_key: 'A2', status: 'working' }, { id: 'sock-9', session_key: 'Z', status: 'working' }]))).map(x => x.id), ['A', 'Z'])
+  assert.deepEqual(await Connection.prototype.activeList.call(fake(null)), [])
+})
+
+test('formatos: tokens en K, M y B sin «1000K»', async () => {
+  const { kfmt } = await import('../src/shell/fmt.mjs')
+  const cases = [
+    [0, '0'], [null, '0'], [undefined, '0'], [NaN, '0'], [7, '7'], [999, '999'],
+    [1000, '1K'], [1234, '1.23K'], [1500, '1.5K'], [12345, '12.3K'], [98304, '98.3K'], [131072, '131K'],
+    [999499, '999K'], [999500, '1M'], [999999, '1M'], [1000000, '1M'], [1048576, '1.05M'],
+    [1090000, '1.09M'], [4315000, '4.32M'], [1005000, '1.01M'], [12340000, '12.3M'], [999999999, '1B'],
+    [1500000000, '1.5B'], [2.5e12, '2500B'], [-1500, '-1.5K'], ['2048', '2.05K']
+  ]
+  for (const [n, want] of cases) { assert.equal(kfmt(n), want, `kfmt(${n})`) }
+})
+
+test('formatos: horas de 12 o 24, días y ratos', async () => {
+  const f = await import('../src/shell/fmt.mjs')
+  const now = new Date(2026, 10, 15, 15, 41, 0).getTime()
+  const at = new Date(2026, 10, 15, 15, 5, 0).getTime()
+  f.setHour12(true)
+  assert.match(f.hhmm(at), /^3:05\s?p\.\s?m\.$/)
+  assert.match(f.hhmm(new Date(2026, 10, 15, 9, 7).getTime()), /^9:07\s?a\.\s?m\.$/)
+  f.setHour12(false)
+  assert.equal(f.hhmm(at), '15:05')
+  assert.equal(f.dayLabel(at, now), '')
+  assert.equal(f.dayLabel(new Date(2026, 10, 14, 23, 50).getTime(), now), 'ayer')
+  assert.equal(f.dayLabel(new Date(2026, 10, 10, 9, 0).getTime(), now), 'mar')
+  assert.equal(f.dayLabel(new Date(2026, 10, 8, 9, 0).getTime(), now), '8 nov')
+  assert.equal(f.dayLabel(new Date(2025, 11, 31, 9, 0).getTime(), now), '31 dic 2025')
+  assert.equal(f.clock(new Date(2026, 10, 14, 23, 50).getTime(), now), 'ayer, 23:50')
+  assert.equal(f.span(40e3), '40 s')
+  assert.equal(f.span(25 * 60e3 + 59e3), '25 min')
+  assert.equal(f.span(113 * 60e3), '1 h 53 min')
+  assert.equal(f.span(2 * 3600e3), '2 h')
+  assert.equal(f.span(30 * 3600e3), '1 día')
+  assert.equal(f.span(-5000), '0 s')
+  assert.equal(f.ago(now - 30e3, now), 'hace un momento')
+  assert.equal(f.ago(now + 90e3, now), 'hace un momento')
+  assert.equal(f.ago(now - 25 * 60e3, now), 'hace 25 min')
+})

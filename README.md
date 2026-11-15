@@ -48,6 +48,7 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
 - **Avisos:** avisos de Windows, un sonido propio al terminar, un punto en el icono de la barra de tareas y parpadeo si los avisos de Windows están apagados.
 - **Más:**
   - un panel a la derecha, como el de Claude Panel, con lo que hace Hermes, la memoria y los tokens del chat abierto, el uso de hoy y de 7 días, los modelos más usados y las conexiones (se pliega con ◨);
+  - la hora de la última respuesta de Hermes y el tiempo que ha pasado desde entonces (o, si está trabajando, desde cuándo), aunque la tarea la empezara Hermes Desktop;
   - «Tu uso», calculado solo con tus datos;
   - bandeja del sistema y atajo **Ctrl+Alt+H**;
   - actualizaciones desde GitHub Releases;
