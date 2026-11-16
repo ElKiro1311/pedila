@@ -8,11 +8,38 @@ const { spawn } = require('node:child_process')
 
 const INSTALADOR = 'Pedila-Setup.exe'
 
+/**
+ * ¿`a` es más nueva que `b`? Como Semantic Versioning (semver.org, §11): primero x.y.z; con el
+ * mismo número, la estable gana a su -alfa/-beta (0.8.0 > 0.8.0-beta). Los sufijos se comparan
+ * campo a campo (separados por «.»): los numéricos como números (beta.10 > beta.9) y por debajo de
+ * los de texto, y el texto en orden ASCII (beta > alfa); con todo igual, gana el que tiene más
+ * campos. Lo que va tras «+» (datos de compilación) no cuenta. Todo lo que siga a los números es
+ * sufijo, con o sin guion: una errata en version.json («0.8.0beta», «0.8.0 beta») sigue siendo esa
+ * beta y no la 0.8.0 final, que se ofrecería después de cada instalación.
+ */
 function newer(a, b) {
-  const pa = String(a).split('.').map(n => parseInt(n, 10) || 0)
-  const pb = String(b).split('.').map(n => parseInt(n, 10) || 0)
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pa[i] || 0) !== (pb[i] || 0)) { return (pa[i] || 0) > (pb[i] || 0) }
+  const parse = v => {
+    const s = String(v).trim().replace(/^v/i, '').split('+')[0]
+    const m = /^(\d+(?:\.\d+)*)(.*)$/.exec(s)
+    const pre = (m ? m[2] : s).replace(/^[^0-9A-Za-z]/, '')
+    return { nums: (m ? m[1] : '0').split('.').map(Number), pre: pre.split('.').filter(Boolean) }
+  }
+  const pa = parse(a)
+  const pb = parse(b)
+  for (let i = 0; i < Math.max(pa.nums.length, pb.nums.length); i++) {
+    if ((pa.nums[i] || 0) !== (pb.nums[i] || 0)) { return (pa.nums[i] || 0) > (pb.nums[i] || 0) }
+  }
+  if (!pa.pre.length || !pb.pre.length) { return !pa.pre.length && pb.pre.length > 0 }
+  for (let i = 0; i < Math.max(pa.pre.length, pb.pre.length); i++) {
+    const x = pa.pre[i]
+    const y = pb.pre[i]
+    if (x === undefined || y === undefined) { return y === undefined }
+    if (x === y) { continue }
+    const nx = /^\d+$/.test(x)
+    const ny = /^\d+$/.test(y)
+    if (nx && ny) { return Number(x) > Number(y) }
+    if (nx !== ny) { return ny }
+    return x > y
   }
   return false
 }
@@ -77,7 +104,8 @@ function usageStats(rows, now = Date.now()) {
     const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     days.push({ date, chats: 0, messages: 0, input: 0, output: 0 })
   }
-  const models = {}
+  // Un Map y no un objeto: un modelo llamado «constructor» o «__proto__» no debe chocar con Object.
+  const models = new Map()
   let input = 0
   let output = 0
   let messages = 0
@@ -95,11 +123,11 @@ function usageStats(rows, now = Date.now()) {
       days[idx].input += r.inputTokens || 0
       days[idx].output += r.outputTokens || 0
     }
-    const m = r.model || 'desconocido'
-    models[m] = models[m] || { chats: 0, input: 0, output: 0 }
-    models[m].chats++
-    models[m].input += r.inputTokens || 0
-    models[m].output += r.outputTokens || 0
+    const m = modelId(r.model)
+    const e = models.get(m) || { model: m, input: 0, output: 0, tasks: [] }
+    e.input += r.inputTokens || 0
+    e.output += r.outputTokens || 0
+    models.set(m, e)
     input += r.inputTokens || 0
     output += r.outputTokens || 0
     messages += r.messages || 0
@@ -117,8 +145,48 @@ function usageStats(rows, now = Date.now()) {
     output,
     last,
     days,
-    models: Object.entries(models).map(([model, v]) => ({ model, ...v })).sort((a, b) => b.chats - a.chats)
+    // Los modelos, de más a menos tokens (leídos + escritos), sumando los chats de la lista. El
+    // panel prefiere los de las estadísticas de Hermes (modelUsageFrom), que cuentan más cosas.
+    models: [...models.values()].sort(byTokens)
   }
 }
 
-module.exports = { checkUpdate, installUpdate, usageStats, newer, INSTALADOR }
+const tokens = m => m.input + m.output
+const byTokens = (a, b) => tokens(b) - tokens(a) || (a.model < b.model ? -1 : a.model > b.model ? 1 : 0)
+const modelId = v => {
+  const s = typeof v === 'string' ? v.trim().slice(0, 200) : ''
+  return s && s !== 'unknown' ? s : 'desconocido'
+}
+
+/**
+ * Los modelos de las estadísticas del propio Hermes (`by_model` de GET /api/analytics/usage, lo que
+ * enseña la página de uso de Hermes Desktop) en la forma del panel: { model, input, output, tasks },
+ * de más a menos tokens. Hermes suma ahí todos sus chats (también los de subagentes y herramientas)
+ * y lo que gastan sus tareas auxiliares (resumir la memoria, poner títulos, ver imágenes…), que
+ * viene en `aux_tasks` y ya está dentro de los totales; `tasks` lo desglosa por tarea. null si la
+ * respuesta no trae la lista.
+ */
+function modelUsageFrom(j) {
+  if (!j || typeof j !== 'object' || !Array.isArray(j.by_model)) { return null }
+  const n = v => { const x = Number(v); return Number.isFinite(x) && x > 0 ? x : 0 }
+  const out = new Map()
+  for (const r of j.by_model) {
+    if (!r || typeof r !== 'object') { continue }
+    const id = modelId(r.model)
+    const m = out.get(id) || { model: id, input: 0, output: 0, tasks: [] }
+    m.input += n(r.input_tokens)
+    m.output += n(r.output_tokens)
+    for (const t of Array.isArray(r.aux_tasks) ? r.aux_tasks : []) {
+      const used = n(t && t.input_tokens) + n(t && t.output_tokens)
+      const task = t && typeof t.task === 'string' && t.task.trim() ? t.task.trim().slice(0, 60) : 'other'
+      if (!used) { continue }
+      const same = m.tasks.find(x => x.task === task)
+      if (same) { same.tokens += used } else { m.tasks.push({ task, tokens: used }) }
+    }
+    out.set(id, m)
+  }
+  for (const m of out.values()) { m.tasks.sort((a, b) => b.tokens - a.tokens) }
+  return [...out.values()].sort(byTokens).slice(0, 200)
+}
+
+module.exports = { checkUpdate, installUpdate, usageStats, modelUsageFrom, newer, INSTALADOR }

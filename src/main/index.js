@@ -471,8 +471,14 @@ function main() {
       // Qué chats están trabajando (si este Hermes lo sabe decir; si no, null y el panel sigue igual).
       const activeAt = Date.now()
       // Solo con el socket listo: si no, «Tu uso» esperaría a que se reconecte.
-      const [rows, active] = await Promise.all([c.allSessions(2000, 'include'), c.state === 'ready' && c.socket ? c.activeList().catch(() => null) : null])
-      return { ...extras.usageStats(rows), active, activeAt }
+      const [rows, active, models] = await Promise.all([
+        c.allSessions(2000, 'include'),
+        c.state === 'ready' && c.socket ? c.activeList().catch(() => null) : null,
+        // Tokens por modelo: con las estadísticas del propio Hermes si las tiene; si no, con la lista.
+        c.modelUsage().catch(e => { if (!e.needLogin && !e.setup) { log.warn(`[${c.id}] estadísticas por modelo:`, e.message) } return null })
+      ])
+      const u = extras.usageStats(rows)
+      return { ...u, models: models || u.models, modelsFrom: models ? 'hermes' : 'chats', active, activeAt }
     })
     handle('hp:export', async (name, markdown) => {
       if (typeof markdown !== 'string' || markdown.length > 20 * 1024 * 1024) { throw new Error('nada que exportar') }
@@ -520,7 +526,7 @@ function main() {
         if (app.isPackaged) {
           app.setLoginItemSettings({ openAtLogin: settings.data.window.openAtLogin, args: ['--oculto'] })
         }
-        if (JSON.stringify(settings.data.server.urls) !== before) { remote.invalidate(); conns.server.retryNow() }
+        if (JSON.stringify(settings.data.server.urls) !== before) { remote.invalidate(); conns.server.forgetModelStats(); conns.server.retryNow() }
         if (patch.shortcut) { applyShortcut() }
       }
       return settings.publicView()

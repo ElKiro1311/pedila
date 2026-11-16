@@ -27,6 +27,70 @@ export function kfmt(n) {
   return (s.includes('.') ? s.replace(/\.?0+$/, '') : s) + UNITS[u]
 }
 
+// ── Modelos ──────────────────────────────────────────────────────────────────────────────────
+
+/** Tokens de un modelo del resumen de uso: leídos + escritos. */
+export function tokensOf(m) {
+  return (Number(m && m.input) || 0) + (Number(m && m.output) || 0)
+}
+
+/**
+ * El nombre de un modelo para enseñarlo. Algunos servidores (llama.cpp) contestan con la ruta del
+ * archivo y Hermes la guarda tal cual: «/models/Qwen3-VL-8B-Instruct-Q4_K_M.gguf» se enseña como
+ * «Qwen3-VL-8B-Instruct-Q4_K_M». Los nombres con proveedor («deepseek/deepseek-v4.1») no se tocan.
+ */
+export function modelName(model) {
+  const s = String(model || '')
+  const f = s.match(/[\\/]([^\\/]+)\.(?:gguf|ggml|bin|safetensors)$/i)
+  return f ? f[1] : s
+}
+
+// Las tareas auxiliares de Hermes 0.23 que guarda en session_model_usage: las de auxiliary.* en su
+// config.yaml y las que registran su repaso en segundo plano, /btw, los objetivos y los plugins.
+const TASKS = {
+  compression: 'resumir la memoria',
+  title_generation: 'poner títulos',
+  vision: 'ver imágenes',
+  image_generation: 'crear imágenes',
+  approval: 'aprobar órdenes',
+  background_review: 'repasar memoria y skills',
+  side_question: 'preguntas al margen (/btw)',
+  plugin_side_question: 'preguntas de plugins',
+  goal_judge: 'comprobar objetivos',
+  review: 'revisiones',
+  mcp: 'herramientas MCP',
+  memory_query_rewrite: 'buscar en la memoria',
+  curator: 'ordenar skills',
+  tts_audio_tags: 'voz',
+  voice_chat: 'voz',
+  group_router: 'chats de grupo',
+  triage_specifier: 'kanban',
+  kanban_decomposer: 'kanban',
+  kanban_estimator: 'kanban',
+  profile_describer: 'describir perfiles',
+  other: 'otras'
+}
+
+/**
+ * Una tarea auxiliar de Hermes en palabras: «compression» → «resumir la memoria». Las de plugins
+ * llevan su nombre tras «:» («plugin_side_question:<plugin>»); se traducen por la parte de delante.
+ */
+export function taskName(task) {
+  const t = String(task || '')
+  const key = t.split(':')[0]
+  return Object.hasOwn(TASKS, key) ? TASKS[key] : t.replace(/_/g, ' ') || 'otras'
+}
+
+/** Lo que un modelo gastó en tareas auxiliares: «resumir la memoria 1.86M · poner títulos 2.3K». */
+export function tasksLine(tasks) {
+  const by = new Map()
+  for (const t of Array.isArray(tasks) ? tasks : []) {
+    const name = taskName(t && t.task)
+    by.set(name, (by.get(name) || 0) + (Number(t && t.tokens) || 0))
+  }
+  return [...by].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} ${kfmt(n)}`).join(' · ')
+}
+
 // ── Horas ────────────────────────────────────────────────────────────────────────────────────
 // 12 o 24 horas como el reloj de Windows (el proceso principal lo lee del sistema al arrancar).
 let hour12 = false

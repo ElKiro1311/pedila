@@ -347,6 +347,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .u-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
 .u-table th, .u-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .u-table th { color: var(--muted); font-weight: 600; }
+.u-table .u-sub { display: block; margin-top: 2px; color: var(--muted); font-size: .76rem; }
 .side-bottom #open-usage { padding: 7px 10px; }
 
 /* ── Menú de temas ───────────────────────────────────────────────── */

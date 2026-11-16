@@ -10,8 +10,16 @@
 const { EventEmitter } = require('node:events')
 const crypto = require('node:crypto')
 const { RpcSocket } = require('./rpc')
+const { modelUsageFrom } = require('./extras')
 
 const BACKOFF = [1000, 2000, 5000, 10000, 20000, 30000]
+// Las estadísticas por modelo de Hermes: el último año, refrescadas cada 5 min como mucho (a
+// Hermes le cuesta calcularlas); si ese Hermes no las tiene, no se vuelven a pedir en 30 min, y
+// tras un fallo pasajero, en 2 min.
+const MODEL_STATS_DAYS = 365
+const MODEL_STATS_TTL = 5 * 60000
+const MODEL_STATS_MISSING_TTL = 30 * 60000
+const MODEL_STATS_FAIL_PAUSE = 2 * 60000
 const COLS = 100
 
 const str = v => (typeof v === 'string' ? v : '')
@@ -184,6 +192,10 @@ class Connection extends EventEmitter {
     this.prompts = new Map() // key → { kind, sid, liveId, promptId?, serverRequestId?, generation? }
     this.turnStart = new Map()
     this.version = null
+    this.modelStats = null // { at, models } de la última consulta de modelUsage()
+    this.modelStatsPending = null
+    this.modelStatsFailAt = null // cuándo falló la última (fallo pasajero); null si no falló
+    this.modelStatsEpoch = 0 // sube al perder la conexión: lo que llegue de antes ya no vale
   }
 
   ui(evt) {
@@ -192,6 +204,8 @@ class Connection extends EventEmitter {
 
   setState(state, detail = '') {
     if (state === this.state && detail === this.detail) { return }
+    // Al reconectar puede ser otro servidor, otra sesión o un Hermes reiniciado: estadísticas nuevas.
+    if (state !== 'ready') { this.forgetModelStats() }
     this.state = state
     this.detail = detail
     this.log.info(`[${this.id}] estado ${state}${detail ? ' · ' + detail : ''}`)
@@ -479,6 +493,64 @@ class Connection extends EventEmitter {
 
   async listSessions() {
     return (await this.allSessions(300)).filter(s => !s.archived)
+  }
+
+  /**
+   * Los tokens de cada modelo según las estadísticas del propio Hermes (GET /api/analytics/usage,
+   * las de la página de uso de Hermes Desktop): cuentan todos sus chats y también lo que gastan
+   * sus tareas auxiliares (resumir la memoria, poner títulos, ver imágenes…), que la lista de chats
+   * no trae. null si este Hermes no las da: entonces el panel suma la lista de chats.
+   * Solo se espera la primera vez. Con un valor bueno guardado se devuelve ese al momento y, si
+   * tiene más de 5 min, se pide otro por detrás; si ese falla, se sigue con el guardado (así el
+   * orden no salta a las cifras de la lista de chats por un fallo suelto).
+   */
+  async modelUsage(now = Date.now()) {
+    const c = this.modelStats
+    const fresh = Boolean(c) && now - c.at < (c.models ? MODEL_STATS_TTL : MODEL_STATS_MISSING_TTL)
+    const resting = this.modelStatsFailAt !== null && now - this.modelStatsFailAt < MODEL_STATS_FAIL_PAUSE
+    if (!fresh && !resting && !this.modelStatsPending) {
+      // Una sola consulta a la vez (el panel y «Ver todo» pueden pedirla juntos).
+      const p = this.loadModelStats(this.modelStatsEpoch, now)
+      const clear = () => { if (this.modelStatsPending === p) { this.modelStatsPending = null } }
+      p.then(clear, clear)
+      this.modelStatsPending = p
+    }
+    if (c && c.models) { return c.models }
+    if (fresh || resting || !this.modelStatsPending) { return null }
+    return this.modelStatsPending
+  }
+
+  /**
+   * Olvida las estadísticas por modelo, la consulta en curso y la pausa: al perder la conexión o al
+   * cambiar la dirección del servidor (con el socket abierto, eso no pasa por setState).
+   */
+  forgetModelStats() {
+    this.modelStats = null
+    this.modelStatsPending = null
+    this.modelStatsFailAt = null
+    this.modelStatsEpoch++
+  }
+
+  async loadModelStats(epoch, now) {
+    let r
+    try {
+      r = await this.transport.fetchJson(`/api/analytics/usage?days=${MODEL_STATS_DAYS}`)
+    } catch (e) {
+      if (epoch === this.modelStatsEpoch) { this.modelStatsFailAt = now }
+      throw e
+    }
+    const models = r.status === 200 ? modelUsageFrom(r.json) : null
+    // Si la conexión cayó mientras tanto, la respuesta es de antes: no se guarda.
+    if (epoch !== this.modelStatsEpoch) { return models }
+    if (models || r.status === 200 || [404, 405, 422].includes(r.status)) {
+      // Lo que vale, o «este Hermes no las tiene» (404, 405, 422 o un 200 sin la lista).
+      this.modelStats = { at: now, models }
+      this.modelStatsFailAt = null
+    } else {
+      // Un fallo pasajero (5xx…): se sigue con lo guardado y no se reintenta en 2 min.
+      this.modelStatsFailAt = now
+    }
+    return models
   }
 
   /**

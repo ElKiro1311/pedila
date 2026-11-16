@@ -47,7 +47,7 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - frases rápidas con «/».
 - **Avisos:** avisos de Windows, un sonido propio al terminar, un punto en el icono de la barra de tareas y parpadeo si los avisos de Windows están apagados.
 - **Más:**
-  - un panel a la derecha, como el de Claude Panel, con lo que hace Hermes, la memoria y los tokens del chat abierto, el uso de hoy y de 7 días, los modelos más usados y las conexiones (se pliega con ◨);
+  - un panel a la derecha, como el de Claude Panel, con lo que hace Hermes, la memoria y los tokens del chat abierto, el uso de hoy y de 7 días, los modelos que más tokens han gastado (también en resumir la memoria, poner títulos o ver imágenes) y las conexiones (se pliega con ◨);
   - la hora de la última respuesta de Hermes y el tiempo que ha pasado desde entonces (o, si está trabajando, desde cuándo), aunque la tarea la empezara Hermes Desktop;
   - «Tareas», como en Claude Code: el plan de Hermes (su lista de tareas, con subtareas) y cuánto lleva hecho, lo que está haciendo ahora, las herramientas en marcha y sus subagentes;
   - la lista de chats y el panel se ensanchan o estrechan arrastrando su raya (o con las flechas; doble clic: el ancho de siempre);
@@ -81,6 +81,7 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
 | Entrar | Sin contraseña. Los tickets de un solo uso salen de la tubería privada del gateway, pedidos con el Python de Hermes | `POST /auth/password-login`; las cookies `hermes_session_*` se guardan cifradas |
 | Chat en vivo | `/api/ws`, con el ticket como subprotocolo junto a `hermes-gateway-v1` | `/api/ws?ticket=` (de `POST /api/auth/ws-ticket`) |
 | Lista, búsqueda y cambios | REST `/api/sessions…`, con un ticket `native-http` por petición | REST con las cookies |
+| Tokens por modelo | `GET /api/analytics/usage?days=365` (lo de la página de uso de Hermes Desktop); sin esa ruta, la suma de la lista de chats | Igual, con las cookies |
 
 Los cambios sobre un chat (renombrar, fijar, archivar, borrar) usan las ediciones protegidas de Hermes: primero `/mutation-snapshot` y luego `request_id` + `expected_revision` + `expected_generation`. Se hablan los dos protocolos del gateway, el nuevo (`session_authority`) y el clásico.
 
@@ -100,7 +101,7 @@ Solo en desarrollo:
 - `PEDILA_DATA=<carpeta>` usa otra carpeta de datos.
 - `PEDILA_DEBUG=1` saca también el registro por consola.
 
-**Publicar una versión:** sube a la Release `Pedila-Setup.exe` y un `version.json` con `{"version": "x.y.z", "sha256": "<sha256 del instalador>", "notas": "…"}`. La app compara la versión, descarga el instalador, comprueba el SHA-256 y se actualiza en silencio.
+**Publicar una versión:** sube a la Release `Pedila-Setup.exe` y un `version.json` con `{"version": "0.8.0-beta", "sha256": "<sha256 del instalador>", "notas": "…"}`. La versión tiene que ser exactamente la de `package.json`, con su sufijo -alfa/-beta si lo lleva: si no, la app instalada seguiría viendo una versión «nueva» después de actualizarse. La Release va como normal, no como pre-release: la app mira la última de GitHub (`releases/latest`), que se salta las pre-releases. La app compara la versión (como Semantic Versioning), descarga el instalador, comprueba el SHA-256 y se actualiza en silencio.
 
 ## Créditos y licencia
 

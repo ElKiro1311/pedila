@@ -1,6 +1,6 @@
 // Pedila: la pantalla. Sin Node; habla con el proceso principal por window.hp (preload).
 import { Pet, loadSheet } from './pet.js'
-import { kfmt, setHour12, hhmm, full, dayLabel, span } from './fmt.mjs'
+import { kfmt, setHour12, hhmm, full, dayLabel, span, tokensOf, modelName, tasksLine } from './fmt.mjs'
 
 const demo = new URLSearchParams(location.search).get('demo') === '1'
 const api = demo ? (await import('./demo.js')).demoApi : window.hp
@@ -1885,15 +1885,28 @@ function panelUsageCard() {
     el('div', { class: 'sp-spark-l' }, el('span', { text: 'hace 14 días' }), el('span', { text: 'hoy' })))
 }
 
+/** Qué cuentan los tokens por modelo, para los textos de ayuda. */
+function modelsHow(u) {
+  return u && u.modelsFrom === 'hermes'
+    ? 'Tokens leídos + escritos de cada modelo en el último año, según las estadísticas de Hermes: todos sus chats y también lo que gasta en resumir la memoria, poner títulos o ver imágenes.'
+    : 'Tokens leídos + escritos de cada modelo, sumando tus chats.'
+}
+
+/** Los modelos que más tokens han gastado (leídos + escritos), no los de más chats. */
 function panelModelsCard() {
   const u = P.usage[S.active]
-  if (!u || !u.models.length) { return null }
-  const top = u.models.slice(0, 4)
-  const max = Math.max(1, ...top.map(m => m.chats))
-  return el('section', { class: 'sp-card' }, el('h4', { text: 'Modelos más usados' }),
-    ...top.map(m => el('div', { class: 'sp-model', title: `${m.model}: ${m.chats} chats · ${kfmt(m.input)} leídos · ${kfmt(m.output)} escritos` },
-      el('span', { class: 'n', text: m.model }), el('span', { class: 'muted', text: `${m.chats} chats` }),
-      el('div', { class: 'sp-bar' }, el('i', { style: `width:${Math.round(m.chats / max * 100)}%` })))))
+  const used = u && Array.isArray(u.models) ? u.models.filter(m => tokensOf(m) > 0) : []
+  if (!used.length) { return null }
+  const top = used.slice(0, 4)
+  const max = Math.max(1, ...top.map(tokensOf))
+  return el('section', { class: 'sp-card' }, el('h4', { text: 'Modelos más usados', title: modelsHow(u) }),
+    ...top.map(m => {
+      const n = tokensOf(m)
+      const aux = tasksLine(m.tasks)
+      return el('div', { class: 'sp-model', title: `${m.model}\n${kfmt(n)} tokens: ${kfmt(m.input)} leídos · ${kfmt(m.output)} escritos${aux ? `\nIncluye ${aux}` : ''}` },
+        el('span', { class: 'n', text: modelName(m.model) }), el('span', { class: 'muted', text: `${kfmt(n)} tokens` }),
+        el('div', { class: 'sp-bar' }, el('i', { style: `width:${Math.max(2, Math.round(n / max * 100))}%` })))
+    }))
 }
 
 function panelConnsCard() {
@@ -2159,8 +2172,11 @@ async function openUsage(conn = S.active) {
   const body = $('#usage-body')
   body.replaceChildren(el('p', { class: 'muted', text: 'Calculando…' }))
   if (!d.open) { d.showModal() }
+  // Al cambiar de pestaña rápido, solo se pinta la última que se pidió.
+  const seq = openUsage.seq = (openUsage.seq || 0) + 1
   try {
     const u = await call(api.usage, conn)
+    if (seq !== openUsage.seq) { return }
     const max = Math.max(1, ...u.days.map(x => x.chats))
     const bars = el('div', { class: 'u-bars' }, ...u.days.map(x => el('div', { class: 'u-bar', title: `${x.date}: ${x.chats} chats` }, el('div', { style: `height:${Math.round(x.chats / max * 100)}%` }))))
     const active = u.days.filter(x => x.chats).length
@@ -2171,13 +2187,21 @@ async function openUsage(conn = S.active) {
         el('div', { class: 'u-card' }, el('b', { text: kfmt(u.input) }), el('span', { text: 'tokens leídos' })),
         el('div', { class: 'u-card' }, el('b', { text: kfmt(u.output) }), el('span', { text: 'tokens escritos' }))),
       el('h4', { text: `Chats por día (últimos 30 días · ${active} días con uso)` }), bars,
-      el('h4', { text: 'Por modelo' }),
+      el('h4', { text: 'Por modelo (de más a menos tokens)', title: modelsHow(u) }),
       el('table', { class: 'u-table' },
-        el('tr', {}, el('th', { text: 'Modelo' }), el('th', { text: 'Chats' }), el('th', { text: 'Leídos' }), el('th', { text: 'Escritos' })),
-        ...u.models.slice(0, 15).map(m => el('tr', {}, el('td', { text: m.model }), el('td', { text: String(m.chats) }), el('td', { text: kfmt(m.input) }), el('td', { text: kfmt(m.output) })))),
-      el('p', { class: 'muted small', text: 'Calculado con tus chats guardados en ese Hermes; no sale nada de tu red.' }))
+        el('tr', {}, el('th', { text: 'Modelo' }), el('th', { text: 'Tokens' }), el('th', { text: 'Leídos' }), el('th', { text: 'Escritos' })),
+        ...u.models.slice(0, 15).map(m => {
+          const aux = tasksLine(m.tasks)
+          return el('tr', {},
+            el('td', { title: m.model }, modelName(m.model), aux ? el('span', { class: 'u-sub', text: `incluye ${aux}` }) : null),
+            el('td', { text: kfmt(tokensOf(m)) }), el('td', { text: kfmt(m.input) }), el('td', { text: kfmt(m.output) }))
+        })),
+      ...(u.models.length > 15 ? [el('p', { class: 'muted small', text: u.models.length === 16 ? 'Y 1 modelo más, con menos tokens.' : `Y ${u.models.length - 15} modelos más, con menos tokens.` })] : []),
+      el('p', { class: 'muted small', text: u.modelsFrom === 'hermes'
+        ? 'Por modelo: el último año, con las estadísticas de ese Hermes (cuentan también resumir la memoria, poner títulos…). Lo demás, con tus chats guardados allí. No sale nada de tu red.'
+        : 'Calculado con tus chats guardados en ese Hermes; no sale nada de tu red.' }))
   } catch (e) {
-    body.replaceChildren(el('p', { class: 'error', text: `No pude calcularlo: ${e.message}` }))
+    if (seq === openUsage.seq) { body.replaceChildren(el('p', { class: 'error', text: `No pude calcularlo: ${e.message}` })) }
   }
 }
 
