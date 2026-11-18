@@ -4,7 +4,7 @@
 
 <h1 align="center">Pedila, la mensajera</h1>
 
-<p align="center"><b>Una ventana sencilla, en español, para usar <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>: el de tu PC y el de tu servidor.</b><br>
+<p align="center"><b>Una ventana sencilla, en español, para usar <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a> (el de tu PC y el de tu servidor) y <a href="https://www.anthropic.com/claude-code">Claude Code</a>, todo en una sola ventana.</b><br>
 <i>Cliente no oficial. Pedila no está hecho ni respaldado por Nous Research.</i></p>
 
 ## El nombre
@@ -37,6 +37,20 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - **OpenCode Go:** % usado de las ventanas de 5 h, semana y mes, y cuándo se reinician. De **OpenCode Zen**, OpenCode no publica el saldo.
   - En cada una, lo que Hermes ha gastado en 24 h, 7 y 30 días.
   - Lo lee un complemento pequeño de Pedila dentro de Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): tus claves no salen de Hermes, solo llegan números. Se instala con el botón «Activar cuotas» del panel, sin reiniciar Hermes. Las APIs que no tienes no aparecen.
+- **Claude Code como chat** («💬 Chats» → «Claude»): escribes a tu Claude Code y lo ves como cualquier chat de Pedila, con su texto en directo, tarjetas de herramientas, permisos con botones y el panel (memoria usada, tokens, tareas).
+  - Pedila solo hace de intermediario: abre **tu** `claude` (tu cuenta, tus opciones) en modo de mensajes JSON y le pasa lo que escribes tal cual. Claude usa sus propias herramientas. Hermes no interviene.
+  - La lista son tus conversaciones de Claude Code (`~/.claude/projects`), también las empezadas en una consola, y se pueden seguir desde aquí.
+  - Cada chat nuevo trabaja en la carpeta que eliges (📁), con el modelo y el razonamiento que elijas.
+  - **Tu plan de Claude:** el panel enseña el % usado de tu cuota y cuándo se reinicia, tal como lo manda Claude Code con cada respuesta.
+  - **Seguir en una consola:** desde el menú ⋯ del chat, abre la misma conversación con `claude --resume` en una pestaña de consola, para lo que solo existe allí (menús de `/model`, `/resume`…).
+  - Fijar y archivar se guardan en Pedila. Borrar manda la conversación a la papelera de Windows.
+- **Consolas en pestañas** («▣ Consolas»): Claude Code, Hermes, Antigravity o PowerShell tal cual, dentro de Pedila, sin ventanas aparte.
+  - Son consolas de verdad de Windows (ConPTY): los programas funcionan igual que en Windows Terminal.
+  - En las de Claude Code, Pedila sabe qué conversación lleva cada pestaña y si está trabajando (lo lee de `claude agents --json`), y avisa cuando termina. Las sesiones de Claude abiertas en otras ventanas aparecen en la lista y se traen con un clic (`claude --resume`).
+  - Al salir con consolas abiertas Pedila pregunta, y la próxima vez ofrece reabrirlas (las de Claude con su conversación).
+  - Teclas: Ctrl+Mayús+T, nueva; Ctrl+Tab, siguiente; Ctrl+Mayús+W, cerrar; Ctrl+C con texto marcado, copiar; Ctrl+V, pegar. Soltar un archivo escribe su ruta.
+- **Opciones de Claude** (Ajustes → Claude y consolas): por ejemplo `--effort max`, para los chats y las consolas de Claude. Con `--dangerously-skip-permissions` no pide permisos.
+- Los programas no vienen con Pedila: usa los que tengas instalados.
 - **Chats:**
   - lista y búsqueda, por título y en el contenido;
   - fijar, renombrar, archivar (con su vista de archivados) y borrar con confirmación;
@@ -96,7 +110,7 @@ Los cambios sobre un chat (renombrar, fijar, archivar, borrar) usan las edicione
 
 ```
 npm install                # si falta el binario de Electron: node node_modules/electron/install.js
-npm run assets             # iconos desde docs/icono.png, la hoja de Pedila desde docs/mascota y copia de marked/DOMPurify
+npm run assets             # iconos desde docs/icono.png, la hoja de Pedila desde docs/mascota y copia de marked, DOMPurify y xterm.js
 npm test                   # pruebas de las piezas puras
 npm start                  # abre la app
 npm run dist               # instalador en dist/ (NSIS por usuario)
@@ -114,7 +128,7 @@ Solo en desarrollo:
 
 - Código de Pedila: [MIT](LICENSE).
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) es de Nous Research (MIT). Pedila no incluye su código; usa la misma vía que su app de escritorio.
-- [Electron](https://www.electronjs.org/) (MIT), [marked](https://marked.js.org/) (MIT) y [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0).
+- [Electron](https://www.electronjs.org/) (MIT), [marked](https://marked.js.org/) (MIT), [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0), [xterm.js](https://xtermjs.org/) (MIT) y [node-pty](https://github.com/microsoft/node-pty) (MIT).
 - **Pedila**, la mascota, es del proyecto (MIT, como el código) y viaja en el instalador.
 - **Las demás mascotas** son de sus autores en [Petdex](https://petdex.dev) y la app las descarga de allí cuando las eliges; no vienen en el repositorio ni en el instalador.
 - El texto griego es de Homero (dominio público). La traducción es del proyecto.
@@ -123,7 +137,7 @@ Solo en desarrollo:
 
 ### English
 
-**Pedila** (Greek *πέδιλα*, Hermes' winged sandals, Latin *talaria*) is an unofficial Windows desktop client, with Pedila the messenger girl as its mascot, for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It talks to the Hermes on this PC (the same one Hermes Desktop uses) and to a remote `hermes dashboard`.
+**Pedila** (Greek *πέδιλα*, Hermes' winged sandals, Latin *talaria*) is an unofficial Windows desktop client, with Pedila the messenger girl as its mascot, for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It talks to the Hermes on this PC (the same one Hermes Desktop uses) and to a remote `hermes dashboard`. It also talks to your own Claude Code as a chat (Pedila only relays: it runs your `claude` CLI in stream-json mode, Claude uses its own tools, your Claude Code conversations become the chat list, and the panel shows your plan usage), and hosts your AI consoles (Claude Code, Hermes, Antigravity, PowerShell) in tabs as real ConPTY terminals.
 
 Features: live chat, tool and permission cards, chat management (pin, rename, archive, delete), full-text search, images, a «read-only» mode, a reasoning level, snippets, usage stats, what is left on the paid APIs your Hermes uses (OpenRouter, Venice, OpenCode — read by a small companion Hermes plugin, so API keys never leave Hermes), a tray icon, five themes (dark and light) and an animated pet: Pedila by default, or any of 5,000+ from Petdex.
 

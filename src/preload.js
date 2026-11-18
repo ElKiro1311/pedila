@@ -1,6 +1,6 @@
 'use strict'
 // Puente mínimo entre la pantalla (sandbox, sin Node) y el proceso principal.
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 const call = (ch, ...args) => ipcRenderer.invoke(ch, ...args)
 
@@ -37,6 +37,18 @@ contextBridge.exposeInMainWorld('hp', {
   petUse: slug => call('hp:pet-use', slug),
   openLogs: () => call('hp:open-logs'),
   testNotify: () => call('hp:test-notify'),
+  // Terminales (Claude Code, Hermes, Antigravity, PowerShell dentro de Pedila).
+  termInfo: () => call('hp:term-info'),
+  termOpen: opts => call('hp:term-open', opts || {}),
+  termClose: id => call('hp:term-close', id),
+  termTitle: (id, title, byUser) => call('hp:term-title', id, title, Boolean(byUser)),
+  termPickDir: start => call('hp:term-pick-dir', start || ''),
+  termForgetDir: dir => call('hp:term-forget-dir', dir),
+  termAgents: watch => call('hp:term-agents', Boolean(watch)),
+  termRestore: action => call('hp:term-restore', action),
+  termInput: (id, data) => ipcRenderer.send('hp:term-input', id, data),
+  termResize: (id, cols, rows) => ipcRenderer.send('hp:term-resize', id, cols, rows),
+  pathOf: file => webUtils.getPathForFile(file),
   onEvent: cb => {
     const h = (_e, evt) => cb(evt)
     ipcRenderer.on('hp:event', h)

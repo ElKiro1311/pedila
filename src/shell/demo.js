@@ -135,5 +135,16 @@ export const demoApi = {
   updateInstall: () => ok(true),
   openLogs: () => ok(true),
   testNotify: () => ok(true),
+  // Terminales: en la demostración se ven los programas y una sesión de fuera, pero no se abre nada.
+  termInfo: () => ok({ tools: [{ kind: 'claude', label: 'Claude Code', available: true }, { kind: 'hermes', label: 'Hermes', available: true }, { kind: 'agy', label: 'Antigravity', available: false }, { kind: 'shell', label: 'PowerShell', available: true }], dirs: ['C:\\Users\\demo\\proyectos\\web'], home: 'C:\\Users\\demo', restore: [], list: [] }),
+  termOpen: () => Promise.resolve({ ok: false, error: 'En la demostración no se abren terminales.' }),
+  termClose: () => ok(true),
+  termTitle: () => ok(true),
+  termPickDir: () => ok(null),
+  termForgetDir: () => ok([]),
+  termAgents: () => ok([{ pid: 1, cwd: 'C:\\Users\\demo\\proyectos\\web', kind: 'interactive', sessionId: '00000000-0000-4000-8000-000000000001', name: 'web-3f', status: 'busy', startedAt: now - 600e3, term: null }]),
+  termRestore: () => ok([]),
+  termInput: () => {},
+  termResize: () => {},
   onEvent: cb => { listeners.add(cb); return () => listeners.delete(cb) }
 }

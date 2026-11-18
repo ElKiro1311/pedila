@@ -1,11 +1,14 @@
 // Pedila: la pantalla. Sin Node; habla con el proceso principal por window.hp (preload).
 import { Pet, loadSheet } from './pet.js'
+import { createTerms } from './terms.js'
 import { kfmt, setHour12, hhmm, full, dayLabel, span, ago, tokensOf, modelName, tasksLine, usd, nextUtcReset, dayAhead } from './fmt.mjs'
 
 const demo = new URLSearchParams(location.search).get('demo') === '1'
 const api = demo ? (await import('./demo.js')).demoApi : window.hp
 const $ = sel => document.querySelector(sel)
-const CONN_NAMES = { local: 'Este PC', server: 'Servidor' }
+const CONN_NAMES = { local: 'Este PC', server: 'Servidor', claude: 'Claude Code' }
+// Quién contesta en cada conexión: Claude Code en «Claude», Hermes en las demás.
+const WHO = conn => (conn === 'claude' ? 'Claude' : 'Hermes')
 const CHOICE_LABELS = { once: 'Permitir una vez', session: 'Permitir en este chat', always: 'Permitir siempre', deny: 'Denegar' }
 
 // ── Estado ───────────────────────────────────────────────────────────────────────────────────
@@ -13,17 +16,20 @@ const S = {
   settings: null,
   dark: true,
   version: '',
-  conns: { local: { state: 'off', detail: '' }, server: { state: 'off', detail: '' } },
+  conns: { local: { state: 'off', detail: '' }, server: { state: 'off', detail: '' }, claude: { state: 'off', detail: '' } },
   active: 'local',
-  sessions: { local: [], server: [] },
-  listLoaded: { local: false, server: false },
-  listError: { local: '', server: '' },
+  sessions: { local: [], server: [], claude: [] },
+  listLoaded: { local: false, server: false, claude: false },
+  listError: { local: '', server: '', claude: '' },
   current: { conn: 'local', sid: null },
   chats: new Map(),
-  modelChoice: { local: null, server: null },
-  models: { local: null, server: null },
+  modelChoice: { local: null, server: null, claude: null },
+  models: { local: null, server: null, claude: null },
+  // Carpeta del próximo chat nuevo de Claude y lo último que dijo Claude de tu cuota.
+  claudeDir: '',
+  claudeLimits: null,
   search: '',
-  found: { local: [], server: [] },
+  found: { local: [], server: [], claude: [] },
   attach: [],
   readOnly: false,
   reasoning: '',
@@ -206,6 +212,7 @@ function applyLook() {
   $('#pet-stage').hidden = !S.settings.pet.visible
   $('#pet').className = S.settings.pet.size === 'normal' ? '' : S.settings.pet.size
   applyPanel()
+  terms.applyLook()
 }
 
 // ── Conexiones ───────────────────────────────────────────────────────────────────────────────
@@ -218,6 +225,8 @@ function visibleConns() {
   const v = []
   if (S.conns.local && S.conns.local.state !== 'missing') { v.push('local') }
   if (S.settings && S.settings.server && Array.isArray(S.settings.server.urls) && S.settings.server.urls.length) { v.push('server') }
+  // Claude Code, si está instalado en este PC.
+  if (S.conns.claude && !['missing', 'off'].includes(S.conns.claude.state)) { v.push('claude') }
   return v.length ? v : ['local']
 }
 
@@ -240,7 +249,7 @@ function renderConnSwitch() {
 
 function connLabel(c) {
   const st = S.conns[c]
-  const what = { ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', missing: 'sin Hermes instalado', error: 'error', off: 'apagado' }[st.state] || st.state
+  const what = { ready: c === 'claude' ? 'listo' : 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', missing: c === 'claude' ? 'sin Claude Code instalado' : 'sin Hermes instalado', error: 'error', off: 'apagado' }[st.state] || st.state
   return `${CONN_NAMES[c]}: ${what}${st.detail && st.state !== 'ready' ? ' — ' + st.detail : ''}`
 }
 
@@ -249,7 +258,10 @@ function renderBanner() {
   const st = S.conns[S.active]
   b.className = ''
   b.replaceChildren()
-  if (st.state === 'missing') {
+  if (st.state === 'missing' && S.active === 'claude') {
+    b.className = 'login'
+    b.append(el('div', { class: 'grow' }, el('strong', { text: 'No encuentro Claude Code en este PC. ' }), el('span', { class: 'muted', text: 'Instálalo (el programa «claude») y vuelve a abrir Pedila.' })))
+  } else if (st.state === 'missing') {
     b.className = 'login'
     b.append(el('div', { class: 'grow' }, el('strong', { text: 'No encuentro Hermes en este PC. ' }), el('span', { class: 'muted', text: 'Instálalo aquí, o si tu Hermes está en otro equipo pon su dirección en Ajustes → Servidor.' })),
       el('button', { class: 'btn-primary', text: 'Abrir Ajustes', onclick: () => openSettings('servidor') }))
@@ -376,6 +388,16 @@ function chatRow(conn, r) {
 
 // ── Chat ─────────────────────────────────────────────────────────────────────────────────────
 function setTopbar() {
+  if (terms.mode === 'terms') {
+    const t = terms.topbar()
+    $('#chat-title').textContent = t.title
+    $('#chat-meta').textContent = t.meta
+    $('#chat-actions').hidden = true
+    $('#ctx-warn').hidden = true
+    document.title = `${t.title} · Pedila`
+    schedulePanel()
+    return
+  }
   const ch = currentChat()
   $('#chat-title').textContent = ch ? (ch.title || 'Chat') : 'Nuevo chat'
   const bits = [CONN_NAMES[S.current.conn]]
@@ -404,6 +426,7 @@ function newChatView() {
   renderList()
   updateComposer()
   updateModelPill()
+  updateExtrasPills()
   ensureModelDefault(S.active)
   $('#input').focus()
 }
@@ -464,7 +487,9 @@ function renderChat(scroll = true) {
   msgs.replaceChildren()
   const empty = !ch || (ch.loaded && !ch.transcript.length && !ch.live && !ch.loadError)
   $('#welcome').hidden = !(empty || !ch)
-  $('#welcome-where').textContent = `Vas a hablar con el Hermes de ${S.current.conn === 'server' ? 'tu servidor' : 'este PC'}.`
+  $('#welcome-where').textContent = S.current.conn === 'claude'
+    ? `Vas a hablar con Claude Code, que trabajará en ${S.claudeDir || 'tu carpeta personal'} con sus propias herramientas.`
+    : `Vas a hablar con el Hermes de ${S.current.conn === 'server' ? 'tu servidor' : 'este PC'}.`
   if (!ch) { return }
   if (!ch.loaded && !ch.live) { msgs.append(el('div', { class: 'status-line' }, el('span', { class: 'spin' }), el('span', { text: 'Cargando el chat…' }))) }
   if (ch.loadError) { msgs.append(el('div', { class: 'turn-error', text: `No pude cargar el chat: ${ch.loadError}` })) }
@@ -485,6 +510,7 @@ function renderLiveOnly() {
 }
 
 function whoRow() {
+  if (S.current.conn === 'claude') { return el('div', { class: 'who claude' }, el('span', { class: 'ti small claude', text: '✳\uFE0E' }), el('span', { text: 'Claude' })) }
   return el('div', { class: 'who' }, el('img', { src: 'assets/tray@2x.png', alt: '' }), el('span', { text: 'Hermes' }))
 }
 
@@ -559,7 +585,7 @@ function renderLiveTurn(ch) {
 function renderPrompt(ch, k, p) {
   if (p.promptKind === 'approval') {
     const card = el('div', { class: 'prompt-card' },
-      el('h4', { text: 'Hermes te pide permiso' }),
+      el('h4', { text: `${WHO(ch.conn)} te pide permiso` }),
       p.command ? el('pre', { text: p.command }) : null,
       p.description ? el('div', { class: 'muted small', text: p.description }) : null)
     const actions = el('div', { class: 'actions' })
@@ -574,7 +600,7 @@ function renderPrompt(ch, k, p) {
   const answers = {}
   const qs = p.questions || []
   for (const q of qs) {
-    card.append(el('h4', { text: q.question || 'Hermes te pregunta' }))
+    card.append(el('h4', { text: q.question || `${WHO(ch.conn)} te pregunta` }))
     const actions = el('div', { class: 'actions' })
     for (const choice of q.choices || []) {
       actions.append(el('button', { text: choice, onclick: () => {
@@ -638,7 +664,9 @@ function updateComposer() {
     b.title = running ? 'Enviar (se pondrá en cola)' : 'Enviar'
     b.disabled = !hasText
   }
-  $('#input').placeholder = S.current.sid ? 'Escribe a Hermes…' : `Escribe a Hermes (${CONN_NAMES[S.current.conn]})…`
+  const who = WHO(S.current.conn)
+  $('#input').placeholder = S.current.sid ? `Escribe a ${who}…` : S.current.conn === 'claude' ? `Escribe a Claude (en ${baseName(S.claudeDir) || 'tu carpeta'})…` : `Escribe a Hermes (${CONN_NAMES[S.current.conn]})…`
+  updateDirPill()
   if (typeof updateExtrasPills === 'function') { updateExtrasPills() }
 }
 
@@ -665,7 +693,7 @@ async function onSendClick() {
     $('#send').disabled = true
     try {
       const choice = S.modelChoice[conn]
-      const r = await call(api.newChat, conn, { ...(choice ? { model: choice.model, provider: choice.provider } : {}), ...(S.reasoning ? { reasoning: S.reasoning } : {}) })
+      const r = await call(api.newChat, conn, { ...(choice ? { model: choice.model, provider: choice.provider } : {}), ...(S.reasoning ? { reasoning: S.reasoning } : {}), ...(conn === 'claude' && S.claudeDir ? { cwd: S.claudeDir } : {}) })
       sid = r.sid
       S.current = { conn, sid }
       const nc = chat(conn, sid)
@@ -702,7 +730,7 @@ async function onSendClick() {
     for (const img of images) { files.push(await call(api.attachImage, conn, sid, img.b64, img.name)) }
     const wire = S.readOnly ? `${READ_ONLY_NOTE}\n\n${text}` : text
     const r = await call(api.send, conn, sid, wire, files)
-    if (r && r.status === 'queued' && c.live && !c.live.done && c.live.blocks.length) { c.live.note = 'Tu mensaje va en cola: Hermes lo leerá al terminar.' }
+    if (r && r.status === 'queued' && c.live && !c.live.done && c.live.blocks.length) { c.live.note = `Tu mensaje va en cola: ${WHO(conn)} lo leerá al terminar.` }
     if (c.live && c.live.status === 'Enviando') { c.live.status = 'Pensando' }
     scheduleLive()
   } catch (e) {
@@ -758,6 +786,12 @@ function updateModelPill() {
   const conn = S.current.conn
   const choice = S.modelChoice[conn]
   const opts = S.models[conn]
+  if (conn === 'claude') {
+    p.textContent = choice ? `Modelo: ${choice.model}` : 'Modelo: el de tu Claude Code'
+    p.disabled = false
+    p.title = 'Modelo para este chat nuevo de Claude'
+    return
+  }
   if (choice) {
     p.textContent = `Modelo: ${choice.model}${choice.local === false ? ' ☁' : ''}`
   } else if (opts && opts.current.model) {
@@ -800,7 +834,7 @@ async function openModelMenu() {
     return
   }
   const opts = S.models[conn]
-  let showCloud = Boolean(S.modelChoice[conn] && S.modelChoice[conn].local === false)
+  let showCloud = conn === 'claude' || Boolean(S.modelChoice[conn] && S.modelChoice[conn].local === false)
   let filter = ''
   const pick = choice => {
     S.modelChoice[conn] = choice
@@ -817,12 +851,12 @@ async function openModelMenu() {
     const cloud = opts.providers.filter(pv => !pv.local)
     const cur = opts.current
     if (!q) {
-      list.append(el('button', { class: S.modelChoice[conn] ? '' : 'active', text: `Predeterminado de este Hermes${cur.model ? ` (${cur.model}${cur.local ? '' : ' ☁'})` : ''}`, onclick: () => pick(null) }))
+      list.append(el('button', { class: S.modelChoice[conn] ? '' : 'active', text: conn === 'claude' ? 'Predeterminado (el de tu Claude Code)' : `Predeterminado de este Hermes${cur.model ? ` (${cur.model}${cur.local ? '' : ' ☁'})` : ''}`, onclick: () => pick(null) }))
     }
     const group = (pv, cloudy) => {
       const models = pv.models.filter(m => !q || m.id.toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q))
       if (!models.length) { return }
-      list.append(el('div', { class: 'mh', text: `${pv.name || pv.id}${cloudy ? ' · en la nube ☁' : ' · en tu red'}` }))
+      list.append(el('div', { class: 'mh', text: conn === 'claude' ? (pv.name || pv.id) : `${pv.name || pv.id}${cloudy ? ' · en la nube ☁' : ' · en tu red'}` }))
       for (const m of models) {
         const c = S.modelChoice[conn]
         const active = c && c.model === m.id && c.provider === pv.id
@@ -857,6 +891,7 @@ function placeMenu(menu) {
 
 // ── Eventos del proceso principal ────────────────────────────────────────────────────────────
 function onEvent(evt) {
+  if (terms.onEvent(evt)) { return }
   switch (evt.kind) {
     case 'conn': {
       const prev = S.conns[evt.conn].state
@@ -904,20 +939,27 @@ function onEvent(evt) {
         if (remoteBusy(evt.conn).length && Date.now() - P.at[evt.conn] > 10000) { loadPanelUsage(evt.conn, true) }
       }
       return
+    case 'claude-limits':
+      S.claudeLimits = evt.limits || null
+      schedulePanel()
+      return
     case 'theme':
       S.dark = evt.dark
       applyLook()
       return
     case 'new-chat':
+      if (terms.mode === 'terms') { terms.setMode('chats') }
       newChatView()
       return
     case 'focus-chat':
+      if (terms.mode === 'terms') { terms.setMode('chats') }
       if (evt.sid) { openChat(evt.conn, evt.sid) }
       return
     case 'pet':
       if (evt.pet) { applyPet(evt.pet, { greet: true }).then(() => { $('#pet-stage').hidden = !S.settings.pet.visible }).catch(() => {}) }
       return
     case 'focus-input':
+      if (terms.mode === 'terms') { document.querySelector('.term-pane.active textarea')?.focus(); return }
       $('#input').focus()
       return
     case 'update':
@@ -1096,6 +1138,7 @@ function onEvent(evt) {
 
 // ── Mascota ──────────────────────────────────────────────────────────────────────────────────
 const pet = new Pet($('#pet'))
+const terms = makeTerms()
 const welcomePet = new Pet($('#welcome-pet'))
 const settingsPet = new Pet($('#settings-pet'))
 const PEDILA_SHEET = 'assets/pets/pedila/sprite.webp'
@@ -1109,9 +1152,12 @@ function updatePet() {
   const all = [...S.chats.values()]
   const relevant = all.filter(c => c.conn === S.active || c === currentChat())
   if (all.some(c => c.prompts.size)) { base = 'waiting' } else if (relevant.some(c => c.live && !c.live.done && c.live.blocks.some(b => b.type === 'tool' && !b.done))) { base = 'review' } else if (relevant.some(c => (c.live && !c.live.done) || c.running)) { base = 'running' }
+  // Claude trabajando en una pestaña de terminal también la pone a correr.
+  const claudeBusy = base === 'idle' && terms.busyCount() > 0
+  if (claudeBusy) { base = 'running' }
   pet.setBase(base)
   const name = petName(S.pet)
-  const what = { idle: `${name} está ${S.pet && S.pet.own ? 'tranquila' : 'tranquilo'}`, waiting: 'Hermes te necesita', review: 'Hermes está usando herramientas', running: 'Hermes está trabajando' }[base]
+  const what = claudeBusy ? 'Claude está trabajando en una terminal' : { idle: `${name} está ${S.pet && S.pet.own ? 'tranquila' : 'tranquilo'}`, waiting: 'Hermes te necesita', review: 'Hermes está usando herramientas', running: 'Hermes está trabajando' }[base]
   $('#pet').title = what
 }
 
@@ -1355,6 +1401,8 @@ function renderSettings() {
   renderPetLabels()
   renderSnippetSettings()
   $('#upd-url').value = (st.updates && st.updates.url) || ''
+  $('#term-claude-args').value = (st.terminals && st.terminals.claudeArgs) || ''
+  $('#term-args-status').textContent = ''
 }
 
 async function saveSetting(patch) {
@@ -1414,6 +1462,10 @@ function wireSettings() {
     S.settings = await call(api.settings)
     renderSettings()
   })
+  $('#term-args-save').addEventListener('click', async () => {
+    await saveSetting({ terminals: { claudeArgs: $('#term-claude-args').value.trim() } })
+    $('#term-args-status').textContent = 'Guardado: se usará en las pestañas de Claude que abras a partir de ahora.'
+  })
   $('#test-notify').addEventListener('click', () => call(api.testNotify).catch(() => {}))
   $('#open-logs').addEventListener('click', () => call(api.openLogs).catch(() => {}))
 }
@@ -1431,12 +1483,13 @@ async function start() {
   for (const c of init.connections) { S.conns[c.id] = { state: c.state, detail: c.detail } }
   S.active = init.settings.lastConnection || 'local'
   S.current = { conn: S.active, sid: null }
-  S.modelChoice = { local: init.settings.models?.local || null, server: init.settings.models?.server || null }
+  S.modelChoice = { local: init.settings.models?.local || null, server: init.settings.models?.server || null, claude: init.settings.models?.claude || null }
   applyLook()
   renderConnSwitch()
   renderBanner()
   newChatView()
   api.onEvent(onEvent)
+  await terms.init(init.settings)
   wireSettings()
   wirePetPicker()
   wireExtras()
@@ -1460,7 +1513,8 @@ async function start() {
   $('#login-form').addEventListener('submit', submitLogin)
   $('#login-cancel').addEventListener('click', () => $('#login-dialog').close())
   document.addEventListener('keydown', e => {
-    if (e.ctrlKey && e.key.toLowerCase() === 'n') { e.preventDefault(); newChatView() }
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 't') { e.preventDefault(); terms.openNewDialog(); return }
+    if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'n' && terms.mode !== 'terms') { e.preventDefault(); newChatView() }
     if (e.ctrlKey && e.key === ',') { e.preventDefault(); openSettings() }
     if (e.key === 'Escape') { $('#model-menu').hidden = true }
   })
@@ -1485,13 +1539,27 @@ async function start() {
   welcomePet.flash('waving', 3)
   setInterval(() => { if (!$('#welcome').hidden) { welcomePet.flash('waving', 1) } }, 15000)
   await loadSessions(S.active)
-  const other = S.active === 'local' ? 'server' : 'local'
-  if (visibleConns().includes(other)) { loadSessions(other) }
+  for (const other of visibleConns()) { if (other !== S.active) { loadSessions(other) } }
+  S.claudeDir = (S.settings.terminals && S.settings.terminals.dirs && S.settings.terminals.dirs[0]) || ''
+  updateComposer()
+  updateExtrasPills()
+  if (!S.current.sid) { renderChat() }
 }
 
 start().catch(e => {
   document.body.append(el('pre', { class: 'error', text: 'No pude arrancar la pantalla: ' + e.message }))
 })
+
+// ── Terminales ───────────────────────────────────────────────────────────────────────────────
+function makeTerms() {
+  return createTerms({
+    api, call, el, $, showPopup, askBox,
+    toast: text => askBox({ title: 'No pude abrir la terminal', text, ok: 'Vale' }),
+    onTopbar: () => setTopbar(),
+    onChange: () => { schedulePanel(); updatePet() },
+    onChatsMode: () => { const ch = currentChat(); call(api.viewing, S.current.conn, S.current.sid, ch ? ch.title : '').catch(() => {}) }
+  })
+}
 
 // ── Gestión de chats: menú, renombrar, fijar, archivar, borrar, exportar ─────────────────────
 function closePopup() { $('#popup').hidden = true }
@@ -1517,8 +1585,10 @@ function openChatMenu(conn, sid, x, y) {
     [r.pinned ? '📌 Quitar de fijados' : '📌 Fijar arriba', () => mutateChat(conn, sid, 'pin', !r.pinned)],
     ['🗄 Archivar', () => mutateChat(conn, sid, 'archive', true)],
     ['⬇️ Exportar a Markdown', () => exportChat(conn, sid)],
+    conn === 'claude' ? ['▣ Seguir en una consola', () => chatToConsole(sid)] : null,
+    conn === 'claude' ? ['📁 Abrir su carpeta', () => { const cwd = rowOf(conn, sid).cwd; if (cwd) { call(api.showFile, cwd).catch(() => {}) } }] : null,
     ['🗑 Borrar…', () => deleteChat(conn, sid), 'danger']
-  ], x, y)
+  ].filter(Boolean), x, y)
 }
 
 function askBox({ title, text = '', value = null, ok = 'Aceptar', danger = false }) {
@@ -1556,7 +1626,9 @@ async function renameChat(conn, sid) {
 
 async function deleteChat(conn, sid) {
   const title = chat(conn, sid).title || rowOf(conn, sid).title
-  const yes = await askBox({ title: '¿Borrar este chat?', text: `«${title}» desaparecerá de Pedila y de Hermes Desktop, con todos sus mensajes. No se puede deshacer. (Si solo quieres quitarlo de en medio, mejor «Archivar».)`, ok: 'Borrar', danger: true })
+  const yes = await askBox({ title: '¿Borrar este chat?', text: conn === 'claude'
+    ? `La conversación «${title}» de Claude Code irá a la papelera de Windows (de ahí se puede recuperar). Ya no saldrá en Pedila ni en «claude --resume».`
+    : `«${title}» desaparecerá de Pedila y de Hermes Desktop, con todos sus mensajes. No se puede deshacer. (Si solo quieres quitarlo de en medio, mejor «Archivar».)`, ok: 'Borrar', danger: true })
   if (yes) { await mutateChat(conn, sid, 'delete') }
 }
 
@@ -1588,7 +1660,7 @@ function chatMarkdown(conn, sid) {
   const turns = [...ch.transcript, ...(ch.live && ch.live.done ? [liveToTurn(ch.live)] : [])]
   for (const t of turns) {
     if (t.role === 'user') { lines.push('## Tú', '', t.text, ''); continue }
-    lines.push('## Hermes', '')
+    lines.push(`## ${WHO(conn)}`, '')
     for (const b of t.blocks) {
       if (b.type === 'text') { lines.push(b.text, '') } else { lines.push(`> 🔧 ${b.name}${b.args ? ' — `' + b.args.replace(/`/g, "'") + '`' : ''}`, '') }
     }
@@ -1642,12 +1714,14 @@ const REASONING = [['', 'el de Hermes'], ['low', 'rápido'], ['medium', 'normal'
 function updateExtrasPills() {
   const ro = $('#readonly-pill')
   ro.classList.toggle('on', S.readOnly)
-  ro.title = S.readOnly ? 'Solo consultar: Hermes no cambiará nada (pulsa para quitarlo)' : 'Pulsa para que Hermes solo lea y consulte, sin cambiar nada'
+  const who = WHO(S.current.conn)
+  ro.title = S.readOnly ? `Solo consultar: ${who} no cambiará nada (pulsa para quitarlo)` : `Pulsa para que ${who} solo lea y consulte, sin cambiar nada`
   const rp = $('#reason-pill')
   const ch = currentChat()
   rp.disabled = Boolean(ch)
-  rp.textContent = `🧠 ${(REASONING.find(r => r[0] === S.reasoning) || REASONING[0])[1]}`
-  rp.title = ch ? 'El razonamiento se elige al empezar un chat nuevo' : 'Cuánto piensa Hermes en el chat nuevo (pulsa para cambiar)'
+  const label = S.reasoning ? (REASONING.find(r => r[0] === S.reasoning) || REASONING[0])[1] : `el de ${who === 'Claude' ? 'tu Claude' : 'Hermes'}`
+  rp.textContent = `🧠 ${label}`
+  rp.title = ch ? 'El razonamiento se elige al empezar un chat nuevo' : `Cuánto piensa ${who} en el chat nuevo (pulsa para cambiar)`
   schedulePanel()
 }
 
@@ -1728,7 +1802,7 @@ function chime() {
 
 // ── Panel derecho: uso y parámetros ──────────────────────────────────────────────────────────
 // Como las tarjetas de Claude Panel: lo que pasa ahora, el chat abierto y el uso, siempre a la vista.
-const P = { usage: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, done: { local: null, server: null }, raf: 0, day: '', hold: false, held: false, reconciling: false }
+const P = { usage: { local: null, server: null, claude: null }, at: { local: 0, server: 0, claude: 0 }, loading: { local: false, server: false, claude: false }, done: { local: null, server: null, claude: null }, raf: 0, day: '', hold: false, held: false, reconciling: false }
 const panelOn = () => S.settings && S.settings.window && S.settings.window.sidePanel !== false
 
 function applyPanel() {
@@ -1942,7 +2016,7 @@ function panelModelsCard() {
 // Las lee el complemento «pedila» dentro de Hermes (las claves no salen de allí). La tarjeta solo
 // aparece si ese Hermes tiene alguna de esas APIs: con el complemento, las que tienen clave; sin él,
 // un botón para activarlo si Hermes tiene alguna puesta. Si no, no se ve nada.
-const Q = { data: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, again: { local: false, server: false }, gen: { local: 0, server: 0 }, err: { local: '', server: '' }, login: { local: false, server: false }, note: { local: '', server: '' }, busy: { local: '', server: '' }, ask: { local: null, server: null }, installed: { local: false, server: false } }
+const Q = { data: { local: null, server: null, claude: null }, at: { local: 0, server: 0, claude: 0 }, loading: { local: false, server: false, claude: false }, again: { local: false, server: false, claude: false }, gen: { local: 0, server: 0, claude: 0 }, err: { local: '', server: '', claude: '' }, login: { local: false, server: false, claude: false }, note: { local: '', server: '', claude: '' }, busy: { local: '', server: '', claude: '' }, ask: { local: null, server: null, claude: null }, installed: { local: false, server: false, claude: false } }
 const QUOTA_NAMES = { openrouter: 'OpenRouter', venice: 'Venice', 'opencode-go': 'OpenCode Go', 'opencode-zen': 'OpenCode Zen' }
 const RESET_NAMES = { daily: 'cada día', weekly: 'cada semana', monthly: 'cada mes' }
 
@@ -2091,6 +2165,7 @@ function quotaBlock(p) {
 
 function panelQuotasCard() {
   const conn = S.active
+  if (conn === 'claude') { return claudePlanCard() }
   loadQuotas(conn)
   const q = Q.data[conn]
   const title = `Cuotas · ${CONN_NAMES[conn]}`
@@ -2164,7 +2239,12 @@ function renderPanel() {
   const top = body.scrollTop
   // Con el foco en una tarjeta que se puede pulsar, al repintar se le devuelve (teclado).
   const focused = body.contains(document.activeElement) ? document.activeElement.getAttribute('data-focus') : null
-  body.replaceChildren(...[panelNowCard(), panelTasksCard(), panelChatCard(), panelUsageCard(), panelQuotasCard(), panelModelsCard(), panelConnsCard()].filter(Boolean))
+  // En el modo Terminales: las sesiones de Claude y lo que sigue valiendo ahí (cuotas de las APIs y
+  // conexiones); lo propio de los chats de Hermes (ahora, tareas, este chat, uso, modelos) se aparta.
+  const cards = terms.mode === 'terms'
+    ? [terms.panelCard(), panelQuotasCard(), panelConnsCard()]
+    : [panelNowCard(), panelTasksCard(), panelChatCard(), panelUsageCard(), panelQuotasCard(), panelModelsCard(), panelConnsCard()]
+  body.replaceChildren(...cards.filter(Boolean))
   body.scrollTop = top
   P.day = new Date().toDateString()
   if (focused) { body.querySelector(`[data-focus="${focused}"]`)?.focus({ preventScroll: true }) }
@@ -2556,4 +2636,77 @@ function wireExtras() {
       st.textContent = !r ? 'Falta la dirección de actualizaciones.' : r.available ? `Hay una versión nueva: ${r.version}.` : `Tienes la última (${S.version}).`
     } catch (e) { st.textContent = `No pude comprobarlo: ${e.message}` }
   })
+}
+
+// ── Claude Code como chat ────────────────────────────────────────────────────────────────────
+// Pedila abre tu `claude` directamente; aquí solo se elige la carpeta del chat nuevo, se enseña tu
+// cuota del plan y se puede pasar una conversación a una consola.
+const baseName = p => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || ''
+
+function claudeDirs() {
+  const seen = new Set()
+  const out = []
+  const add = d => { const k = String(d || '').toLowerCase(); if (d && !seen.has(k)) { seen.add(k); out.push(d) } }
+  add(S.claudeDir)
+  for (const d of (S.settings && S.settings.terminals && S.settings.terminals.dirs) || []) { add(d) }
+  for (const r of S.sessions.claude || []) { add(r.cwd) }
+  return out.slice(0, 14)
+}
+
+function updateDirPill() {
+  const b = $('#dir-pill')
+  const show = S.current.conn === 'claude' && !S.current.sid
+  b.hidden = !show
+  if (!show) { return }
+  b.textContent = `📁 ${baseName(S.claudeDir) || 'tu carpeta'}`
+  b.title = `Claude trabajará en: ${S.claudeDir || 'tu carpeta personal'} (pulsa para cambiarla)`
+}
+
+async function setClaudeDir(dir) {
+  S.claudeDir = dir
+  const dirs = [dir, ...((S.settings.terminals && S.settings.terminals.dirs) || []).filter(d => d.toLowerCase() !== dir.toLowerCase())].slice(0, 10)
+  await saveSetting({ terminals: { dirs } })
+  updateComposer()
+  renderChat()
+}
+
+function openDirMenu(e) {
+  e.stopPropagation()
+  const r = e.currentTarget.getBoundingClientRect()
+  const items = claudeDirs().map(d => [`${d === S.claudeDir ? '✓ ' : ''}${baseName(d)} — ${d}`, () => setClaudeDir(d)])
+  items.push(['📂 Elegir otra carpeta…', async () => {
+    const dir = await call(api.termPickDir, S.claudeDir).catch(() => null)
+    if (dir) { setClaudeDir(dir) }
+  }])
+  showPopup(items, r.left, r.top - Math.min(items.length * 34 + 16, 420))
+}
+$('#dir-pill').addEventListener('click', openDirMenu)
+
+async function chatToConsole(sid) {
+  try {
+    const info = await call(api.mutate, 'claude', sid, 'console')
+    terms.adopt(info)
+  } catch (e) {
+    askBox({ title: 'No pude abrirla en una consola', text: e.message, ok: 'Vale' })
+  }
+}
+
+/** Tu cuota del plan de Claude, tal como la manda Claude Code con cada respuesta. */
+function claudePlanCard() {
+  const L = S.claudeLimits
+  const names = { five_hour: '5 horas', seven_day: 'semana', seven_day_opus: 'semana · Opus', seven_day_sonnet: 'semana · Sonnet' }
+  const rows = []
+  const wins = L && L.unifiedWindows && typeof L.unifiedWindows === 'object' ? Object.entries(L.unifiedWindows) : []
+  for (const [id, w] of wins) {
+    if (!w || typeof w.utilization !== 'number') { continue }
+    const pct = Math.round(w.utilization * 100)
+    rows.push(el('div', { class: 'q-win' }, el('span', { text: names[id] || id }), el('b', { text: `${pct} %` })))
+    rows.push(quotaBar(pct))
+    if (w.resetsAt) { rows.push(el('div', { class: 'q-line muted', text: resetText(w.resetsAt * 1000) })) }
+  }
+  if (L && L.status && L.status !== 'allowed') { rows.push(el('div', { class: 'q-line warn', text: 'Claude dice que has llegado al límite: espera a que se reinicie.' })) }
+  if (!rows.length) { rows.push(el('div', { class: 'q-line muted', text: 'Se rellena con tu primer mensaje a Claude desde Pedila (Claude Code manda tu cuota con cada respuesta).' })) }
+  return el('section', { class: 'sp-card' },
+    el('h4', {}, el('span', { class: 'grow', text: 'Tu plan de Claude' }), L && L.at ? el('span', { class: 'q-ago', text: ago(L.at), title: `Leído: ${full(L.at)}` }) : null),
+    ...rows)
 }

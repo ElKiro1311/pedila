@@ -27,7 +27,7 @@ function defaults() {
     server: { urls: [], enabled: true },
     local: { enabled: true },
     lastConnection: 'local',
-    models: { local: null, server: null },
+    models: { local: null, server: null, claude: null },
     notify: { enabled: true, done: true, needs: true, failed: true, minDurationSec: 10, sound: true, chime: true, badge: true },
     // Nivel de razonamiento de los chats nuevos: '' = el que tenga Hermes.
     chat: { reasoning: '' },
@@ -44,9 +44,17 @@ function defaults() {
     // sidePanel: el panel derecho con el uso y los parámetros. sideWidth / panelWidth: el ancho de la
     // lista de chats y del panel en píxeles, ajustado arrastrando su raya (null = el de siempre).
     window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false, sidePanel: true, sideWidth: null, panelWidth: null },
+    // Terminales dentro de Pedila: el modo que se ve (chats de Hermes o terminales), las carpetas
+    // usadas hace poco y las terminales que quedaron abiertas al salir (para ofrecer reabrirlas).
+    // claudeArgs: opciones que se añaden siempre al abrir Claude Code (por ejemplo «--effort max»).
+    terminals: { mode: 'chats', dirs: [], restore: [], claudeArgs: '' },
     secrets: { server: null }
   }
 }
+
+const TERM_KINDS = ['claude', 'hermes', 'agy', 'shell']
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const okDir = v => typeof v === 'string' && v.length > 1 && v.length <= 400 && !/[\0\r\n]/.test(v)
 
 const isObj = v => v && typeof v === 'object' && !Array.isArray(v)
 const pick = (v, list, d) => (list.includes(v) ? v : d)
@@ -76,9 +84,9 @@ function sanitize(raw) {
   s.server.urls = urls.length ? [...new Set(urls)] : d.server.urls
   s.server.enabled = bool(server.enabled, true)
   s.local.enabled = bool(isObj(raw.local) ? raw.local.enabled : undefined, true)
-  s.lastConnection = pick(raw.lastConnection, ['local', 'server'], 'local')
+  s.lastConnection = pick(raw.lastConnection, ['local', 'server', 'claude'], 'local')
   const models = isObj(raw.models) ? raw.models : {}
-  for (const c of ['local', 'server']) {
+  for (const c of ['local', 'server', 'claude']) {
     const m = models[c]
     s.models[c] = isObj(m) && typeof m.model === 'string' && m.model && m.model.length <= 200 && typeof m.provider === 'string' && m.provider.length <= 100
       ? { model: m.model, provider: m.provider, local: Boolean(m.local) } : null
@@ -110,6 +118,18 @@ function sanitize(raw) {
   s.window.sidePanel = bool(w.sidePanel, true)
   s.window.sideWidth = clampInt(w.sideWidth, SIDE_WIDTH[0], SIDE_WIDTH[1], null)
   s.window.panelWidth = clampInt(w.panelWidth, PANEL_WIDTH[0], PANEL_WIDTH[1], null)
+  const te = isObj(raw.terminals) ? raw.terminals : {}
+  s.terminals.mode = pick(te.mode, ['chats', 'terms'], 'chats')
+  s.terminals.claudeArgs = typeof te.claudeArgs === 'string' && te.claudeArgs.length <= 400 && !/[\0\r\n]/.test(te.claudeArgs) ? te.claudeArgs.trim() : ''
+  s.terminals.dirs = Array.isArray(te.dirs) ? [...new Set(te.dirs.filter(okDir))].slice(0, 10) : []
+  s.terminals.restore = Array.isArray(te.restore)
+    ? te.restore.filter(x => isObj(x) && TERM_KINDS.includes(x.kind) && okDir(x.cwd)).slice(0, 24).map(x => ({
+      kind: x.kind,
+      cwd: x.cwd,
+      sessionId: x.kind === 'claude' && typeof x.sessionId === 'string' && SESSION_ID.test(x.sessionId) ? x.sessionId : null,
+      title: typeof x.title === 'string' ? x.title.slice(0, 80) : ''
+    }))
+    : []
   const sec = isObj(raw.secrets) ? raw.secrets : {}
   s.secrets.server = typeof sec.server === 'string' && sec.server.length < 20000 ? sec.server : null
   return s
@@ -144,7 +164,7 @@ class Settings {
   patch(partial) {
     if (!isObj(partial)) { return this.data }
     const next = JSON.parse(JSON.stringify(this.data))
-    for (const key of ['look', 'server', 'notify', 'pet', 'window', 'models', 'chat', 'shortcut', 'updates']) {
+    for (const key of ['look', 'server', 'notify', 'pet', 'window', 'models', 'chat', 'shortcut', 'updates', 'terminals']) {
       if (isObj(partial[key])) { next[key] = { ...next[key], ...partial[key] } }
     }
     if (partial.lastConnection !== undefined) { next.lastConnection = partial.lastConnection }

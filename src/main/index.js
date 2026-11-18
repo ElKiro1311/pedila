@@ -14,6 +14,8 @@ const { Connection } = require('./connection')
 const notify = require('./notify')
 const { Pets } = require('./pets')
 const extras = require('./extras')
+const { Terms, splitArgs } = require('./terms')
+const { ClaudeConnection } = require('./claude')
 
 const APP_ID = 'org.pedila.app'
 const TOAST_CLSID = '{6B1E3C2A-9F4D-4E7B-A1C5-3D8F2B6E9A41}'
@@ -69,6 +71,11 @@ function main() {
   const conns = {}
   const titles = new Map() // `${conn}:${sid}` → título conocido (para los avisos)
   const startHidden = process.argv.includes('--oculto')
+  let terms = null
+  let pendingRestore = [] // terminales de la última vez que todavía no se han reabierto ni descartado
+  let quitAsked = false // ya se confirmó salir con terminales abiertas
+  let sessionEnding = false // Windows se apaga: no se pregunta nada
+  let sessionEndT = null
   const demo = !app.isPackaged && process.env.PEDILA_DEMO === '1'
 
   app.on('second-instance', () => showWindow())
@@ -107,9 +114,23 @@ function main() {
     await remote.init()
     conns.local = new Connection({ id: 'local', name: 'Este PC', transport: new LocalTransport({ log }), log })
     conns.server = new Connection({ id: 'server', name: 'Servidor', transport: remote, log })
+    // Claude Code como chat: Pedila abre tu `claude` directamente (Hermes no interviene).
+    conns.claude = new ClaudeConnection({ log, settings, metaFile: path.join(app.getPath('userData'), 'claude-chats.json'), trash: f => shell.trashItem(f) })
     for (const c of Object.values(conns)) {
       c.on('ui', evt => onConnEvent(evt))
     }
+
+    terms = new Terms({ log })
+    pendingRestore = settings.data.terminals.restore.slice()
+    terms.on('ui', evt => send(evt))
+    terms.on('changed', () => { send({ kind: 'terms', list: terms.list() }); saveTerminals() })
+    terms.on('done', (t, ms) => {
+      const focusedOnChat = Boolean(win && win.isVisible() && win.isFocused() && viewing.conn === 'term' && viewing.sid === t.id)
+      if (settings.data.notify.badge && !focusedOnChat && win && !win.isFocused()) { setBadge(true) }
+      if (notify.decide('done', { notify: settings.data.notify, focusedOnChat, ms })) {
+        alertUser('Claude terminó · Terminales', `${t.title || 'Claude Code'} — ${t.cwd}`, () => { showWindow(); send({ kind: 'focus-term', id: t.id }) })
+      }
+    })
 
     registerIpc(remote)
     applyShortcut()
@@ -122,13 +143,32 @@ function main() {
     if (!demo) {
       if (settings.data.local.enabled) { conns.local.start() }
       if (settings.data.server.enabled) { conns.server.start() }
+      conns.claude.start()
     }
   })
 
   app.on('will-quit', () => { try { globalShortcut.unregisterAll() } catch {} })
 
-  app.on('before-quit', () => {
+  app.on('before-quit', e => {
+    // Con terminales abiertas se pregunta antes: al salir se cierran (las de Claude se pueden
+    // retomar después; Pedila ofrecerá reabrirlas).
+    const n = terms ? terms.alive() : 0
+    if (n && !quitAsked && !sessionEnding) {
+      e.preventDefault()
+      if (win && !win.isDestroyed()) { showWindow() }
+      const opts = { type: 'question', buttons: ['Salir', 'Cancelar'], defaultId: 1, cancelId: 1, title: 'Pedila', message: n === 1 ? 'Hay 1 terminal abierta.' : `Hay ${n} terminales abiertas.`, detail: 'Al salir se cierran. Si algo estaba trabajando, se corta. La próxima vez Pedila te ofrecerá reabrirlas (las de Claude Code con su conversación).' }
+      const ask = win && !win.isDestroyed() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)
+      ask.then(r => {
+        if (r.response === 0) { quitAsked = true; app.quit() } else { quitting = false }
+      })
+      return
+    }
     quitting = true
+    if (terms) {
+      saveTerminals(true)
+      terms.closing = true
+      terms.killAll()
+    }
     for (const c of Object.values(conns)) { try { c.stop() } catch {} }
   })
 
@@ -232,6 +272,16 @@ function main() {
       }
     })
     win.on('focus', () => { try { win.flashFrame(false); setBadge(false) } catch {} })
+    // Windows se apaga o reinicia: se guarda ya la lista de «reabrir» y se congela, para que las
+    // consolas que Windows vaya cerrando no la vacíen. Si al final no se apaga, todo vuelve a la normalidad.
+    const endingSession = () => {
+      if (!sessionEnding && terms) { saveTerminals(true); terms.closing = true }
+      sessionEnding = true
+      clearTimeout(sessionEndT)
+      sessionEndT = setTimeout(() => { sessionEnding = false; if (terms) { terms.closing = false } }, 90000)
+    }
+    win.on('query-session-end', endingSession)
+    win.on('session-end', endingSession)
     win.on('closed', () => { win = null })
     nativeTheme.on('updated', () => {
       if (win && !win.isDestroyed()) {
@@ -284,6 +334,8 @@ function main() {
     if (evt.kind === 'conn') { refreshTray() }
     if (evt.kind === 'title' && evt.sid) { titles.set(`${evt.conn}:${evt.sid}`, evt.title) }
     const c = conns[evt.conn]
+    // Quién habla en los avisos: Claude en sus chats, Hermes en los demás.
+    const who = evt.conn === 'claude' ? 'Claude' : 'Hermes'
     const focusedOnChat = Boolean(win && win.isVisible() && win.isFocused() && viewing.conn === evt.conn && viewing.sid === evt.sid)
     const chatTitle = titles.get(`${evt.conn}:${evt.sid}`) || (viewing.conn === evt.conn && viewing.sid === evt.sid ? viewing.title : '')
     const where = c ? c.name : ''
@@ -293,18 +345,18 @@ function main() {
       const failed = evt.outcome && !['completed', 'complete', ''].includes(evt.outcome)
       const kind = failed ? 'failed' : 'done'
       if (notify.decide(kind, { notify: settings.data.notify, focusedOnChat, ms: evt.ms })) {
-        alertUser(failed ? `Hermes no terminó · ${where}` : `Hermes terminó · ${where}`,
+        alertUser(failed ? `${who} no terminó · ${where}` : `${who} terminó · ${where}`,
           (chatTitle ? `${chatTitle}: ` : '') + (evt.text || (failed ? `Resultado: ${evt.outcome}` : 'Respuesta lista')).replace(/\s+/g, ' '), open)
       }
     } else if (evt.kind === 'prompt') {
       if (notify.decide('needs', { notify: settings.data.notify, focusedOnChat })) {
         const approval = evt.promptKind === 'approval'
         const what = approval ? (evt.command || evt.description || 'Quiere tu permiso') : (evt.questions && evt.questions[0] ? evt.questions[0].question : 'Espera tu respuesta')
-        alertUser(approval ? `Hermes te necesita · ${where}` : `Hermes te pregunta · ${where}`, (chatTitle ? `${chatTitle}: ` : '') + what, open)
+        alertUser(approval ? `${who} te necesita · ${where}` : `${who} te pregunta · ${where}`, (chatTitle ? `${chatTitle}: ` : '') + what, open)
       }
     } else if (evt.kind === 'error') {
       if (notify.decide('failed', { notify: settings.data.notify, focusedOnChat })) {
-        alertUser(`Hermes tuvo un problema · ${where}`, evt.message, open)
+        alertUser(`${who} tuvo un problema · ${where}`, evt.message, open)
       }
     }
   }
@@ -389,8 +441,24 @@ function main() {
     }
   }
 
+  // Lo que se reabrirá la próxima vez: las terminales vivas más las de la última vez que aún no se
+  // han reabierto ni descartado. Al salir se guarda al momento (antes de cerrarlas).
+  let termSaveT = null
+  function saveTerminals(now = false) {
+    if (!terms || terms.closing) { return }
+    clearTimeout(termSaveT)
+    const doSave = () => {
+      try { settings.patch({ terminals: { restore: [...terms.snapshot(), ...pendingRestore].slice(0, 24) } }) } catch (e) { log.warn('[terminales] no pude guardar la lista:', e.message) }
+    }
+    if (now) { doSave() } else { termSaveT = setTimeout(doSave, 1500) }
+  }
+
   // ── IPC ────────────────────────────────────────────────────────────────────────────────────
   function registerIpc(remote) {
+    // Teclas y tamaño de las terminales: mensajes sin respuesta (uno por tecla), del mismo origen.
+    const fromShell = e => { const u = e.senderFrame && e.senderFrame.url; return Boolean(u && u.startsWith('app://shell/')) }
+    ipcMain.on('hp:term-input', (e, id, data) => { if (fromShell(e) && typeof id === 'string') { terms.write(id, data) } })
+    ipcMain.on('hp:term-resize', (e, id, cols, rows) => { if (fromShell(e) && typeof id === 'string') { terms.resize(id, cols, rows) } })
     const handle = (ch, fn) => ipcMain.handle(ch, async (e, ...args) => {
       const url = e.senderFrame && e.senderFrame.url
       if (!url || !url.startsWith('app://shell/')) { throw new Error('origen no permitido') }
@@ -431,7 +499,7 @@ function main() {
     })
     handle('hp:new', (id, opts) => {
       const o = opts && typeof opts === 'object' ? opts : {}
-      return connOf(id).newChat({ model: typeof o.model === 'string' ? o.model.slice(0, 200) : undefined, provider: typeof o.provider === 'string' ? o.provider.slice(0, 200) : undefined, reasoning: ['low', 'medium', 'high'].includes(o.reasoning) ? o.reasoning : undefined })
+      return connOf(id).newChat({ cwd: typeof o.cwd === 'string' ? o.cwd.slice(0, 400) : undefined, model: typeof o.model === 'string' ? o.model.slice(0, 200) : undefined, provider: typeof o.provider === 'string' ? o.provider.slice(0, 200) : undefined, reasoning: ['low', 'medium', 'high'].includes(o.reasoning) ? o.reasoning : undefined })
     })
     handle('hp:send', async (id, sid, text, attachments) => {
       if (typeof text !== 'string' || !text.trim() || text.length > 200000) { throw new Error('mensaje vacío o demasiado largo') }
@@ -457,6 +525,10 @@ function main() {
       if (op === 'pin') { return c.setPinned(sid, Boolean(value)) }
       if (op === 'archive') { return c.setArchived(sid, Boolean(value)) }
       if (op === 'delete') { return c.remove(sid) }
+      // Seguir esta conversación de Claude en una consola: suelta su proceso y abre la pestaña.
+      if (op === 'console' && c.id === 'claude') {
+        return c.release(sid).then(r => terms.open({ kind: 'claude', cwd: r.cwd, resume: r.sid, extraArgs: splitArgs(settings.data.terminals.claudeArgs) }))
+      }
       throw new Error('operación desconocida')
     })
     handle('hp:attach-image', (id, sid, b64, name) => {
@@ -505,12 +577,45 @@ function main() {
       fs.writeFileSync(r.filePath, markdown, 'utf8')
       return { saved: true, file: r.filePath }
     })
+    // ── Terminales ──
+    const termIdOf = s => { if (typeof s !== 'string' || !/^t\d{1,6}$/.test(s)) { throw new Error('terminal no válida') } return s }
+    handle('hp:term-info', () => ({ tools: terms.tools(), dirs: settings.data.terminals.dirs, home: app.getPath('home'), restore: pendingRestore, list: terms.list(true) }))
+    handle('hp:term-open', opts => {
+      const o = opts && typeof opts === 'object' ? opts : {}
+      const t = terms.open({ kind: String(o.kind || ''), cwd: typeof o.cwd === 'string' ? o.cwd.slice(0, 400) : '', resume: typeof o.resume === 'string' ? o.resume : null, cont: o.cont === true, cols: o.cols, rows: o.rows, extraArgs: splitArgs(settings.data.terminals.claudeArgs) })
+      const dirs = [t.cwd, ...settings.data.terminals.dirs.filter(d => d.toLowerCase() !== t.cwd.toLowerCase())].slice(0, 10)
+      settings.patch({ terminals: { dirs } })
+      return t
+    })
+    handle('hp:term-close', id => terms.close(termIdOf(id)))
+    handle('hp:term-title', (id, title, byUser) => { terms.setTitle(termIdOf(id), title, byUser === true); saveTerminals(); return true })
+    handle('hp:term-pick-dir', async start => {
+      const r = await dialog.showOpenDialog(win, { title: 'Carpeta donde abrir la terminal', defaultPath: typeof start === 'string' && start ? start : app.getPath('home'), properties: ['openDirectory'] })
+      return r.canceled || !r.filePaths[0] ? null : r.filePaths[0]
+    })
+    handle('hp:term-forget-dir', dir => {
+      settings.patch({ terminals: { dirs: settings.data.terminals.dirs.filter(d => d !== dir) } })
+      return settings.data.terminals.dirs
+    })
+    handle('hp:term-agents', async watch => {
+      terms.setWatching(watch === true)
+      await terms.refreshAgents(true)
+      return terms.agentsView()
+    })
+    // 'take': la pantalla las reabre; 'dismiss': se olvidan. En los dos casos dejan de ofrecerse.
+    handle('hp:term-restore', action => {
+      const list = pendingRestore
+      pendingRestore = []
+      saveTerminals(true)
+      return action === 'take' ? list : []
+    })
     handle('hp:show-file', file => { if (typeof file === 'string') { shell.showItemInFolder(file) } return true })
     handle('hp:update-check', () => autoCheckUpdate(true))
     handle('hp:update-install', async () => {
       const u = settings.data.updates
       const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion(), REPO)
       if (!info || !info.available) { throw new Error('no hay versión nueva') }
+      if (terms && terms.alive()) { throw new Error('Hay terminales abiertas: ciérralas antes de actualizar (o actualiza la próxima vez que abras Pedila).') }
       await extras.installUpdate(info, log)
       setTimeout(() => { quitting = true; app.quit() }, 600)
       return true

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://assets.petdex.dev; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
   <title>Pedila</title>
+  <link rel="stylesheet" href="vendor/xterm.css">
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -13,15 +14,22 @@
         <img class="brand-icon" src="assets/tray@2x.png" alt="">
         <span class="brand">Pedila</span>
       </div>
+      <div id="mode-switch" class="segmented" role="tablist" aria-label="Qué ver">
+        <button role="tab" data-mode="chats" class="active" title="Los chats de Hermes">💬 Chats</button>
+        <button role="tab" data-mode="terms" title="Consolas dentro de Pedila: Claude Code, Hermes, Antigravity o PowerShell tal cual (Ctrl+Mayús+T: nueva)">▣ Consolas</button>
+      </div>
       <div id="conn-switch" class="segmented" role="tablist" aria-label="Qué Hermes usar">
         <button role="tab" data-conn="local"><span class="dot"></span>Este PC</button>
         <button role="tab" data-conn="server"><span class="dot"></span>Servidor</button>
+        <button role="tab" data-conn="claude" title="Claude Code: tus conversaciones, como chats"><span class="dot"></span>Claude</button>
       </div>
       <button id="new-chat" class="btn-primary"><span class="plus">＋</span> Nuevo chat</button>
       <div class="search-wrap">
         <input id="search" type="search" placeholder="Buscar chats" autocomplete="off" spellcheck="false">
       </div>
       <nav id="chat-list" aria-label="Chats"></nav>
+      <button id="new-term" class="btn-primary"><span class="plus">＋</span> Nueva consola</button>
+      <nav id="term-list" aria-label="Consolas"></nav>
       <div id="pet-stage"><canvas id="pet" width="192" height="208" title="Pedila"></canvas></div>
       <div class="side-bottom">
         <button id="open-settings" class="btn-ghost">⚙ Ajustes</button>
@@ -59,6 +67,15 @@
         </div>
         <div id="messages" aria-live="polite"></div>
       </section>
+      <section id="term-view" aria-label="Terminal">
+        <div id="term-panes"></div>
+        <div id="term-empty" hidden>
+          <h1>Consolas</h1>
+          <p class="muted">Abre Claude Code, Hermes o una consola aquí dentro, tal cual, sin ventanas aparte. (Para hablar con Claude Code como en un chat, usa «💬 Chats» → «Claude».)</p>
+          <div id="term-empty-tools"></div>
+          <p class="muted small">Ctrl+Mayús+T, nueva · Ctrl+Tab, siguiente · Ctrl+Mayús+W, cerrar · Ctrl+C con texto marcado, copiar · Ctrl+V, pegar · Arrastra un archivo para escribir su ruta.</p>
+        </div>
+      </section>
       <footer id="composer-wrap">
         <div id="ctx-warn" class="bar" hidden>
           <span id="ctx-warn-text" class="grow"></span>
@@ -71,6 +88,7 @@
           <div class="composer-row">
             <button id="attach-btn" class="pill icon" title="Adjuntar imágenes (también puedes pegar una captura o arrastrarla)">📎</button>
             <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+            <button id="dir-pill" class="pill" title="Carpeta en la que trabajará Claude" hidden>📁 carpeta</button>
             <button id="model-pill" class="pill" title="Modelo para los chats nuevos">Modelo: predeterminado</button>
             <button id="reason-pill" class="pill">🧠 el de Hermes</button>
             <button id="readonly-pill" class="pill">🔒 Solo consultar</button>
@@ -110,6 +128,7 @@
         <button data-sec="servidor">Servidor</button>
         <button data-sec="avisos">Avisos</button>
         <button data-sec="frases">Frases rápidas</button>
+        <button data-sec="terminales">Claude y consolas</button>
         <button data-sec="mascota">Mascota</button>
         <button data-sec="ventana">Ventana</button>
         <button data-sec="acerca">Acerca de</button>
@@ -154,6 +173,13 @@
           <p class="muted">Escribe «/» al principio del mensaje y elige una (Tab o Enter usa la primera).</p>
           <div id="snip-list"></div>
           <button id="snip-add" class="btn-ghost">＋ Añadir frase</button>
+        </section>
+        <section data-sec="terminales" hidden>
+          <h3>Claude Code y consolas</h3>
+          <p class="muted">Pedila abre tu propio Claude Code (con tu cuenta y sus herramientas) de dos maneras: como chat, en «💬 Chats» → «Claude», o tal cual, en «▣ Consolas», junto con Hermes, Antigravity o PowerShell.</p>
+          <label class="field">Opciones que se añaden siempre al abrir Claude Code<input id="term-claude-args" spellcheck="false" placeholder="por ejemplo: --effort max"></label>
+          <p class="muted small">Valen para los chats de Claude y para sus consolas: las mismas que pondrías detrás de <span class="mono">claude</span>. Con <span class="mono">--dangerously-skip-permissions</span> no te pedirá permiso para nada. Si en tu consola usas una función o alias que añade opciones, ponlas aquí: Pedila abre <span class="mono">claude</span> directamente.</p>
+          <div class="row-buttons"><button id="term-args-save" class="btn-ghost">Guardar</button><span id="term-args-status" class="muted small"></span></div>
         </section>
         <section data-sec="mascota" hidden>
           <h3>Mascota</h3>
@@ -234,6 +260,21 @@
 
   <div id="popup" class="menu fixed" hidden></div>
 
+  <dialog id="term-new-dialog">
+    <form id="tn-form" class="term-new">
+      <h2>Nueva consola</h2>
+      <div id="tn-kinds" class="tn-kinds" role="radiogroup" aria-label="Programa"></div>
+      <label class="field">Carpeta
+        <div class="tn-dir-row"><select id="tn-dir"></select><button type="button" id="tn-pick" class="btn-ghost">Elegir otra…</button></div>
+      </label>
+      <label class="toggle" id="tn-cont-row"><input type="checkbox" id="tn-cont"><span>Seguir la última conversación de Claude en esta carpeta</span></label>
+      <div class="dialog-buttons">
+        <button type="button" class="btn-ghost" id="tn-cancel">Cancelar</button>
+        <button type="submit" class="btn-primary" id="tn-open">Abrir</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="ask-dialog">
     <div class="ask">
       <h2 id="ask-title"></h2>
@@ -253,7 +294,7 @@
   <dialog id="usage-dialog">
     <div class="simple-dialog">
       <header><h2>Tu uso</h2>
-        <div class="segmented" id="usage-tabs"><button data-conn="local">Este PC</button><button data-conn="server">Servidor</button></div>
+        <div class="segmented" id="usage-tabs"><button data-conn="local">Este PC</button><button data-conn="server">Servidor</button><button data-conn="claude">Claude</button></div>
         <button id="usage-close" class="icon-btn" aria-label="Cerrar">✕</button></header>
       <div id="usage-body" class="sd-body"></div>
     </div>
