@@ -68,3 +68,18 @@ test('terminales: la sesión de Claude se reconoce por el pid y avisa al pasar d
   assert.equal(view[0].term, 't1')
   assert.deepEqual(t.snapshot(), [{ kind: 'claude', cwd: 'C:\\p', sessionId: ID, title: 'Claude Code' }])
 })
+
+test('diseño: orden completo, nombres conocidos y siempre algo a la vista', () => {
+  const { sanitize: san, defaultLayout } = require('../src/main/settings')
+  const l = san({ layout: { conns: ['claude', 'raro', 'claude'], connsHidden: ['local', 'server', 'claude'], modesHidden: ['chats', 'terms'], cards: ['cuotas'], cardsTerms: ['consolas', 'x'], swap: true, show: { model: false, raro: false } } }).layout
+  assert.deepEqual(l.conns, ['claude', 'local', 'server'])
+  assert.deepEqual(l.connsHidden, [])
+  assert.deepEqual(l.modesHidden, [])
+  assert.equal(l.cards[0], 'cuotas')
+  assert.equal(l.cards.length, 8)
+  assert.deepEqual(l.cardsTerms, ['consolas'])
+  assert.equal(l.swap, true)
+  assert.equal(l.show.model, false)
+  assert.equal(l.show.raro, undefined)
+  assert.deepEqual(san({}).layout, defaultLayout())
+})

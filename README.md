@@ -76,6 +76,8 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - bandeja del sistema y atajo **Ctrl+Alt+H**;
   - actualizaciones desde GitHub Releases;
   - Pedila, la mascota, que reacciona a lo que hace Hermes; si prefieres otra, se elige entre más de 5.000 de [Petdex](https://petdex.dev).
+- **Diseño a tu gusto** (Ajustes → Diseño): ordena y esconde las pestañas (Chats/Consolas, Este PC/Servidor/Claude), elige qué tarjetas del panel salen en cada modo y en qué orden, esconde los botones que no uses y pon la lista de chats a la derecha si lo prefieres. Las pestañas y las tarjetas también se arrastran directamente en su sitio.
+- **Cuotas con el mismo diseño para todos:** cada proveedor (OpenRouter, Venice, OpenCode y tu plan de Claude) sale igual: lo que te queda en grande y, debajo, cada medida con su barra y cuándo se reinicia. Para los saldos sin total (Venice), la barra cuenta lo gastado desde el saldo más alto que Pedila ha visto.
 - **Temas:** cinco, cada uno en modo oscuro y claro, con vista previa en Ajustes → Apariencia:
   - **Mensajera** (predeterminado): tinta, grises y oro, como Pedila;
   - **Clásico**: grises fríos y violeta, el de las primeras versiones;

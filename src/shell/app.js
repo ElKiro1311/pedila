@@ -213,6 +213,7 @@ function applyLook() {
   $('#pet').className = S.settings.pet.size === 'normal' ? '' : S.settings.pet.size
   applyPanel()
   terms.applyLook()
+  applyLayout()
 }
 
 // ── Conexiones ───────────────────────────────────────────────────────────────────────────────
@@ -227,7 +228,10 @@ function visibleConns() {
   if (S.settings && S.settings.server && Array.isArray(S.settings.server.urls) && S.settings.server.urls.length) { v.push('server') }
   // Claude Code, si está instalado en este PC.
   if (S.conns.claude && !['missing', 'off'].includes(S.conns.claude.state)) { v.push('claude') }
-  return v.length ? v : ['local']
+  // El orden y lo escondido de Ajustes → Diseño (si lo escondes todo, queda la primera que tienes).
+  const L = layout()
+  const shown = L.conns.filter(c => v.includes(c) && !L.connsHidden.includes(c))
+  return shown.length ? shown : (v.length ? [v[0]] : ['local'])
 }
 
 function renderConnSwitch() {
@@ -237,6 +241,8 @@ function renderConnSwitch() {
   $('#conn-switch').hidden = vis.length < 2
   for (const b of document.querySelectorAll('#usage-tabs button')) { b.hidden = !vis.includes(b.dataset.conn) }
   if (!vis.includes(S.active)) { switchConn(vis[0]); return }
+  const box = $('#conn-switch')
+  for (const c of layout().conns) { const b = box.querySelector(`button[data-conn="${c}"]`); if (b) { box.append(b) } }
   for (const b of document.querySelectorAll('#conn-switch button')) {
     const c = b.dataset.conn
     b.hidden = !vis.includes(c)
@@ -1401,6 +1407,7 @@ function renderSettings() {
   renderPetLabels()
   renderSnippetSettings()
   $('#upd-url').value = (st.updates && st.updates.url) || ''
+  renderLayoutSettings()
   $('#term-claude-args').value = (st.terminals && st.terminals.claudeArgs) || ''
   $('#term-args-status').textContent = ''
 }
@@ -1490,6 +1497,8 @@ async function start() {
   newChatView()
   api.onEvent(onEvent)
   await terms.init(init.settings)
+  wireLayout()
+  applyLayout()
   wireSettings()
   wirePetPicker()
   wireExtras()
@@ -1816,7 +1825,7 @@ function applyPanel() {
 }
 
 function schedulePanel() {
-  if (P.hold) { P.held = true; return }
+  if (P.hold || P.dragging) { P.held = true; return }
   if (P.raf || !panelOn()) { return }
   P.raf = requestAnimationFrame(() => { P.raf = 0; renderPanel() })
 }
@@ -2104,40 +2113,77 @@ function spentLine(sp) {
     `Hermes gastó: ${part('24 h', sp.day)} · ${part('7 d', sp.week)} · ${part('30 d', sp.month)}`)
 }
 
-function quotaBlock(p) {
+/**
+ * Una medida de un proveedor, con el mismo molde para todos: nombre y valor en una línea, la barra
+ * de lo gastado debajo y, si hace falta, una nota (cuándo se reinicia, desde cuándo cuenta…).
+ */
+function quotaMetric({ label, value, pct = null, note = '', warn = false, title = '' }) {
+  return el('div', { class: 'q-win', title },
+    el('span', { text: label }), el('b', { class: warn ? 'warn' : '', text: value }),
+    pct === null ? null : quotaBar(pct),
+    note ? el('span', { class: 'q-line muted', text: note }) : null)
+}
+
+// Para los saldos sin «total» (Venice), Pedila recuerda el más alto que ha visto desde la última
+// recarga y la barra enseña lo gastado desde entonces. Si el saldo sube (recarga o día nuevo), se
+// empieza a contar otra vez. Solo en este PC (es una ayuda para mirar, no un dato de la API).
+const PEAKS_KEY = 'pedila.cuotas.picos'
+let peaks = null
+function observedUse(key, value, epoch = '') {
+  if (typeof value !== 'number' || !Number.isFinite(value)) { return null }
+  if (!peaks) { try { peaks = JSON.parse(localStorage.getItem(PEAKS_KEY) || '{}') || {} } catch { peaks = {} } }
+  let r = peaks[key]
+  if (!r || value > r.max + 1e-9 || (epoch && r.epoch !== epoch)) {
+    r = { max: value, since: Date.now(), epoch }
+    peaks[key] = r
+    try { localStorage.setItem(PEAKS_KEY, JSON.stringify(peaks)) } catch {}
+  }
+  const spent = Math.max(0, r.max - value)
+  return { pct: r.max > 0 ? spent / r.max * 100 : 0, spent, max: r.max, since: r.since }
+}
+const sinceText = (o, fmt) => (o.spent > 0 ? `gastado ${fmt(o.spent)} de ${fmt(o.max)} desde ${dayLabel(o.since)} ${hhmm(o.since)}` : `sin gastar desde ${dayLabel(o.since)} ${hhmm(o.since)}`)
+const diemFmt = n => `${(n || 0).toLocaleString('es', { maximumFractionDigits: 2 })} DIEM`
+
+function quotaBlock(p, conn = S.active) {
   const now = Date.now()
   const head = el('div', { class: 'q-head' }, el('b', { text: p.name || QUOTA_NAMES[p.kind] || p.kind }))
+  const big = (text, title) => head.append(el('span', { class: 'q-big', text, title }))
   const rows = []
+  const line = (text, cls = 'muted', title = '') => rows.push(el('div', { class: 'q-line ' + cls, text, title }))
   if (!p.ok) {
-    rows.push(el('div', { class: 'q-line warn', text: `No pude leerla: ${p.error}` }))
+    line(`No pude leerla: ${p.error}`, 'warn')
   } else if (p.kind === 'openrouter') {
-    head.append(el('span', { class: 'q-big', text: usd(p.balance), title: 'Saldo de créditos que te queda en OpenRouter' }))
+    big(usd(p.balance), 'Saldo de créditos que te queda en OpenRouter')
     if (p.creditsTotal > 0 && p.creditsUsed !== null) {
-      rows.push(quotaBar(p.creditsUsed / p.creditsTotal * 100))
-      rows.push(el('div', { class: 'q-line muted', text: `Gastado ${usd(p.creditsUsed)} de ${usd(p.creditsTotal)} comprados` }))
+      rows.push(quotaMetric({ label: 'Créditos', value: `${usd(p.balance)} de ${usd(p.creditsTotal)}`, pct: p.creditsUsed / p.creditsTotal * 100, note: `gastado ${usd(p.creditsUsed)} de lo comprado` }))
     }
     if (p.keyLimit) {
       const used = p.keyLimit.remaining !== null ? p.keyLimit.limit - p.keyLimit.remaining : null
       const at = nextUtcReset(p.keyLimit.reset, now)
-      if (used !== null) { rows.push(quotaBar(used / p.keyLimit.limit * 100)) }
-      rows.push(el('div', { class: 'q-line', text: `Límite de la clave: quedan ${usd(p.keyLimit.remaining)} de ${usd(p.keyLimit.limit)}${p.keyLimit.reset ? ` · ${RESET_NAMES[p.keyLimit.reset]}, ${resetText(at, now)}` : ' · no se reinicia'}` }))
+      rows.push(quotaMetric({ label: 'Límite de la clave', value: `${usd(p.keyLimit.remaining)} de ${usd(p.keyLimit.limit)}`, pct: used !== null ? used / p.keyLimit.limit * 100 : null, note: p.keyLimit.reset ? `${RESET_NAMES[p.keyLimit.reset]}, ${resetText(at, now)}` : 'no se reinicia' }))
     }
     const ku = p.keyUsage || {}
-    if (ku.total !== null && ku.total !== undefined) { rows.push(el('div', { class: 'q-line muted', text: `Esta clave: hoy ${usd(ku.day)} · semana ${usd(ku.week)} · mes ${usd(ku.month)} · total ${usd(ku.total)}` })) }
-    if (p.freeTier) { rows.push(el('div', { class: 'q-line muted', text: 'Sin créditos comprados: los modelos «:free» tienen un límite de peticiones al día que vuelve a las 00:00 UTC.' })) }
+    if (ku.total !== null && ku.total !== undefined) { line(`Esta clave: hoy ${usd(ku.day)} · semana ${usd(ku.week)} · mes ${usd(ku.month)} · total ${usd(ku.total)}`) }
+    if (p.freeTier) { line('Sin créditos comprados: los modelos «:free» tienen un límite de peticiones al día que vuelve a las 00:00 UTC.') }
   } else if (p.kind === 'venice') {
-    const money = (p.usd || 0) + (p.bundled || 0)
-    head.append(el('span', { class: 'q-big', text: usd(money), title: 'Saldo USD + créditos incluidos en tu plan' }))
-    rows.push(spKv([
-      ['Saldo USD', usd(p.usd)],
-      p.bundled ? ['Créditos del plan', usd(p.bundled)] : null,
-      ['DIEM de hoy', p.diem === null ? '—' : `${p.diem.toLocaleString('es', { maximumFractionDigits: 2 })} DIEM`, '1 DIEM = 1 $ de uso al día mientras lo tienes en stake; lo que no gastas no se acumula'],
-      p.tier ? ['Plan', p.tier] : null
-    ]))
+    big(usd((p.usd || 0) + (p.bundled || 0)), 'Saldo USD + créditos incluidos en tu plan')
     const epoch = p.nextEpoch ? Date.parse(p.nextEpoch) : NaN
-    if (Number.isFinite(epoch)) { rows.push(el('div', { class: 'q-line', text: `DIEM: ${resetText(epoch, now)}` })) }
-    if (p.access === false) { rows.push(el('div', { class: 'q-line warn', text: 'Sin acceso: Venice no deja usar la API (falta saldo).' })) }
-    if (p.keyExpires) { rows.push(el('div', { class: 'q-line muted', text: `La clave caduca el ${full(Date.parse(p.keyExpires))}` })) }
+    const k = `${conn}:venice:`
+    if (p.bundled !== null && p.bundled !== undefined) {
+      const o = observedUse(k + 'bundled', p.bundled)
+      rows.push(quotaMetric({ label: 'Créditos del plan', value: usd(p.bundled), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '', title: 'La barra cuenta lo gastado desde el saldo más alto que Pedila ha visto (se reinicia al recargar)' }))
+    }
+    if (p.usd !== null && p.usd !== undefined) {
+      const o = observedUse(k + 'usd', p.usd)
+      rows.push(quotaMetric({ label: 'Saldo USD', value: usd(p.usd), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '' }))
+    }
+    if (p.diem !== null && p.diem !== undefined) {
+      const o = observedUse(k + 'diem', p.diem, p.nextEpoch || '')
+      rows.push(quotaMetric({ label: 'DIEM de hoy', value: diemFmt(p.diem), pct: o ? o.pct : null, note: Number.isFinite(epoch) ? resetText(epoch, now) : '', title: '1 DIEM = 1 $ de uso al día mientras lo tienes en stake; lo que no gastas no se acumula' }))
+    }
+    if (p.tier) { line(`Plan: ${p.tier}`) }
+    if (p.access === false) { line('Sin acceso: Venice no deja usar la API (falta saldo).', 'warn') }
+    if (p.keyExpires) { line(`La clave caduca el ${full(Date.parse(p.keyExpires))}`) }
     if (p.modelLimits.length) {
       const fmtL = m => [m.rpm ? `${kfmt(m.rpm)}/min` : '', m.rpd ? `${kfmt(m.rpd)}/día` : '', m.tpm ? `${kfmt(m.tpm)} tokens/min` : ''].filter(Boolean).join(' · ')
       rows.push(el('details', { class: 'q-more' }, el('summary', { text: `Límites por modelo (${p.modelLimits.length})` }),
@@ -2145,20 +2191,17 @@ function quotaBlock(p) {
     }
   } else if (p.kind === 'opencode-go') {
     if (!p.windows.length) {
-      rows.push(el('div', { class: 'q-line muted', text: 'OpenCode no dio el uso de tu plan.' }))
+      line('OpenCode no dio el uso de tu plan.')
     } else {
-      const worst = Math.max(0, ...p.windows.map(w => w.percent))
-      head.append(el('span', { class: 'q-big', text: `${Math.round(100 - worst)} %`, title: 'Lo que te queda de la ventana más gastada' }))
+      big(`${Math.round(100 - Math.max(0, ...p.windows.map(w => w.percent)))} %`, 'Lo que te queda de la ventana más gastada')
     }
     const label = { rolling: 'Ventana de 5 h', weekly: 'Semana', monthly: 'Mes' }
     for (const w of p.windows) {
       const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN
-      rows.push(el('div', { class: 'q-win' }, el('span', { text: label[w.id] || w.label }),
-        el('span', { class: 'muted', text: `${Math.round(w.percent)} % usado` }), quotaBar(w.percent),
-        Number.isFinite(at) ? el('span', { class: 'q-line muted', text: resetText(at, now) }) : null))
+      rows.push(quotaMetric({ label: label[w.id] || w.label, value: `${Math.round(w.percent)} % usado`, pct: w.percent, note: Number.isFinite(at) ? resetText(at, now) : '' }))
     }
   } else if (p.kind === 'opencode-zen') {
-    rows.push(el('div', { class: 'q-line muted', text: 'OpenCode no publica el saldo de Zen (míralo en opencode.ai). Aquí sale lo que Hermes ha gastado con ella.' }))
+    line('OpenCode no publica el saldo de Zen (míralo en opencode.ai). Aquí sale lo que Hermes ha gastado con ella.')
   }
   return el('div', { class: 'q-prov' }, head, ...rows, spentLine(p.spent))
 }
@@ -2214,7 +2257,7 @@ function panelQuotasCard() {
   return el('section', { class: 'sp-card' },
     el('h4', {}, el('span', { class: 'grow', text: title }),
       Number.isFinite(at) ? el('span', { class: 'q-ago', text: ago(at), title: `Leído: ${full(at)}` }) : null, refresh),
-    ...provs.map(quotaBlock),
+    ...provs.map(pv => quotaBlock(pv, conn)),
     err, Q.login[conn] ? loginAgain(conn) : null)
 }
 
@@ -2239,12 +2282,20 @@ function renderPanel() {
   const top = body.scrollTop
   // Con el foco en una tarjeta que se puede pulsar, al repintar se le devuelve (teclado).
   const focused = body.contains(document.activeElement) ? document.activeElement.getAttribute('data-focus') : null
-  // En el modo Terminales: las sesiones de Claude y lo que sigue valiendo ahí (cuotas de las APIs y
-  // conexiones); lo propio de los chats de Hermes (ahora, tareas, este chat, uso, modelos) se aparta.
-  const cards = terms.mode === 'terms'
-    ? [terms.panelCard(), panelQuotasCard(), panelConnsCard()]
-    : [panelNowCard(), panelTasksCard(), panelChatCard(), panelUsageCard(), panelQuotasCard(), panelModelsCard(), panelConnsCard()]
-  body.replaceChildren(...cards.filter(Boolean))
+  // Las tarjetas y su orden salen de Ajustes → Diseño (cada una dice en qué modo se ve).
+  const L = layout()
+  const on = terms.mode === 'terms' ? L.cardsTerms : L.cardsChats
+  const cards = []
+  for (const id of L.cards) {
+    if (!on.includes(id) || !CARDS[id]) { continue }
+    const c = CARDS[id].make()
+    if (!c) { continue }
+    c.dataset.card = id
+    const h = c.querySelector('h4')
+    if (h) { h.classList.add('drag-handle'); h.title = 'Arrastra para cambiar de sitio' }
+    cards.push(c)
+  }
+  body.replaceChildren(...cards)
   body.scrollTop = top
   P.day = new Date().toDateString()
   if (focused) { body.querySelector(`[data-focus="${focused}"]`)?.focus({ preventScroll: true }) }
@@ -2397,6 +2448,8 @@ const WIDTHS = {
   side: { key: 'sideWidth', def: 286, min: 240, max: 520, css: '--side-w', box: '#sidebar', dir: 1 },
   panel: { key: 'panelWidth', def: 300, min: 240, max: 680, css: '--panel-w', box: '#side-panel', dir: -1 }
 }
+// Con la lista a la derecha (Diseño), cada raya crece hacia el otro lado.
+const dirOf = d => d.dir * (layout().swap ? -1 : 1)
 const widthOf = d => { const v = S.settings && S.settings.window ? S.settings.window[d.key] : null; return Number.isFinite(v) ? v : d.def }
 // ≤ 900 px el CSS esconde el panel y las rayas y fija la lista: ahí no se ajusta nada.
 const narrow = () => innerWidth <= 900
@@ -2451,7 +2504,7 @@ function wireResizers() {
       let last = null
       h.classList.add('active')
       document.body.classList.add('resizing')
-      const move = ev => { last = show(startW + d.dir * (ev.clientX - startX), top) }
+      const move = ev => { last = show(startW + dirOf(d) * (ev.clientX - startX), top) }
       const end = () => {
         h.removeEventListener('pointermove', move)
         h.removeEventListener('pointerup', end)
@@ -2470,7 +2523,7 @@ function wireResizers() {
       if (narrow()) { return }
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault()
-        const step = (e.shiftKey ? 48 : 16) * (e.key === 'ArrowRight' ? 1 : -1) * d.dir
+        const step = (e.shiftKey ? 48 : 16) * (e.key === 'ArrowRight' ? 1 : -1) * dirOf(d)
         const before = Math.round($(d.box).getBoundingClientRect().width)
         const v = show(before + step)
         if (v !== before) { save(v) }
@@ -2655,7 +2708,7 @@ function claudeDirs() {
 
 function updateDirPill() {
   const b = $('#dir-pill')
-  const show = S.current.conn === 'claude' && !S.current.sid
+  const show = S.current.conn === 'claude' && !S.current.sid && shown('dir')
   b.hidden = !show
   if (!show) { return }
   b.textContent = `📁 ${baseName(S.claudeDir) || 'tu carpeta'}`
@@ -2694,19 +2747,179 @@ async function chatToConsole(sid) {
 /** Tu cuota del plan de Claude, tal como la manda Claude Code con cada respuesta. */
 function claudePlanCard() {
   const L = S.claudeLimits
-  const names = { five_hour: '5 horas', seven_day: 'semana', seven_day_opus: 'semana · Opus', seven_day_sonnet: 'semana · Sonnet' }
+  const names = { five_hour: 'Ventana de 5 h', seven_day: 'Semana', seven_day_opus: 'Semana · Opus', seven_day_sonnet: 'Semana · Sonnet' }
+  const head = el('div', { class: 'q-head' }, el('b', { text: 'Claude' }))
   const rows = []
-  const wins = L && L.unifiedWindows && typeof L.unifiedWindows === 'object' ? Object.entries(L.unifiedWindows) : []
+  const wins = L && L.unifiedWindows && typeof L.unifiedWindows === 'object' ? Object.entries(L.unifiedWindows).filter(([, w]) => w && typeof w.utilization === 'number') : []
+  if (wins.length) { head.append(el('span', { class: 'q-big', text: `${Math.round(100 - Math.max(...wins.map(([, w]) => w.utilization * 100)))} %`, title: 'Lo que te queda de la ventana más gastada' })) }
   for (const [id, w] of wins) {
-    if (!w || typeof w.utilization !== 'number') { continue }
-    const pct = Math.round(w.utilization * 100)
-    rows.push(el('div', { class: 'q-win' }, el('span', { text: names[id] || id }), el('b', { text: `${pct} %` })))
-    rows.push(quotaBar(pct))
-    if (w.resetsAt) { rows.push(el('div', { class: 'q-line muted', text: resetText(w.resetsAt * 1000) })) }
+    const pct = w.utilization * 100
+    rows.push(quotaMetric({ label: names[id] || id, value: `${Math.round(pct)} % usado`, pct, note: w.resetsAt ? resetText(w.resetsAt * 1000) : '' }))
   }
   if (L && L.status && L.status !== 'allowed') { rows.push(el('div', { class: 'q-line warn', text: 'Claude dice que has llegado al límite: espera a que se reinicie.' })) }
-  if (!rows.length) { rows.push(el('div', { class: 'q-line muted', text: 'Se rellena con tu primer mensaje a Claude desde Pedila (Claude Code manda tu cuota con cada respuesta).' })) }
+  if (!wins.length) { rows.push(el('div', { class: 'q-line muted', text: 'Se rellena con tu primer mensaje a Claude desde Pedila (Claude Code manda tu cuota con cada respuesta).' })) }
   return el('section', { class: 'sp-card' },
     el('h4', {}, el('span', { class: 'grow', text: 'Tu plan de Claude' }), L && L.at ? el('span', { class: 'q-ago', text: ago(L.at), title: `Leído: ${full(L.at)}` }) : null),
-    ...rows)
+    el('div', { class: 'q-prov' }, head, ...rows))
+}
+
+// ── Diseño: orden y visibilidad de todo (Ajustes → Diseño, o arrastrando en su sitio) ─────────
+const LAY_DEFAULT = {
+  conns: ['local', 'server', 'claude'], connsHidden: [], modes: ['chats', 'terms'], modesHidden: [],
+  cards: ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones', 'consolas'],
+  cardsChats: ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones'],
+  cardsTerms: ['consolas', 'cuotas', 'conexiones'], swap: false, show: {}
+}
+function layout() {
+  const l = S.settings && S.settings.layout
+  return l && Array.isArray(l.cards) ? l : LAY_DEFAULT
+}
+const shown = k => layout().show[k] !== false
+const CARDS = {
+  ahora: { name: 'Ahora', make: () => panelNowCard() },
+  tareas: { name: 'Tareas', make: () => panelTasksCard() },
+  chat: { name: 'Este chat', make: () => panelChatCard() },
+  uso: { name: 'Uso', make: () => panelUsageCard() },
+  cuotas: { name: 'Cuotas de tus APIs / tu plan de Claude', make: () => panelQuotasCard() },
+  modelos: { name: 'Modelos más usados', make: () => panelModelsCard() },
+  conexiones: { name: 'Conexiones', make: () => panelConnsCard() },
+  consolas: { name: 'Consolas abiertas', make: () => terms.panelCard() }
+}
+const MODE_NAMES = { chats: '💬 Chats', terms: '▣ Consolas' }
+const SHOW_NAMES = {
+  attach: '📎 Adjuntar imágenes', dir: '📁 Carpeta (chats de Claude)', model: 'Modelo', reason: '🧠 Razonamiento',
+  readonly: '🔒 Solo consultar', hint: 'Texto de ayuda «Enter para enviar»', suggestions: 'Sugerencias en el chat nuevo',
+  search: 'Buscador de chats', version: 'Número de versión abajo', usageButton: 'Botón 📊 Tu uso'
+}
+
+async function saveLayout(patch) {
+  await saveSetting({ layout: { ...layout(), ...patch } })
+}
+
+/** Aplica el diseño guardado: lado, orden de los modos y lo que se esconde. */
+function applyLayout() {
+  const L = layout()
+  $('#app').classList.toggle('swap', Boolean(L.swap))
+  const ms = $('#mode-switch')
+  for (const m of L.modes) { const b = ms.querySelector(`button[data-mode="${m}"]`); if (b) { ms.append(b) } }
+  for (const b of ms.querySelectorAll('button')) { b.hidden = L.modesHidden.includes(b.dataset.mode) }
+  ms.hidden = L.modes.filter(m => !L.modesHidden.includes(m)).length < 2
+  if (L.modesHidden.includes(terms.mode)) { terms.setMode(L.modes.find(m => !L.modesHidden.includes(m)) || 'chats') }
+  $('#attach-btn').hidden = !shown('attach')
+  $('#model-pill').hidden = !shown('model')
+  $('#reason-pill').hidden = !shown('reason')
+  $('#readonly-pill').hidden = !shown('readonly')
+  $('#composer-hint').hidden = !shown('hint')
+  $('.suggestions').hidden = !shown('suggestions')
+  $('.search-wrap').classList.toggle('lay-off', !shown('search'))
+  $('#version').hidden = !shown('version')
+  $('#open-usage').hidden = !shown('usageButton')
+  updateDirPill()
+  renderConnSwitch()
+  schedulePanel()
+}
+
+/**
+ * Ordenar arrastrando (con el ratón; no usa el arrastre del navegador, que no se lleva bien con
+ * los botones). `items`: los hijos que se mueven; `handle`: de dónde se coge (o todo el hijo);
+ * `done(ids)`: el orden nuevo, con el data-id de cada uno.
+ */
+function sortable(box, { items, handle = null, horizontal = false, onStart = null, done }) {
+  box.addEventListener('pointerdown', e => {
+    if (e.button !== 0) { return }
+    const grip = handle ? e.target.closest(handle) : e.target
+    const it = grip && grip.closest(items)
+    if (!it || !box.contains(it) || e.target.closest('input, select, textarea, a, .sp-link, summary')) { return }
+    const x0 = e.clientX
+    const y0 = e.clientY
+    let dragging = false
+    const move = ev => {
+      if (!dragging) {
+        if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) < 6) { return }
+        dragging = true
+        it.classList.add('dragging')
+        document.body.classList.add('sorting')
+        if (onStart) { onStart() }
+      }
+      ev.preventDefault()
+      const others = [...box.querySelectorAll(items)].filter(o => o !== it && !o.hidden)
+      for (const o of others) {
+        const r = o.getBoundingClientRect()
+        const inside = horizontal ? ev.clientX >= r.left && ev.clientX <= r.right : ev.clientY >= r.top && ev.clientY <= r.bottom
+        if (!inside) { continue }
+        const before = horizontal ? ev.clientX < r.left + r.width / 2 : ev.clientY < r.top + r.height / 2
+        o.parentNode.insertBefore(it, before ? o : o.nextSibling)
+        break
+      }
+    }
+    const up = () => {
+      removeEventListener('pointermove', move, true)
+      removeEventListener('pointerup', up, true)
+      removeEventListener('pointercancel', up, true)
+      if (!dragging) { return }
+      it.classList.remove('dragging')
+      document.body.classList.remove('sorting')
+      // El clic que llega justo al soltar no debe abrir nada (si no llega, el bloqueo se quita solo).
+      const swallow = ev => { ev.stopPropagation(); ev.preventDefault() }
+      addEventListener('click', swallow, { capture: true, once: true })
+      setTimeout(() => removeEventListener('click', swallow, true), 250)
+      done([...box.querySelectorAll(items)].map(o => o.dataset.id || o.dataset.card || o.dataset.conn || o.dataset.mode))
+    }
+    addEventListener('pointermove', move, true)
+    addEventListener('pointerup', up, true)
+    addEventListener('pointercancel', up, true)
+  })
+}
+
+/** Junta el orden visible con el completo: los que no se veían conservan su sitio relativo. */
+function mergeOrder(full, visibleOrder) {
+  const vis = new Set(visibleOrder)
+  const queue = visibleOrder.slice()
+  return full.map(id => (vis.has(id) ? queue.shift() : id))
+}
+
+function wireLayout() {
+  sortable($('#conn-switch'), { items: 'button', horizontal: true, done: ids => saveLayout({ conns: mergeOrder(layout().conns, ids) }) })
+  sortable($('#mode-switch'), { items: 'button', horizontal: true, done: ids => saveLayout({ modes: mergeOrder(layout().modes, ids) }) })
+  sortable($('#panel-body'), {
+    items: '.sp-card', handle: '.drag-handle',
+    onStart: () => { P.dragging = true },
+    done: ids => { P.dragging = false; saveLayout({ cards: mergeOrder(layout().cards, ids) }) }
+  })
+  addEventListener('pointerup', () => { if (P.dragging) { setTimeout(() => { P.dragging = false; schedulePanel() }, 0) } }, true)
+  for (const b of document.querySelectorAll('#lay-swap button')) { b.addEventListener('click', () => saveLayout({ swap: b.dataset.v === 'true' })) }
+  $('#lay-reset').addEventListener('click', async () => {
+    const ok = await askBox({ title: '¿Volver al diseño de siempre?', text: 'Se recolocan las pestañas, las tarjetas y los botones como vienen de fábrica. No cambia nada más.', ok: 'Sí, volver' })
+    if (ok) { await saveSetting({ layout: JSON.parse(JSON.stringify({ ...LAY_DEFAULT, show: {} })) }) }
+  })
+}
+
+/** Una fila de Ajustes → Diseño: se arrastra por ⠿ o se mueve con ↑ ↓; a la derecha, sus interruptores. */
+function layRow(id, name, list, key, toggles) {
+  const i = list.indexOf(id)
+  const move = d => { const o = list.slice(); o.splice(i, 1); o.splice(i + d, 0, id); saveLayout({ [key]: o }) }
+  return el('div', { class: 'lay-row', 'data-id': id },
+    el('span', { class: 'lay-grip', text: '⠿', title: 'Arrastra para cambiar de sitio' }),
+    el('span', { class: 'lay-name', text: name }),
+    el('button', { class: 'icon-mini', text: '↑', title: 'Subir', disabled: i <= 0, onclick: () => move(-1) }),
+    el('button', { class: 'icon-mini', text: '↓', title: 'Bajar', disabled: i >= list.length - 1, onclick: () => move(1) }),
+    ...toggles.map(([label, on, fn]) => el('label', { class: 'lay-tog' }, el('input', { type: 'checkbox', checked: on, onchange: e => fn(e.target.checked) }), el('span', { text: label }))))
+}
+
+function renderLayoutSettings() {
+  const L = layout()
+  for (const b of document.querySelectorAll('#lay-swap button')) { b.classList.toggle('active', String(Boolean(L.swap)) === b.dataset.v) }
+  const toggleIn = (key, id) => on => { const set = new Set(L[key]); if (on) { set.add(id) } else { set.delete(id) } saveLayout({ [key]: [...set] }) }
+  $('#lay-modes').replaceChildren(...L.modes.map(m => layRow(m, MODE_NAMES[m], L.modes, 'modes', [['Mostrar', !L.modesHidden.includes(m), on => toggleIn('modesHidden', m)(!on)]])))
+  $('#lay-conns').replaceChildren(...L.conns.map(c => layRow(c, CONN_NAMES[c], L.conns, 'conns', [['Mostrar', !L.connsHidden.includes(c), on => toggleIn('connsHidden', c)(!on)]])))
+  $('#lay-cards').replaceChildren(...L.cards.map(id => layRow(id, CARDS[id].name, L.cards, 'cards', [
+    ['En chats', L.cardsChats.includes(id), toggleIn('cardsChats', id)],
+    ['En consolas', L.cardsTerms.includes(id), toggleIn('cardsTerms', id)]
+  ])))
+  $('#lay-show').replaceChildren(...Object.entries(SHOW_NAMES).map(([k, name]) => el('label', { class: 'toggle' },
+    el('input', { type: 'checkbox', checked: shown(k), onchange: e => saveLayout({ show: { ...L.show, [k]: e.target.checked } }) }), el('span', { text: name }))))
+}
+
+for (const [box, key] of [['#lay-modes', 'modes'], ['#lay-conns', 'conns'], ['#lay-cards', 'cards']]) {
+  sortable($(box), { items: '.lay-row', handle: '.lay-grip', done: ids => saveLayout({ [key]: ids }) })
 }

@@ -19,6 +19,55 @@ const SLUG = /^[a-z0-9][a-z0-9-]{0,100}$/
 const SIDE_WIDTH = [240, 520]
 const PANEL_WIDTH = [240, 680]
 
+// Lo que se puede ordenar u ocultar (la pantalla usa los mismos nombres).
+const LAYOUT_CONNS = ['local', 'server', 'claude']
+const LAYOUT_MODES = ['chats', 'terms']
+const LAYOUT_CARDS = ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones', 'consolas']
+const LAYOUT_SHOW = ['attach', 'dir', 'model', 'reason', 'readonly', 'hint', 'suggestions', 'search', 'version', 'usageButton']
+
+function defaultLayout() {
+  return {
+    conns: LAYOUT_CONNS.slice(),
+    connsHidden: [],
+    modes: LAYOUT_MODES.slice(),
+    modesHidden: [],
+    cards: LAYOUT_CARDS.slice(),
+    cardsChats: ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones'],
+    cardsTerms: ['consolas', 'cuotas', 'conexiones'],
+    swap: false,
+    show: Object.fromEntries(LAYOUT_SHOW.map(k => [k, true]))
+  }
+}
+
+/** Una lista con solo nombres conocidos, sin repetir y, si es un orden, con todos (los que falten al final). */
+function idList(v, known, complete) {
+  const out = Array.isArray(v) ? [...new Set(v.filter(x => known.includes(x)))] : []
+  if (complete) { for (const k of known) { if (!out.includes(k)) { out.push(k) } } }
+  return out
+}
+
+function sanitizeLayout(raw) {
+  const d = defaultLayout()
+  if (!isObj(raw)) { return d }
+  const l = {
+    conns: idList(raw.conns, LAYOUT_CONNS, true),
+    connsHidden: idList(raw.connsHidden, LAYOUT_CONNS, false),
+    modes: idList(raw.modes, LAYOUT_MODES, true),
+    modesHidden: idList(raw.modesHidden, LAYOUT_MODES, false),
+    cards: idList(raw.cards, LAYOUT_CARDS, true),
+    cardsChats: Array.isArray(raw.cardsChats) ? idList(raw.cardsChats, LAYOUT_CARDS, false) : d.cardsChats,
+    cardsTerms: Array.isArray(raw.cardsTerms) ? idList(raw.cardsTerms, LAYOUT_CARDS, false) : d.cardsTerms,
+    swap: bool(raw.swap, false),
+    show: {}
+  }
+  // Siempre queda al menos un modo y una conexión a la vista.
+  if (l.modesHidden.length >= LAYOUT_MODES.length) { l.modesHidden = [] }
+  if (l.connsHidden.length >= LAYOUT_CONNS.length) { l.connsHidden = [] }
+  const show = isObj(raw.show) ? raw.show : {}
+  for (const k of LAYOUT_SHOW) { l.show[k] = bool(show[k], true) }
+  return l
+}
+
 function defaults() {
   return {
     schema: 1,
@@ -48,6 +97,9 @@ function defaults() {
     // usadas hace poco y las terminales que quedaron abiertas al salir (para ofrecer reabrirlas).
     // claudeArgs: opciones que se añaden siempre al abrir Claude Code (por ejemplo «--effort max»).
     terminals: { mode: 'chats', dirs: [], restore: [], claudeArgs: '' },
+    // Diseño: orden y visibilidad de las pestañas, los modos, las tarjetas del panel (en cada modo)
+    // y los botones; swap = lista de chats a la derecha y panel a la izquierda.
+    layout: defaultLayout(),
     secrets: { server: null }
   }
 }
@@ -130,6 +182,7 @@ function sanitize(raw) {
       title: typeof x.title === 'string' ? x.title.slice(0, 80) : ''
     }))
     : []
+  s.layout = sanitizeLayout(raw.layout)
   const sec = isObj(raw.secrets) ? raw.secrets : {}
   s.secrets.server = typeof sec.server === 'string' && sec.server.length < 20000 ? sec.server : null
   return s
@@ -164,7 +217,7 @@ class Settings {
   patch(partial) {
     if (!isObj(partial)) { return this.data }
     const next = JSON.parse(JSON.stringify(this.data))
-    for (const key of ['look', 'server', 'notify', 'pet', 'window', 'models', 'chat', 'shortcut', 'updates', 'terminals']) {
+    for (const key of ['look', 'server', 'notify', 'pet', 'window', 'models', 'chat', 'shortcut', 'updates', 'terminals', 'layout']) {
       if (isObj(partial[key])) { next[key] = { ...next[key], ...partial[key] } }
     }
     if (partial.lastConnection !== undefined) { next.lastConnection = partial.lastConnection }
@@ -182,4 +235,4 @@ class Settings {
   }
 }
 
-module.exports = { Settings, sanitize, defaults, ACCENTS, PALETTES, THEMES, PET_SIZES, DEFAULT_PET, SLUG, SIDE_WIDTH, PANEL_WIDTH }
+module.exports = { Settings, sanitize, defaults, defaultLayout, LAYOUT_CARDS, ACCENTS, PALETTES, THEMES, PET_SIZES, DEFAULT_PET, SLUG, SIDE_WIDTH, PANEL_WIDTH }
