@@ -336,7 +336,7 @@ export function createTerms(ctx) {
         rows.push(el('button', {
           class: 'chat-row term-row outside',
           title: `${a.cwd}\nConversación ${a.sessionId}\nPulsa para traerla a una pestaña de Pedila.`,
-          onclick: () => adopt(a)
+          onclick: () => adoptOutside(a)
         },
         el('div', { class: 't' }, el('span', { class: 'ti small claude', text: KIND_ICON.claude }), el('span', { text: a.name || 'Claude Code' }), a.status === 'busy' ? el('i', { class: 'run' }) : null),
         el('div', { class: 'p', text: `${base(a.cwd)} · ${a.status === 'busy' ? 'trabajando…' : 'en espera'}` })))
@@ -364,7 +364,7 @@ export function createTerms(ctx) {
     ctx.showPopup(items, x, y)
   }
 
-  async function adopt(a) {
+  async function adoptOutside(a) {
     const ok = await ctx.askBox({
       title: 'Traer esta conversación a Pedila',
       text: `Se abrirá «${a.name || 'Claude Code'}» (${a.cwd}) en una pestaña nueva con «claude --resume». Cierra antes la otra ventana: si sigue abierta, la misma conversación quedaría en dos sitios a la vez.${a.status === 'busy' ? ' Ahora mismo está trabajando: mejor espera a que termine.' : ''}`,
@@ -462,7 +462,7 @@ export function createTerms(ctx) {
   }
 
   /** Una pestaña que abrió el proceso principal (p. ej. «Seguir en una consola» desde un chat). */
-  function adopt(info) {
+  function adoptTab(info) {
     if (!info || T.tabs.has(info.id)) { return }
     makeTab(info)
     setMode('terms')
@@ -471,7 +471,7 @@ export function createTerms(ctx) {
 
   return {
     init,
-    adopt,
+    adopt: adoptTab,
     onEvent,
     applyLook,
     setMode,
