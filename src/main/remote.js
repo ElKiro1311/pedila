@@ -158,13 +158,13 @@ class RemoteTransport {
     return { url: base.replace(/^http/, 'ws') + '/api/ws?ticket=' + encodeURIComponent(j.ticket), protocols: null }
   }
 
-  async fetchJson(p, { method = 'GET', body } = {}) {
+  async fetchJson(p, { method = 'GET', body, timeoutMs = 30000 } = {}) {
     if (!this.urls().length) { throw new NeedSetup() }
     if (!this.hasSession()) { throw new NeedLogin() }
     const base = await this.pickBase()
     const headers = { Cookie: this.cookieHeader() }
     if (body !== undefined) { headers['Content-Type'] = 'application/json' }
-    const res = await fetch(base + p, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(30000) })
+    const res = await fetch(base + p, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) })
     this.absorb(res)
     if (res.status === 401) { throw new NeedLogin('La sesión del servidor caducó') }
     const text = await res.text()

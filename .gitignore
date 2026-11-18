@@ -1,5 +1,5 @@
 node_modules/
-dist/
+/dist/
 *.log
 
 # Se generan al preparar la app (npm run assets): iconos desde docs/icono.png, la mascota desde
@@ -10,3 +10,5 @@ src/assets/icon.png
 src/assets/tray.png
 src/assets/tray@2x.png
 src/shell/vendor/
+__pycache__/
+*.pyc

@@ -27,9 +27,16 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
 
 ## Qué hace
 
-- **Dos Hermes en una ventana:**
-  - **Este PC** usa el mismo Hermes que Hermes Desktop, con los mismos chats.
-  - **Servidor** es un Hermes en otra máquina (`hermes dashboard` con usuario y contraseña).
+- **Tus Hermes en una ventana:**
+  - **Este PC** usa el mismo Hermes que Hermes Desktop, con los mismos chats. Solo aparece si Hermes está instalado en el PC.
+  - **Servidor** es un Hermes en otra máquina (`hermes dashboard` con usuario y contraseña). Solo aparece cuando pones su dirección en Ajustes → Servidor.
+  - Con un único Hermes no hay selector: se usa ese.
+- **Cuotas de tus APIs:** si tu Hermes usa OpenRouter, Venice u OpenCode, el panel enseña lo que te queda de cada una:
+  - **OpenRouter:** saldo de créditos; límite de la clave, cuándo se reinicia y lo gastado hoy, en la semana y en el mes.
+  - **Venice:** saldo USD, créditos del plan y DIEM; cuándo se reinicia el DIEM; límites por modelo.
+  - **OpenCode Go:** % usado de las ventanas de 5 h, semana y mes, y cuándo se reinician. De **OpenCode Zen**, OpenCode no publica el saldo.
+  - En cada una, lo que Hermes ha gastado en 24 h, 7 y 30 días.
+  - Lo lee un complemento pequeño de Pedila dentro de Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): tus claves no salen de Hermes, solo llegan números. Se instala con el botón «Activar cuotas» del panel, sin reiniciar Hermes. Las APIs que no tienes no aparecen.
 - **Chats:**
   - lista y búsqueda, por título y en el contenido;
   - fijar, renombrar, archivar (con su vista de archivados) y borrar con confirmación;
@@ -118,6 +125,6 @@ Solo en desarrollo:
 
 **Pedila** (Greek *πέδιλα*, Hermes' winged sandals, Latin *talaria*) is an unofficial Windows desktop client, with Pedila the messenger girl as its mascot, for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It talks to the Hermes on this PC (the same one Hermes Desktop uses) and to a remote `hermes dashboard`.
 
-Features: live chat, tool and permission cards, chat management (pin, rename, archive, delete), full-text search, images, a «read-only» mode, a reasoning level, snippets, usage stats, a tray icon, five themes (dark and light) and an animated pet: Pedila by default, or any of 5,000+ from Petdex.
+Features: live chat, tool and permission cards, chat management (pin, rename, archive, delete), full-text search, images, a «read-only» mode, a reasoning level, snippets, usage stats, what is left on the paid APIs your Hermes uses (OpenRouter, Venice, OpenCode — read by a small companion Hermes plugin, so API keys never leave Hermes), a tray icon, five themes (dark and light) and an animated pet: Pedila by default, or any of 5,000+ from Petdex.
 
 The UI is in Spanish. Not affiliated with Nous Research. Code under the MIT license.

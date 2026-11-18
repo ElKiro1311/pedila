@@ -25,6 +25,61 @@ const COLS = 100
 const str = v => (typeof v === 'string' ? v : '')
 const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 
+// El complemento de Hermes que lee las cuotas (carpeta hermes-plugin/pedila de este repositorio).
+const QUOTA_PLUGIN = 'pedila'
+const QUOTA_PLUGIN_SOURCE = 'ElKiro1311/pedila/hermes-plugin/pedila'
+const QUOTA_KINDS = ['openrouter', 'venice', 'opencode-go', 'opencode-zen']
+const INSTALL_TIMEOUT = 180000
+
+/** ¿Qué API de pago es, por su dirección? (las mismas reglas que el complemento). */
+function paidKindOf(u) {
+  try {
+    const p = new URL(String(u || ''))
+    const h = p.hostname.toLowerCase()
+    if (h === 'openrouter.ai' || h.endsWith('.openrouter.ai')) { return 'openrouter' }
+    if (h === 'api.venice.ai' || h.endsWith('.venice.ai')) { return 'venice' }
+    if (h === 'opencode.ai' || h.endsWith('.opencode.ai')) { return p.pathname.toLowerCase().includes('/go') ? 'opencode-go' : 'opencode-zen' }
+  } catch {}
+  return null
+}
+
+const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+const isoOf = v => (typeof v === 'string' && v && Number.isFinite(Date.parse(v)) ? v : null)
+
+/** La respuesta del complemento, limpia: solo los campos y tipos que la pantalla sabe pintar. */
+function quotaData(j) {
+  const spentOf = s => {
+    if (!s || typeof s !== 'object') { return null }
+    const one = p => (p && typeof p === 'object' ? { tokens: num(p.tokens) || 0, calls: num(p.calls) || 0, cost: num(p.cost) || 0 } : { tokens: 0, calls: 0, cost: 0 })
+    return { day: one(s.day), week: one(s.week), month: one(s.month) }
+  }
+  const providers = (Array.isArray(j.providers) ? j.providers : []).filter(p => p && QUOTA_KINDS.includes(p.kind)).slice(0, 12).map(p => {
+    const o = { kind: p.kind, name: cut(str(p.name) || p.kind, 40), ok: p.ok !== false, error: p.ok === false ? cut(str(p.error) || 'no se pudo leer', 200) : '', noApi: Boolean(p.no_api), spent: spentOf(p.spent) }
+    if (p.kind === 'openrouter') {
+      const kl = p.key_limit && typeof p.key_limit === 'object' ? p.key_limit : null
+      const ku = p.key_usage && typeof p.key_usage === 'object' ? p.key_usage : {}
+      Object.assign(o, {
+        balance: num(p.balance), creditsTotal: num(p.credits_total), creditsUsed: num(p.credits_used),
+        freeTier: typeof p.free_tier === 'boolean' ? p.free_tier : null,
+        keyLimit: kl && num(kl.limit) ? { limit: num(kl.limit), remaining: num(kl.remaining), reset: ['daily', 'weekly', 'monthly'].includes(kl.reset) ? kl.reset : null } : null,
+        keyUsage: { total: num(ku.total), day: num(ku.day), week: num(ku.week), month: num(ku.month) }
+      })
+    } else if (p.kind === 'venice') {
+      Object.assign(o, {
+        usd: num(p.usd), diem: num(p.diem), bundled: num(p.bundled), tier: cut(str(p.tier), 30),
+        access: typeof p.access === 'boolean' ? p.access : null, nextEpoch: isoOf(p.next_epoch), keyExpires: isoOf(p.key_expires),
+        modelLimits: (Array.isArray(p.model_limits) ? p.model_limits : []).slice(0, 12).filter(m => m && typeof m.model === 'string')
+          .map(m => ({ model: cut(m.model, 80), rpm: num(m.rpm), rpd: num(m.rpd), tpm: num(m.tpm) }))
+      })
+    } else if (p.kind === 'opencode-go') {
+      o.windows = (Array.isArray(p.windows) ? p.windows : []).slice(0, 4).filter(w => w && num(w.percent) !== null)
+        .map(w => ({ id: cut(str(w.id), 20), label: cut(str(w.label), 20), percent: Math.max(0, Math.min(100, num(w.percent))), resetsAt: isoOf(w.resets_at) }))
+    }
+    return o
+  })
+  return { version: cut(str(j.version), 20), fetchedAt: isoOf(j.fetched_at), providers }
+}
+
 /** ¿La dirección del proveedor está en tu red (o en esta máquina)? Entonces el modelo es local. */
 function isLocalUrl(u) {
   try {
@@ -235,6 +290,13 @@ class Connection extends EventEmitter {
 
   async connect() {
     if (this.stopped || this.connecting || this.socket) { return }
+    // Sin Hermes en este equipo: se mira en silencio (sin pasar por «conectando», que haría
+    // reaparecer la pestaña un momento cada minuto).
+    if (this.state === 'missing' && this.transport.available && !this.transport.available()) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = setTimeout(() => this.connect(), 60000)
+      return
+    }
     this.connecting = true
     this.setState('connecting', this.state === 'offline' ? this.detail : '')
     try {
@@ -259,6 +321,12 @@ class Connection extends EventEmitter {
         this.setState('login', e.message)
       } else if (e.setup) {
         this.setState('setup', e.message)
+      } else if (e.missing) {
+        // Este equipo no tiene ese Hermes: la pestaña se oculta. Se mira de nuevo cada minuto por si
+        // se instala con Pedila abierta.
+        this.setState('missing', e.message)
+        clearTimeout(this.retryTimer)
+        this.retryTimer = setTimeout(() => this.connect(), 60000)
       } else if (e.fatal) {
         this.setState('error', e.message)
       } else {
@@ -652,6 +720,51 @@ class Connection extends EventEmitter {
     return url
   }
 
+  /**
+   * Lo que queda de las APIs de pago de este Hermes (OpenRouter, Venice, OpenCode), leído por el
+   * complemento «pedila» que corre dentro de Hermes: las claves no salen de allí, solo llegan números.
+   * { state: 'ok', data } · { state: 'missing' } si el complemento no está (o no está activado).
+   */
+  async quotas(fresh = false) {
+    const r = await this.transport.fetchJson(`/api/plugins/${QUOTA_PLUGIN}/cuotas${fresh ? '?fresh=1' : ''}`)
+    if ([403, 404, 405].includes(r.status) || (r.status === 200 && !(r.json && r.json.plugin === QUOTA_PLUGIN))) { return { state: 'missing' } }
+    if (r.status !== 200 || !r.json || !Array.isArray(r.json.providers)) { throw new Error(`Hermes no dio las cuotas (${r.status})`) }
+    return { state: 'ok', data: quotaData(r.json) }
+  }
+
+  /**
+   * Instala y activa el complemento «pedila» en este Hermes con su propia ruta de instalación
+   * (la del botón «Instalar» de su página de complementos), sin reiniciarlo. Si el análisis de
+   * seguridad de Hermes pone una pega, se devuelve para que la persona decida (`force` = instalar igual).
+   */
+  async installQuotaPlugin(force = false) {
+    // Instalar clona el repositorio y lo analiza: puede tardar bastante más que una consulta.
+    const r = await this.transport.fetchJson('/api/dashboard/agent-plugins/install', { method: 'POST', body: { identifier: QUOTA_PLUGIN_SOURCE, enable: true, force: Boolean(force) }, timeoutMs: INSTALL_TIMEOUT })
+    const j = r.json || {}
+    if (r.status === 200 && j.ok) { return { ok: true, restart: Boolean(j.restart_required) } }
+    const detail = str(j.detail) || str(j.error)
+    // El análisis de seguridad de Hermes paró la instalación (la ruta lo devuelve como 400 con el informe).
+    if (j.scan_blocked || /security scan blocked/i.test(detail)) {
+      const report = str(j.scan_verdict) || detail
+      const lines = Array.isArray(j.scan_findings)
+        ? j.scan_findings.map(f => (typeof f === 'string' ? f : str(f && (f.message || f.description || f.rule || f.pattern))))
+        : detail.split(/\r?\n/).slice(1)
+      return {
+        ok: false,
+        scan: /dangerous/i.test(report) ? 'dangerous' : 'caution',
+        findings: lines.map(x => x.trim()).filter(x => x && !/^review the findings|scanning can be configured/i.test(x)).slice(0, 12).map(x => cut(x, 300))
+      }
+    }
+    // Ya estaba instalado (por ejemplo, de un intento anterior) pero sin activar: se activa.
+    if (/already exists|already installed/i.test(detail)) {
+      const e = await this.transport.fetchJson(`/api/dashboard/agent-plugins/${QUOTA_PLUGIN}/enable`, { method: 'POST', body: {} })
+      if (e.status === 200) { return { ok: true, restart: Boolean(e.json && e.json.restart_required) } }
+      throw new Error(cut(str(e.json && (e.json.detail || e.json.error)) || `Hermes no lo activó (${e.status})`, 300))
+    }
+    if (r.status === 404 || r.status === 405) { throw new Error('este Hermes no sabe instalar complementos desde fuera (actualízalo)') }
+    throw new Error(cut(detail || `Hermes respondió ${r.status}`, 300))
+  }
+
   async transcript(sid) {
     const r = await this.transport.fetchJson(`/api/sessions/${encodeURIComponent(sid)}/messages?limit=400&order=latest`)
     if (r.status === 404) { return [] }
@@ -669,11 +782,14 @@ class Connection extends EventEmitter {
       id: str(pv.slug || pv.id || pv.provider || pv.name),
       name: str(pv.name || pv.label || pv.slug || pv.id),
       local: isLocalUrl(pv.api_url || pv.base_url),
+      paid: paidKindOf(pv.api_url || pv.base_url),
       models: (Array.isArray(pv.models) ? pv.models : []).map(m => (typeof m === 'string' ? { id: m, name: m } : { id: str(m.id || m.model || m.name), name: str(m.name || m.label || m.id || m.model) })).filter(m => m.id)
     })).filter(pv => pv.id && pv.models.length)
     const curProvider = str(r && r.provider)
     const cur = providers.find(pv => pv.id.toLowerCase() === curProvider.toLowerCase())
     return {
+      // Las APIs de pago que ese Hermes tiene puestas (para ofrecer activar sus cuotas).
+      paid: [...new Set(providers.map(pv => pv.paid).filter(Boolean))],
       current: { model: str(r && r.model), provider: curProvider, local: Boolean(cur && cur.local) },
       providers: [...providers.filter(pv => pv.local), ...providers.filter(pv => !pv.local)]
     }
@@ -770,4 +886,4 @@ class Connection extends EventEmitter {
   }
 }
 
-module.exports = { Connection, normalizeTranscript, sessionRow, argsSummary, isLocalUrl, todoSnapshot, todoStateOf, isTodoCall }
+module.exports = { quotaData, paidKindOf, Connection, normalizeTranscript, sessionRow, argsSummary, isLocalUrl, todoSnapshot, todoStateOf, isTodoCall }

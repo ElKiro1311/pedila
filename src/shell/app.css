@@ -413,6 +413,22 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .sp-model .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-model .sp-bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
 .sp-model .sp-bar > i { display: block; height: 100%; background: var(--accent); }
+.q-prov { padding: 6px 0 8px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.q-prov:first-of-type { border-top: 0; padding-top: 0; }
+.q-head { display: flex; align-items: baseline; gap: 8px; }
+.q-head b { flex: 1; font-size: .88rem; }
+.q-big { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.q-line { font-size: .78rem; line-height: 1.35; }
+.q-line.warn { color: var(--warn); }
+.q-bar { height: 5px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.q-bar > i { display: block; height: 100%; background: var(--accent); }
+.q-bar.warn > i { background: var(--warn); }
+.q-win { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: .8rem; }
+.q-win .q-bar, .q-win .q-line { grid-column: 1 / -1; }
+.q-more summary { font-size: .78rem; color: var(--muted); cursor: pointer; }
+.q-ago { font-size: .7rem; color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 400; }
+.q-ask { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.q-actions { display: flex; gap: 8px; margin-top: 4px; }
 .sp-conn { display: flex; align-items: center; gap: 8px; font-size: .84rem; padding: 3px 0; }
 .sp-conn .s { margin-left: auto; color: var(--muted); font-size: .78rem; }
 #panel-toggle.active { color: var(--accent); }

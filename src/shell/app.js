@@ -1,6 +1,6 @@
 // Pedila: la pantalla. Sin Node; habla con el proceso principal por window.hp (preload).
 import { Pet, loadSheet } from './pet.js'
-import { kfmt, setHour12, hhmm, full, dayLabel, span, tokensOf, modelName, tasksLine } from './fmt.mjs'
+import { kfmt, setHour12, hhmm, full, dayLabel, span, ago, tokensOf, modelName, tasksLine, usd, nextUtcReset, dayAhead } from './fmt.mjs'
 
 const demo = new URLSearchParams(location.search).get('demo') === '1'
 const api = demo ? (await import('./demo.js')).demoApi : window.hp
@@ -209,10 +209,28 @@ function applyLook() {
 }
 
 // ── Conexiones ───────────────────────────────────────────────────────────────────────────────
+/**
+ * Los Hermes que esta persona tiene: el de este PC si está instalado y el del servidor si puso su
+ * dirección en Ajustes. Los demás no se enseñan (ni pestaña, ni tarjeta, ni bandeja). Si no tiene
+ * ninguno, queda «Este PC» con el aviso de cómo empezar.
+ */
+function visibleConns() {
+  const v = []
+  if (S.conns.local && S.conns.local.state !== 'missing') { v.push('local') }
+  if (S.settings && S.settings.server && Array.isArray(S.settings.server.urls) && S.settings.server.urls.length) { v.push('server') }
+  return v.length ? v : ['local']
+}
+
 function renderConnSwitch() {
   schedulePanel()
+  const vis = visibleConns()
+  // Con un solo Hermes no hace falta elegir: el selector entero se esconde.
+  $('#conn-switch').hidden = vis.length < 2
+  for (const b of document.querySelectorAll('#usage-tabs button')) { b.hidden = !vis.includes(b.dataset.conn) }
+  if (!vis.includes(S.active)) { switchConn(vis[0]); return }
   for (const b of document.querySelectorAll('#conn-switch button')) {
     const c = b.dataset.conn
+    b.hidden = !vis.includes(c)
     b.classList.toggle('active', c === S.active)
     const dot = b.querySelector('.dot')
     dot.className = 'dot ' + S.conns[c].state
@@ -222,7 +240,7 @@ function renderConnSwitch() {
 
 function connLabel(c) {
   const st = S.conns[c]
-  const what = { ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', error: 'error', off: 'apagado' }[st.state] || st.state
+  const what = { ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', missing: 'sin Hermes instalado', error: 'error', off: 'apagado' }[st.state] || st.state
   return `${CONN_NAMES[c]}: ${what}${st.detail && st.state !== 'ready' ? ' — ' + st.detail : ''}`
 }
 
@@ -231,7 +249,11 @@ function renderBanner() {
   const st = S.conns[S.active]
   b.className = ''
   b.replaceChildren()
-  if (st.state === 'login') {
+  if (st.state === 'missing') {
+    b.className = 'login'
+    b.append(el('div', { class: 'grow' }, el('strong', { text: 'No encuentro Hermes en este PC. ' }), el('span', { class: 'muted', text: 'Instálalo aquí, o si tu Hermes está en otro equipo pon su dirección en Ajustes → Servidor.' })),
+      el('button', { class: 'btn-primary', text: 'Abrir Ajustes', onclick: () => openSettings('servidor') }))
+  } else if (st.state === 'login') {
     b.className = 'login'
     b.append(el('div', { class: 'grow' }, el('strong', { text: 'Falta iniciar sesión en el Hermes del servidor. ' }), el('span', { class: 'muted', text: st.detail && !/^Hay que/.test(st.detail) ? st.detail : 'Usa el usuario y la contraseña de su página web.' })),
       el('button', { class: 'btn-primary', text: 'Iniciar sesión', onclick: openLogin }))
@@ -842,6 +864,8 @@ function onEvent(evt) {
       renderConnSwitch()
       if (evt.conn === S.active) { renderBanner() }
       if (evt.state === 'ready' && prev !== 'ready') { loadSessions(evt.conn); ensureModelDefault(evt.conn) }
+      // Una conexión que vuelve puede ser otro Hermes (reinicio, otra sesión): cuotas nuevas.
+      if (evt.state !== 'ready' && prev === 'ready') { forgetQuotas(evt.conn) }
       if ((evt.state === 'login' || evt.state === 'setup') && evt.conn === S.active) { S.listError.server = evt.state; renderList() }
       updatePet()
       return
@@ -1334,9 +1358,13 @@ function renderSettings() {
 
 async function saveSetting(patch) {
   try {
+    const before = JSON.stringify(S.settings && S.settings.server ? S.settings.server.urls : [])
     S.settings = await call(api.settings, patch)
+    // Otra dirección del servidor = quizá otro Hermes: sus cuotas se vuelven a pedir.
+    if (JSON.stringify(S.settings.server.urls) !== before) { forgetQuotas('server') }
     applyLook()
     renderSettings()
+    renderConnSwitch()
   } catch (e) {
     showToastLine(`No pude guardar el ajuste: ${e.message}`)
   }
@@ -1457,7 +1485,7 @@ async function start() {
   setInterval(() => { if (!$('#welcome').hidden) { welcomePet.flash('waving', 1) } }, 15000)
   await loadSessions(S.active)
   const other = S.active === 'local' ? 'server' : 'local'
-  loadSessions(other)
+  if (visibleConns().includes(other)) { loadSessions(other) }
 }
 
 start().catch(e => {
@@ -1909,11 +1937,212 @@ function panelModelsCard() {
     }))
 }
 
+// ── Cuotas de las APIs de pago (OpenRouter, Venice, OpenCode) ───────────────────────────────
+// Las lee el complemento «pedila» dentro de Hermes (las claves no salen de allí). La tarjeta solo
+// aparece si ese Hermes tiene alguna de esas APIs: con el complemento, las que tienen clave; sin él,
+// un botón para activarlo si Hermes tiene alguna puesta. Si no, no se ve nada.
+const Q = { data: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, again: { local: false, server: false }, gen: { local: 0, server: 0 }, err: { local: '', server: '' }, note: { local: '', server: '' }, busy: { local: '', server: '' }, ask: { local: null, server: null }, installed: { local: false, server: false } }
+const QUOTA_NAMES = { openrouter: 'OpenRouter', venice: 'Venice', 'opencode-go': 'OpenCode Go', 'opencode-zen': 'OpenCode Zen' }
+const RESET_NAMES = { daily: 'cada día', weekly: 'cada semana', monthly: 'cada mes' }
+
+/** Olvida las cuotas de una conexión (otra dirección, otra sesión…): se vuelven a pedir. */
+function forgetQuotas(conn) {
+  Q.gen[conn]++ // lo que esté llegando de antes ya no vale
+  Q.data[conn] = null
+  Q.at[conn] = 0
+  Q.err[conn] = ''
+  Q.note[conn] = ''
+  Q.ask[conn] = null
+  Q.installed[conn] = false
+}
+
+/** Las cuotas de una conexión, como mucho una vez por minuto (o al pulsar ↻). */
+async function loadQuotas(conn, fresh = false) {
+  if (Q.loading[conn]) { if (fresh) { Q.again[conn] = true } return }
+  if (!fresh && Date.now() - Q.at[conn] < 60000) { return }
+  if (!S.conns[conn] || S.conns[conn].state !== 'ready') { return }
+  Q.loading[conn] = true
+  const gen = Q.gen[conn]
+  try {
+    const r = await call(api.quotas, conn, fresh)
+    if (gen !== Q.gen[conn]) { return }
+    Q.data[conn] = r
+    Q.err[conn] = ''
+    if (r && r.state === 'ok') { Q.note[conn] = ''; Q.installed[conn] = false }
+  } catch (e) {
+    if (gen === Q.gen[conn]) { Q.err[conn] = e.message || String(e) }
+  } finally {
+    if (gen === Q.gen[conn]) { Q.at[conn] = Date.now() }
+    Q.loading[conn] = false
+    schedulePanel()
+    // Alguien pidió leer de nuevo mientras tanto (↻ o justo tras instalar): se lee otra vez.
+    if (Q.again[conn]) { Q.again[conn] = false; loadQuotas(conn, true) }
+  }
+}
+
+async function installQuotas(conn, force = false) {
+  if (Q.busy[conn] === 'installing') { return }
+  Q.busy[conn] = 'installing'
+  Q.ask[conn] = null
+  Q.note[conn] = ''
+  schedulePanel()
+  try {
+    const r = await call(api.quotasInstall, conn, force)
+    Q.busy[conn] = ''
+    if (!r.ok) {
+      // El análisis de seguridad de Hermes puso una pega: se enseña y decide la persona.
+      if (r.scan) { Q.ask[conn] = { scan: r.scan, findings: r.findings || [] } } else { Q.note[conn] = r.error || 'No pude activar las cuotas.' }
+      schedulePanel()
+      return
+    }
+    Q.installed[conn] = true
+    if (r.restart) { Q.note[conn] = 'Complemento instalado. Hermes pide reiniciarse para cargarlo: cuando lo reinicies, las cuotas aparecerán aquí.' }
+    schedulePanel()
+    await loadQuotas(conn, true)
+  } catch (e) {
+    Q.busy[conn] = ''
+    Q.note[conn] = `No pude activar las cuotas: ${e.message || e}`
+    // Puede que se cortara la espera pero Hermes sí lo instalara: se vuelve a mirar.
+    loadQuotas(conn, true)
+    schedulePanel()
+  }
+}
+
+function quotaBar(usedPct, warnAt = 80) {
+  const p = Math.max(0, Math.min(100, usedPct))
+  return el('div', { class: 'sp-bar q-bar' + (p >= warnAt ? ' warn' : '') }, el('i', { style: `width:${Math.max(p > 0 ? 2 : 0, Math.round(p))}%` }))
+}
+
+/** «se reinicia en 3 h 10 min (21:00)» o «se reinicia mañana, 19:00». */
+function resetText(ms, now = Date.now()) {
+  if (!Number.isFinite(ms)) { return '' }
+  if (ms <= now) { return 'se reinicia ahora' }
+  if (ms - now < 24 * 3600e3) { return `se reinicia en ${span(ms - now)} (${hhmm(ms)})` }
+  return `se reinicia ${dayAhead(ms, now)} a las ${hhmm(ms)}`
+}
+
+function spentLine(sp) {
+  if (!sp) { return null }
+  const part = (label, x) => `${label} ${kfmt(x.tokens)}${x.cost > 0 ? ' · ' + usd(x.cost) : ''}`
+  return el('div', { class: 'q-line muted', title: 'Lo que Hermes ha gastado con esta API según su propio registro: tokens leídos + escritos (y el coste, si Hermes lo conoce). Cuenta también resúmenes, títulos e imágenes.' },
+    `Hermes gastó: ${part('24 h', sp.day)} · ${part('7 d', sp.week)} · ${part('30 d', sp.month)}`)
+}
+
+function quotaBlock(p) {
+  const now = Date.now()
+  const head = el('div', { class: 'q-head' }, el('b', { text: p.name || QUOTA_NAMES[p.kind] || p.kind }))
+  const rows = []
+  if (!p.ok) {
+    rows.push(el('div', { class: 'q-line warn', text: `No pude leerla: ${p.error}` }))
+  } else if (p.kind === 'openrouter') {
+    head.append(el('span', { class: 'q-big', text: usd(p.balance), title: 'Saldo de créditos que te queda en OpenRouter' }))
+    if (p.creditsTotal > 0 && p.creditsUsed !== null) {
+      rows.push(quotaBar(p.creditsUsed / p.creditsTotal * 100))
+      rows.push(el('div', { class: 'q-line muted', text: `Gastado ${usd(p.creditsUsed)} de ${usd(p.creditsTotal)} comprados` }))
+    }
+    if (p.keyLimit) {
+      const used = p.keyLimit.remaining !== null ? p.keyLimit.limit - p.keyLimit.remaining : null
+      const at = nextUtcReset(p.keyLimit.reset, now)
+      if (used !== null) { rows.push(quotaBar(used / p.keyLimit.limit * 100)) }
+      rows.push(el('div', { class: 'q-line', text: `Límite de la clave: quedan ${usd(p.keyLimit.remaining)} de ${usd(p.keyLimit.limit)}${p.keyLimit.reset ? ` · ${RESET_NAMES[p.keyLimit.reset]}, ${resetText(at, now)}` : ' · no se reinicia'}` }))
+    }
+    const ku = p.keyUsage || {}
+    if (ku.total !== null && ku.total !== undefined) { rows.push(el('div', { class: 'q-line muted', text: `Esta clave: hoy ${usd(ku.day)} · semana ${usd(ku.week)} · mes ${usd(ku.month)} · total ${usd(ku.total)}` })) }
+    if (p.freeTier) { rows.push(el('div', { class: 'q-line muted', text: 'Sin créditos comprados: los modelos «:free» tienen un límite de peticiones al día que vuelve a las 00:00 UTC.' })) }
+  } else if (p.kind === 'venice') {
+    const money = (p.usd || 0) + (p.bundled || 0)
+    head.append(el('span', { class: 'q-big', text: usd(money), title: 'Saldo USD + créditos incluidos en tu plan' }))
+    rows.push(spKv([
+      ['Saldo USD', usd(p.usd)],
+      p.bundled ? ['Créditos del plan', usd(p.bundled)] : null,
+      ['DIEM de hoy', p.diem === null ? '—' : `${p.diem.toLocaleString('es', { maximumFractionDigits: 2 })} DIEM`, '1 DIEM = 1 $ de uso al día mientras lo tienes en stake; lo que no gastas no se acumula'],
+      p.tier ? ['Plan', p.tier] : null
+    ]))
+    const epoch = p.nextEpoch ? Date.parse(p.nextEpoch) : NaN
+    if (Number.isFinite(epoch)) { rows.push(el('div', { class: 'q-line', text: `DIEM: ${resetText(epoch, now)}` })) }
+    if (p.access === false) { rows.push(el('div', { class: 'q-line warn', text: 'Sin acceso: Venice no deja usar la API (falta saldo).' })) }
+    if (p.keyExpires) { rows.push(el('div', { class: 'q-line muted', text: `La clave caduca el ${full(Date.parse(p.keyExpires))}` })) }
+    if (p.modelLimits.length) {
+      const fmtL = m => [m.rpm ? `${kfmt(m.rpm)}/min` : '', m.rpd ? `${kfmt(m.rpd)}/día` : '', m.tpm ? `${kfmt(m.tpm)} tokens/min` : ''].filter(Boolean).join(' · ')
+      rows.push(el('details', { class: 'q-more' }, el('summary', { text: `Límites por modelo (${p.modelLimits.length})` }),
+        ...p.modelLimits.map(m => el('div', { class: 'q-line muted', title: m.model, text: `${modelName(m.model)}: ${fmtL(m)}` }))))
+    }
+  } else if (p.kind === 'opencode-go') {
+    if (!p.windows.length) {
+      rows.push(el('div', { class: 'q-line muted', text: 'OpenCode no dio el uso de tu plan.' }))
+    } else {
+      const worst = Math.max(0, ...p.windows.map(w => w.percent))
+      head.append(el('span', { class: 'q-big', text: `${Math.round(100 - worst)} %`, title: 'Lo que te queda de la ventana más gastada' }))
+    }
+    const label = { rolling: 'Ventana de 5 h', weekly: 'Semana', monthly: 'Mes' }
+    for (const w of p.windows) {
+      const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN
+      rows.push(el('div', { class: 'q-win' }, el('span', { text: label[w.id] || w.label }),
+        el('span', { class: 'muted', text: `${Math.round(w.percent)} % usado` }), quotaBar(w.percent),
+        Number.isFinite(at) ? el('span', { class: 'q-line muted', text: resetText(at, now) }) : null))
+    }
+  } else if (p.kind === 'opencode-zen') {
+    rows.push(el('div', { class: 'q-line muted', text: 'OpenCode no publica el saldo de Zen (míralo en opencode.ai). Aquí sale lo que Hermes ha gastado con ella.' }))
+  }
+  return el('div', { class: 'q-prov' }, head, ...rows, spentLine(p.spent))
+}
+
+function panelQuotasCard() {
+  const conn = S.active
+  loadQuotas(conn)
+  const q = Q.data[conn]
+  const title = `Cuotas · ${CONN_NAMES[conn]}`
+  const refresh = el('button', { class: 'sp-link', text: Q.loading[conn] ? '…' : '↻', title: 'Volver a leer las cuotas', 'aria-label': 'Volver a leer las cuotas', 'data-focus': 'quotas-refresh', onclick: () => loadQuotas(conn, true) })
+  const note = Q.note[conn] ? el('div', { class: 'q-line warn', text: Q.note[conn] }) : null
+  const err = Q.err[conn] ? el('div', { class: 'q-line warn', text: `No pude leer las cuotas: ${Q.err[conn]}` }) : null
+  if (!q) {
+    // La primera lectura falló: se dice, con la opción de reintentar (si no, no hay nada que enseñar).
+    return err ? el('section', { class: 'sp-card' }, el('h4', {}, el('span', { class: 'grow', text: title }), refresh), err) : null
+  }
+  if (q.state === 'missing') {
+    if (!Array.isArray(q.paid) || !q.paid.length) { return null }
+    const names = q.paid.map(k => QUOTA_NAMES[k] || k).join(', ')
+    const busy = Q.busy[conn] === 'installing'
+    const ask = Q.ask[conn]
+    const parts = [el('h4', { text: title }),
+      el('p', { class: 'small', text: `Este Hermes usa ${names}. Pedila puede enseñarte lo que te queda de cada una: saldo, límites, cuándo se reinician y lo que llevas gastado.` }),
+      el('p', { class: 'muted small', text: 'Para eso instala en Hermes un complemento pequeño de Pedila: lee el saldo dentro de Hermes y solo devuelve números, así tus claves no salen de allí. No toca tus chats ni reinicia Hermes.' })]
+    if (ask && ask.scan === 'dangerous') {
+      parts.push(el('div', { class: 'q-ask' },
+        el('p', { class: 'small warn', text: 'El análisis de seguridad de Hermes no deja instalar este complemento.' }),
+        ...ask.findings.map(f => el('div', { class: 'q-line muted', text: '• ' + f })),
+        el('div', { class: 'q-actions' }, el('button', { class: 'btn-ghost', text: 'Entendido', onclick: () => { Q.ask[conn] = null; schedulePanel() } }))))
+    } else if (ask) {
+      parts.push(el('div', { class: 'q-ask' },
+        el('p', { class: 'small', text: 'El análisis de seguridad de Hermes pide confirmación. Es lo esperable: el complemento usa tus claves dentro de Hermes para preguntar el saldo.' }),
+        ...ask.findings.map(f => el('div', { class: 'q-line muted', text: '• ' + f })),
+        el('div', { class: 'q-actions' },
+          el('button', { class: 'btn-primary', text: 'Instalar igualmente', onclick: () => installQuotas(conn, true) }),
+          el('button', { class: 'btn-ghost', text: 'Ahora no', onclick: () => { Q.ask[conn] = null; schedulePanel() } }))))
+    } else if (Q.installed[conn]) {
+      parts.push(el('button', { class: 'btn-ghost', text: Q.loading[conn] ? 'Comprobando…' : 'Ya lo reinicié: comprobar', disabled: Q.loading[conn], onclick: () => loadQuotas(conn, true) }))
+    } else {
+      parts.push(el('button', { class: 'btn-primary', text: busy ? 'Instalando… (puede tardar un minuto)' : 'Activar cuotas', disabled: busy, onclick: () => installQuotas(conn) }))
+    }
+    if (note) { parts.push(note) }
+    if (err) { parts.push(err) }
+    return el('section', { class: 'sp-card' }, ...parts)
+  }
+  const provs = q.data && Array.isArray(q.data.providers) ? q.data.providers : []
+  if (!provs.length) { return null }
+  const at = q.data.fetchedAt ? Date.parse(q.data.fetchedAt) : NaN
+  return el('section', { class: 'sp-card' },
+    el('h4', {}, el('span', { class: 'grow', text: title }),
+      Number.isFinite(at) ? el('span', { class: 'q-ago', text: ago(at), title: `Leído: ${full(at)}` }) : null, refresh),
+    ...provs.map(quotaBlock),
+    err)
+}
+
 function panelConnsCard() {
   return el('section', { class: 'sp-card' }, el('h4', { text: 'Conexiones' }),
-    ...Object.keys(CONN_NAMES).filter(c => S.conns[c]).map(c => {
+    ...visibleConns().filter(c => S.conns[c]).map(c => {
       const st = S.conns[c]
-      const what = { ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', error: 'error', off: 'apagado' }[st.state] || st.state
+      const what = { ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', missing: 'sin Hermes instalado', error: 'error', off: 'apagado' }[st.state] || st.state
       return el('div', { class: 'sp-conn', title: connLabel(c) }, el('span', { class: 'dot ' + st.state }), el('span', { text: CONN_NAMES[c] }), el('span', { class: 's', text: st.state === 'ready' && st.detail ? `${what} · ${st.detail}` : what }))
     }))
 }
@@ -1924,7 +2153,7 @@ function renderPanel() {
   const top = body.scrollTop
   // Con el foco en una tarjeta que se puede pulsar, al repintar se le devuelve (teclado).
   const focused = body.contains(document.activeElement) ? document.activeElement.getAttribute('data-focus') : null
-  body.replaceChildren(...[panelNowCard(), panelTasksCard(), panelChatCard(), panelUsageCard(), panelModelsCard(), panelConnsCard()].filter(Boolean))
+  body.replaceChildren(...[panelNowCard(), panelTasksCard(), panelChatCard(), panelUsageCard(), panelQuotasCard(), panelModelsCard(), panelConnsCard()].filter(Boolean))
   body.scrollTop = top
   P.day = new Date().toDateString()
   if (focused) { body.querySelector(`[data-focus="${focused}"]`)?.focus({ preventScroll: true }) }

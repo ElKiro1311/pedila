@@ -119,6 +119,14 @@ export const demoApi = {
   },
   attachImage: () => ok({ ok: true }),
   subagents: () => ok(null),
+  // Cuotas de ejemplo: «Este PC» con el complemento puesto (OpenRouter y OpenCode Go); el servidor sin él.
+  quotas: conn => ok(conn === 'local'
+    ? { state: 'ok', paid: ['openrouter', 'opencode-go'], data: { version: '1.0.0', fetchedAt: new Date(now - 40e3).toISOString(), providers: [
+      { kind: 'openrouter', name: 'OpenRouter', ok: true, error: '', noApi: false, balance: 7.42, creditsTotal: 10, creditsUsed: 2.58, freeTier: false, keyLimit: { limit: 5, remaining: 3.9, reset: 'daily' }, keyUsage: { total: 2.58, day: 1.1, week: 1.9, month: 2.58 }, spent: { day: { tokens: 412000, calls: 37, cost: 1.08 }, week: { tokens: 1650000, calls: 140, cost: 1.87 }, month: { tokens: 2310000, calls: 201, cost: 2.55 } } },
+      { kind: 'opencode-go', name: 'OpenCode Go', ok: true, error: '', noApi: false, windows: [{ id: 'rolling', label: '5 h', percent: 64, resetsAt: new Date(now + 95 * 60e3).toISOString() }, { id: 'weekly', label: 'semana', percent: 31, resetsAt: new Date(now + 4 * 86400e3).toISOString() }, { id: 'monthly', label: 'mes', percent: 12, resetsAt: new Date(now + 19 * 86400e3).toISOString() }], spent: { day: { tokens: 980000, calls: 61, cost: 0 }, week: { tokens: 3100000, calls: 240, cost: 0 }, month: { tokens: 5200000, calls: 410, cost: 0 } } }
+    ] } }
+    : { state: 'missing', paid: ['venice'] }),
+  quotasInstall: () => ok({ ok: false, scan: 'caution', findings: ['Lee variables de entorno con claves (para preguntar el saldo).', 'Hace peticiones de red a openrouter.ai y api.venice.ai.'] }),
   media: () => ok('assets/icon.png'),
   usage: () => ok({ chats: 3, messages: 22, input: 5120000, output: 98000, today: { chats: 2, messages: 8, input: 1062000, output: 28000 }, week: { chats: 9, messages: 40, input: 4210000, output: 105000 }, last: { at: now - 3 * 60e3, id: 'd1', title: 'Receta de lentejas para 4' }, days: Array.from({ length: 30 }, (_, i) => ({ date: `día ${i + 1}`, chats: i % 4, messages: i % 4 * 3, input: i % 4 * 9000, output: i % 4 * 700 })), models: [{ model: 'qwen3-32b', input: 2900000, output: 410000, tasks: [{ task: 'compression', tokens: 820000 }, { task: 'title_generation', tokens: 4100 }] }, { model: 'gemma-3-27b', input: 1150000, output: 64000, tasks: [] }, { model: '/models/Qwen3-VL-8B-Instruct-Q4_K_M.gguf', input: 66000, output: 34000, tasks: [{ task: 'vision', tokens: 100000 }] }, { model: 'qwen3-8b', input: 3000, output: 400, tasks: [] }], modelsFrom: 'hermes' }),
   exportChat: () => ok({ saved: false }),

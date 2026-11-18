@@ -149,6 +149,7 @@ class LocalTransport {
     if (!this.available()) {
       const e = new Error('No encuentro Hermes en este PC (falta %LOCALAPPDATA%\\hermes\\bin\\hermes.exe)')
       e.fatal = true
+      e.missing = true
       throw e
     }
     const out = await run(hermesExe(), ['gateway', 'ensure', '--json'], 120000)
@@ -188,12 +189,12 @@ class LocalTransport {
     return { url: ep.api_origin.replace(/^http/, 'ws') + '/api/ws', protocols: [PROTOCOL, `hermes-gateway-ticket.${ticket}`] }
   }
 
-  async fetchJson(p, { method = 'GET', body } = {}) {
+  async fetchJson(p, { method = 'GET', body, timeoutMs = 30000 } = {}) {
     const ep = await this.endpoint()
     const ticket = await this.ticket('native-http')
     const headers = { 'X-Hermes-Gateway-Ticket': ticket }
     if (body !== undefined) { headers['Content-Type'] = 'application/json' }
-    const res = await fetch(ep.api_origin + p, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(30000) })
+    const res = await fetch(ep.api_origin + p, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) })
     const text = await res.text()
     let json = null
     try { json = JSON.parse(text) } catch {}

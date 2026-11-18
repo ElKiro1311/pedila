@@ -155,3 +155,37 @@ export function ago(ms, now = Date.now()) {
   const diff = now - ms
   return diff < MIN ? 'hace un momento' : `hace ${span(diff)}`
 }
+
+/** Dinero en dólares: «$9.91», «$0.093», «$0» (menos de un dólar, con 3 decimales). */
+export function usd(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) { return '—' }
+  if (n === 0) { return '$0' }
+  const a = Math.abs(n)
+  const s = a >= 1000 ? Math.round(a).toLocaleString('es') : a >= 1 ? a.toFixed(2) : a >= 0.001 ? a.toFixed(3) : '<0.001'
+  return (n < 0 ? '-$' : '$') + s
+}
+
+/**
+ * Cuándo vuelve a empezar un límite de OpenRouter: «daily» a las 00:00 UTC, «weekly» el lunes a
+ * las 00:00 UTC y «monthly» el día 1 a las 00:00 UTC. null si no se sabe.
+ */
+export function nextUtcReset(kind, now = Date.now()) {
+  const d = new Date(now)
+  const y = d.getUTCFullYear(), mo = d.getUTCMonth(), day = d.getUTCDate()
+  if (kind === 'daily') { return Date.UTC(y, mo, day + 1) }
+  if (kind === 'weekly') { const dow = d.getUTCDay(); return Date.UTC(y, mo, day + ((8 - dow) % 7 || 7)) }
+  if (kind === 'monthly') { return Date.UTC(y, mo + 1, 1) }
+  return null
+}
+
+/** Un día que viene: «mañana», «el domingo» (dentro de una semana) o «el 7 dic». */
+export function dayAhead(ms, now = Date.now()) {
+  const today = startOfDay(now)
+  const day = startOfDay(ms)
+  if (day <= today) { return 'hoy' }
+  if (day <= startOfDay(today + DAY * 1.5)) { return 'mañana' }
+  if (day < today + 6.5 * DAY) { return 'el ' + new Intl.DateTimeFormat('es', { weekday: 'long' }).format(new Date(ms)) }
+  const opts = { day: 'numeric', month: 'short' }
+  if (new Date(ms).getFullYear() !== new Date(now).getFullYear()) { opts.year = 'numeric' }
+  return 'el ' + new Intl.DateTimeFormat('es', opts).format(new Date(ms)).replace(/\./g, '')
+}

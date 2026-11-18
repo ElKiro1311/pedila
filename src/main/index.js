@@ -264,13 +264,15 @@ function main() {
   function refreshTray() {
     if (!tray) { return }
     const label = c => ({ ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', error: 'error', off: 'apagado' })[c.state] || c.state
-    const lines = Object.values(conns).map(c => `${c.name}: ${label(c)}`)
+    // Solo los Hermes que esta persona tiene: el del PC si está instalado, el servidor si puso su dirección.
+    const mine = Object.values(conns).filter(c => c.state !== 'missing' && !(c.id === 'server' && !settings.data.server.urls.length))
+    const lines = mine.map(c => `${c.name}: ${label(c)}`)
     tray.setToolTip(['Pedila', ...lines].join('\n'))
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: 'Abrir Pedila', click: () => showWindow() },
       { label: 'Nuevo chat', click: () => { showWindow(); send({ kind: 'new-chat' }) } },
       { type: 'separator' },
-      ...Object.values(conns).map(c => ({ label: `${c.name}: ${label(c)}`, enabled: false })),
+      ...mine.map(c => ({ label: `${c.name}: ${label(c)}`, enabled: false })),
       { type: 'separator' },
       { label: 'Salir', click: () => { quitting = true; app.quit() } }
     ]))
@@ -466,6 +468,21 @@ function main() {
       return connOf(id).media(file.trim())
     })
     handle('hp:subagents', (id, sid) => connOf(id).subagents(sidOf(sid)))
+    // Cuotas de las APIs de pago (complemento «pedila» dentro de Hermes) y las APIs que tiene puestas.
+    handle('hp:quotas', async (id, fresh) => {
+      const c = connOf(id)
+      const [q, paid] = await Promise.all([
+        c.quotas(fresh === true),
+        c.state === 'ready' ? c.modelOptions().then(m => m.paid).catch(() => []) : []
+      ])
+      return { ...q, paid }
+    })
+    handle('hp:quotas-install', async (id, force) => {
+      const c = connOf(id)
+      const r = await c.installQuotaPlugin(force === true)
+      log.info(`[${c.id}] complemento de cuotas: ${r.ok ? 'instalado' : 'análisis ' + r.scan}`)
+      return r
+    })
     handle('hp:usage', async id => {
       const c = connOf(id)
       // Qué chats están trabajando (si este Hermes lo sabe decir; si no, null y el panel sigue igual).
