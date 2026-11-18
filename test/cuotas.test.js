@@ -9,7 +9,7 @@ test('cuotas: qué API de pago es cada dirección', () => {
   assert.equal(paidKindOf('https://api.venice.ai/api/v1'), 'venice')
   assert.equal(paidKindOf('https://opencode.ai/zen/go/v1'), 'opencode-go')
   assert.equal(paidKindOf('https://opencode.ai/zen/v1'), 'opencode-zen')
-  assert.equal(paidKindOf('http://192.168.1.70:8181/v1'), null)
+  assert.equal(paidKindOf('http://192.168.1.50:8181/v1'), null)
   assert.equal(paidKindOf('https://openrouter.ai.evil.example/v1'), null)
   assert.equal(paidKindOf(''), null)
 })
