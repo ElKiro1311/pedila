@@ -209,7 +209,7 @@ function main() {
   }
 
   // Fondo de cada tema [oscuro, claro]: el de la ventana mientras carga y el de la barra de título.
-  const WINDOW_BG = { mensajera: ['#0e0e0f', '#f4f3ef'], clasico: ['#14141a', '#f4f4f8'], egeo: ['#0b1120', '#eef2f8'], anfora: ['#120d0b', '#f6ede3'], olivo: ['#0f120e', '#f2f4ee'] }
+  const WINDOW_BG = { mensajera: ['#0e0e0f', '#f4f3ef'], clasico: ['#14141a', '#f4f4f8'], egeo: ['#0b1120', '#eef2f8'], anfora: ['#120d0b', '#f6ede3'], olivo: ['#0f120e', '#f2f4ee'], claude: ['#262624', '#faf9f5'] }
   function windowBg() {
     const pair = WINDOW_BG[settings.data.look.palette] || WINDOW_BG.mensajera
     return isDark() ? pair[0] : pair[1]
@@ -615,7 +615,13 @@ function main() {
       const u = settings.data.updates
       const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion(), REPO)
       if (!info || !info.available) { throw new Error('no hay versión nueva') }
-      if (terms && terms.alive()) { throw new Error('Hay terminales abiertas: ciérralas antes de actualizar (o actualiza la próxima vez que abras Pedila).') }
+      // Con consolas abiertas se pregunta: se cierran, se guarda la lista y al volver se ofrece reabrirlas.
+      const n = terms ? terms.alive() : 0
+      if (n) {
+        const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Actualizar ahora', 'Ahora no'], defaultId: 0, cancelId: 1, title: 'Pedila', message: n === 1 ? 'Hay 1 consola abierta.' : `Hay ${n} consolas abiertas.`, detail: 'Al actualizar se cierran (si algo estaba trabajando, se corta). Al volver a abrir Pedila te ofrecerá reabrirlas, las de Claude Code con su conversación.' })
+        if (r.response !== 0) { return false }
+        quitAsked = true
+      }
       await extras.installUpdate(info, log)
       setTimeout(() => { quitting = true; app.quit() }, 600)
       return true

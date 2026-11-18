@@ -133,3 +133,29 @@ test('cmd.exe: rutas con espacios y opciones con comillas', () => {
 })
 
 test.after(() => { fs.rmSync(tmp, { recursive: true, force: true }) })
+
+test('claude: lo que escribes a mitad de turno no deja el chat «trabajando» para siempre', async () => {
+  const c = conn()
+  const ev = []
+  c.on('ui', e => ev.push(e.kind + (e.kind === 'running' ? ':' + e.running : '')))
+  const sent = []
+  const s = { sid: SID, buf: '', blocks: new Map(), busy: false, turnAt: 0, allow: new Set(), alive: true, lastUsed: Date.now(), proc: { stdin: { write: x => sent.push(x) } } }
+  c.procs.set(SID, s)
+  await c.send(SID, 'primero')
+  assert.equal(s.busy, true)
+  // Un segundo mensaje mientras trabaja: Claude lo mete en el mismo turno.
+  assert.deepEqual(await c.send(SID, 'y otra cosa'), { status: 'queued' })
+  c.onMsg(s, { type: 'result', subtype: 'success', result: 'ok', usage: {} })
+  assert.equal(s.busy, false)
+  assert.ok(ev.includes('running:false'))
+  // Si después Claude sigue (un turno nuevo con lo que esperaba), vuelve a «trabajando».
+  ev.length = 0
+  c.onMsg(s, { type: 'stream_event', event: { type: 'message_start' } })
+  assert.equal(s.busy, true)
+  assert.deepEqual(ev, ['turn-start', 'running:true'])
+  c.onMsg(s, { type: 'result', subtype: 'success', result: 'ok 2', usage: {} })
+  assert.equal(s.busy, false)
+  // La cuota y otros avisos sueltos no cuentan como trabajo.
+  c.onMsg(s, { type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } })
+  assert.equal(s.busy, false)
+})

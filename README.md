@@ -44,13 +44,15 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - **Tu plan de Claude:** el panel enseña el % usado de tu cuota y cuándo se reinicia, tal como lo manda Claude Code con cada respuesta.
   - **Seguir en una consola:** desde el menú ⋯ del chat, abre la misma conversación con `claude --resume` en una pestaña de consola, para lo que solo existe allí (menús de `/model`, `/resume`…).
   - Fijar y archivar se guardan en Pedila. Borrar manda la conversación a la papelera de Windows.
-- **Consolas en pestañas** («▣ Consolas»): Claude Code, Hermes, Antigravity o PowerShell tal cual, dentro de Pedila, sin ventanas aparte.
+- **Consolas en pestañas** («▣ Consolas»): Claude Code, Hermes, Antigravity o PowerShell tal cual, dentro de Pedila, sin ventanas aparte. Cada una lleva su estado (trabajando, en espera, te espera, en marcha, terminó) y se cierra con «✕ Cerrar consola» o con la ✕ de su fila.
   - Son consolas de verdad de Windows (ConPTY): los programas funcionan igual que en Windows Terminal.
   - En las de Claude Code, Pedila sabe qué conversación lleva cada pestaña y si está trabajando (lo lee de `claude agents --json`), y avisa cuando termina. Las sesiones de Claude abiertas en otras ventanas aparecen en la lista y se traen con un clic (`claude --resume`).
   - Al salir con consolas abiertas Pedila pregunta, y la próxima vez ofrece reabrirlas (las de Claude con su conversación).
   - Teclas: Ctrl+Mayús+T, nueva; Ctrl+Tab, siguiente; Ctrl+Mayús+W, cerrar; Ctrl+C con texto marcado, copiar; Ctrl+V, pegar. Soltar un archivo escribe su ruta.
 - **Opciones de Claude** (Ajustes → Claude y consolas): por ejemplo `--effort max`, para los chats y las consolas de Claude. Con `--dangerously-skip-permissions` no pide permisos.
 - Los programas no vienen con Pedila: usa los que tengas instalados.
+- **Herramientas como en Claude Code** (en los chats de Hermes y de Claude): las que van seguidas se juntan en una línea que se abre («Ejecutó 2 órdenes, leyó captura.png · +12 −3 · 1 falló»). Dentro, cada una con su título, lo que se le pasó (la orden, el código o el cambio en verde y rojo), lo que devolvió y, si falló, en rojo. Las imágenes que mira o genera salen ahí mismo.
+- **Imágenes:** las que adjuntas se ven en tu mensaje y en el recuadro de escribir; se abren en grande al pulsarlas.
 - **Chats:**
   - lista y búsqueda, por título y en el contenido;
   - fijar, renombrar, archivar (con su vista de archivados) y borrar con confirmación;
@@ -78,12 +80,13 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - Pedila, la mascota, que reacciona a lo que hace Hermes; si prefieres otra, se elige entre más de 5.000 de [Petdex](https://petdex.dev).
 - **Diseño a tu gusto** (Ajustes → Diseño): ordena y esconde las pestañas (Chats/Consolas, Este PC/Servidor/Claude), elige qué tarjetas del panel salen en cada modo y en qué orden, esconde los botones que no uses y pon la lista de chats a la derecha si lo prefieres. Las pestañas y las tarjetas también se arrastran directamente en su sitio.
 - **Cuotas con el mismo diseño para todos:** cada proveedor (OpenRouter, Venice, OpenCode y tu plan de Claude) sale igual: lo que te queda en grande y, debajo, cada medida con su barra y cuándo se reinicia. Para los saldos sin total (Venice), la barra cuenta lo gastado desde el saldo más alto que Pedila ha visto.
-- **Temas:** cinco, cada uno en modo oscuro y claro, con vista previa en Ajustes → Apariencia:
+- **Temas:** seis, cada uno en modo oscuro y claro, con vista previa en Ajustes → Apariencia:
   - **Mensajera** (predeterminado): tinta, grises y oro, como Pedila;
   - **Clásico**: grises fríos y violeta, el de las primeras versiones;
   - **Egeo**: azul noche y oro;
   - **Ánfora**: negro y terracota;
-  - **Olivo**: verdes tranquilos.
+  - **Olivo**: verdes tranquilos;
+  - **Claude**: pizarra, marfil y terracota, como Claude.
   - El color de acento puede ser el del tema o uno a elegir.
 
 ## Instalar

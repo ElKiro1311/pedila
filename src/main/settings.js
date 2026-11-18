@@ -8,7 +8,7 @@ const path = require('node:path')
 // 'tema' = el color del tema elegido; los demás lo sustituyen.
 const ACCENTS = ['tema', 'oro', 'violeta', 'turquesa', 'ambar', 'rosa', 'azul']
 // Paletas de color; cada una tiene modo claro y oscuro. «clasico» es la de las versiones 0.x anteriores.
-const PALETTES = ['mensajera', 'clasico', 'egeo', 'anfora', 'olivo']
+const PALETTES = ['mensajera', 'clasico', 'egeo', 'anfora', 'olivo', 'claude']
 // Modo: el del sistema, oscuro o claro.
 const THEMES = ['system', 'dark', 'light']
 const PET_SIZES = ['pequena', 'normal', 'grande']

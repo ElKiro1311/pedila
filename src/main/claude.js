@@ -11,7 +11,7 @@ const crypto = require('node:crypto')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { argsSummary } = require('./connection')
+const { argsSummary, boundInput, contentImages } = require('./connection')
 const { which, cleanEnv, splitArgs, SID } = require('./terms')
 
 const str = v => (typeof v === 'string' ? v : '')
@@ -45,8 +45,20 @@ function userText(content) {
 
 function resultText(content) {
   if (typeof content === 'string') { return content }
-  if (Array.isArray(content)) { return content.map(b => (b && b.type === 'text' ? str(b.text) : b && b.type === 'image' ? '[imagen]' : '')).join(' ') }
+  if (Array.isArray(content)) { return content.map(b => (b && b.type === 'text' ? str(b.text) : '')).filter(Boolean).join('\n') }
   return ''
+}
+
+// Lo que devolvió una herramienta, para su detalle: el texto (acotado), si falló y sus imágenes
+// (un Read de una captura devuelve la imagen).
+const MAX_OUTPUT = 8000
+function toolResult(b) {
+  const text = resultText(b.content)
+  return {
+    output: text.length > MAX_OUTPUT ? text.slice(0, MAX_OUTPUT) + '\n… (recortado)' : text,
+    error: Boolean(b.is_error),
+    images: contentImages(b.content).slice(0, 3)
+  }
 }
 
 /** TodoWrite de Claude → la lista de tareas que el panel ya sabe dibujar. */
@@ -336,15 +348,23 @@ class ClaudeConnection extends EventEmitter {
           for (const b of c) {
             if (!b || b.type !== 'tool_result') { continue }
             const t = tools.get(b.tool_use_id)
-            if (t) { t.done = true; t.summary = cut(((b.is_error ? 'Error: ' : '') + resultText(b.content)).replace(/\s+/g, ' ').trim(), 160) }
+            if (t) {
+              const r = toolResult(b)
+              t.done = true
+              t.summary = cut(((b.is_error ? 'Error: ' : '') + r.output).replace(/\s+/g, ' ').trim(), 160)
+              t.output = r.output
+              t.error = r.error
+              if (r.images.length) { t.images = r.images }
+            }
           }
           continue
         }
         if (d.isMeta) { continue }
         const text = userText(c)
-        if (!text) { continue }
+        const images = contentImages(c)
+        if (!text && !images.length) { continue }
         turn = null
-        out.push({ role: 'user', text, ts: d.timestamp || null })
+        out.push({ role: 'user', text, ts: d.timestamp || null, ...(images.length ? { images } : {}) })
       } else if (d.type === 'assistant') {
         if (!turn) { turn = { role: 'assistant', blocks: [], reasoning: '', ts: d.timestamp || null }; out.push(turn) }
         for (const b of Array.isArray(d.message.content) ? d.message.content : []) {
@@ -354,7 +374,7 @@ class ClaudeConnection extends EventEmitter {
           } else if (b.type === 'thinking' && str(b.thinking)) {
             turn.reasoning += (turn.reasoning ? '\n\n' : '') + b.thinking
           } else if (b.type === 'tool_use') {
-            const t = { type: 'tool', id: b.id, name: b.name, args: argsSummary(b.input), done: false }
+            const t = { type: 'tool', id: b.id, name: b.name, args: argsSummary(b.input), input: boundInput(b.input), done: false }
             tools.set(b.id, t)
             turn.blocks.push(t)
             if (b.name === 'TodoWrite') { todos = todosOf(b.input) || todos }
@@ -443,7 +463,7 @@ class ClaudeConnection extends EventEmitter {
     }
     const wasBusy = s.busy
     this.write(s, { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: sid })
-    if (wasBusy) { s.queued++; return { status: 'queued' } }
+    if (wasBusy) { return { status: 'queued' } }
     s.busy = true
     s.turnAt = Date.now()
     this.ui({ kind: 'turn-start', sid })
@@ -486,6 +506,14 @@ class ClaudeConnection extends EventEmitter {
     const sid = s.sid
     // Lo de los subagentes (Task/Agent) va con parent_tool_use_id: aquí solo el hilo principal.
     if (m.parent_tool_use_id) { return }
+    // Actividad con el chat «parado»: Claude empezó otro turno (un mensaje que esperaba en cola).
+    const active = m.type === 'assistant' || m.type === 'stream_event' || (m.type === 'system' && m.subtype === 'status' && m.status === 'requesting')
+    if (active && !s.busy && s.alive) {
+      s.busy = true
+      s.turnAt = Date.now()
+      this.ui({ kind: 'turn-start', sid })
+      this.ui({ kind: 'running', sid, running: true })
+    }
     switch (m.type) {
       case 'system':
         if (m.subtype === 'init') {
@@ -516,14 +544,15 @@ class ClaudeConnection extends EventEmitter {
       case 'assistant':
         for (const b of (m.message && Array.isArray(m.message.content)) ? m.message.content : []) {
           if (b.type !== 'tool_use') { continue }
-          this.ui({ kind: 'tool', sid, phase: 'start', id: str(b.id), name: str(b.name), args: argsSummary(b.input) })
+          this.ui({ kind: 'tool', sid, phase: 'start', id: str(b.id), name: str(b.name), args: argsSummary(b.input), input: boundInput(b.input) })
           if (b.name === 'TodoWrite') { const t = todosOf(b.input); if (t) { this.ui({ kind: 'todos', sid, revision: Date.now(), ...t }) } }
         }
         return
       case 'user':
         for (const b of (m.message && Array.isArray(m.message.content)) ? m.message.content : []) {
           if (b.type !== 'tool_result') { continue }
-          this.ui({ kind: 'tool', sid, phase: 'complete', id: str(b.tool_use_id), summary: cut(((b.is_error ? 'Error: ' : '') + resultText(b.content)).replace(/\s+/g, ' ').trim(), 200), seconds: null })
+          const r = toolResult(b)
+          this.ui({ kind: 'tool', sid, phase: 'complete', id: str(b.tool_use_id), summary: cut(((b.is_error ? 'Error: ' : '') + r.output).replace(/\s+/g, ' ').trim(), 200), seconds: null, output: r.output, error: r.error, images: r.images })
         }
         return
       case 'rate_limit_event':
@@ -538,7 +567,7 @@ class ClaudeConnection extends EventEmitter {
         const it = Array.isArray(u.iterations) && u.iterations.length ? u.iterations[u.iterations.length - 1] : u
         const used = (Number(it.input_tokens) || 0) + (Number(it.cache_read_input_tokens) || 0) + (Number(it.cache_creation_input_tokens) || 0) + (Number(it.output_tokens) || 0)
         if (used) { this.ui({ kind: 'usage', sid, used, max: mu && Number(mu.contextWindow) ? Number(mu.contextWindow) : null, out: Number(u.output_tokens) || null }) }
-        if (s.queued > 0) { s.queued-- } else { s.busy = false }
+        s.busy = false
         const failed = m.is_error || (m.subtype && m.subtype !== 'success')
         this.ui({ kind: 'complete', sid, text: str(m.result), status: failed ? 'error' : 'completed', outcome: failed ? (m.subtype === 'error_during_execution' && /interrupt/i.test(str(m.terminal_reason)) ? 'interrupted' : str(m.subtype) || 'error') : 'completed', ms: Number(m.duration_ms) || (s.turnAt ? Date.now() - s.turnAt : null), out: Number(u.output_tokens) || null })
         if (!s.busy) { this.ui({ kind: 'running', sid, running: false }) }

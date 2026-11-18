@@ -26,7 +26,10 @@ const sessions = {
 const transcript = [
   { role: 'user', text: '¿Me das una receta de lentejas para 4 personas?' },
   { role: 'assistant', reasoning: 'El usuario quiere una receta sencilla. Busco una versión clásica española.', blocks: [
-    { type: 'tool', name: 'web_search', args: 'receta lentejas estofadas 4 personas', done: true, summary: '5 resultados', seconds: 2.4 },
+    { type: 'tool', name: 'web_search', args: 'receta lentejas estofadas 4 personas', input: { query: 'receta lentejas estofadas 4 personas' }, done: true, summary: '5 resultados', output: '1. Lentejas estofadas de la abuela — recetasdeescandalo.com\n2. Lentejas con chorizo — directoalpaladar.com\n3. …', seconds: 2.4 },
+    { type: 'tool', name: 'terminal', args: 'ls recetas/', input: { command: 'ls recetas/' }, done: true, error: true, output: "ls: no se puede acceder a 'recetas/': No existe el archivo o el directorio\n(terminó con el código 2)", seconds: 0.2 },
+    { type: 'tool', name: 'write_file', args: 'recetas/lentejas.md', input: { path: 'C:\\Users\\demo\\recetas\\lentejas.md', content: '# Lentejas estofadas\n\n- 400 g de lentejas\n- 1 chorizo\n- 2 zanahorias\n' }, done: true, output: 'Escrito: 5 líneas', seconds: 0.1 },
+    { type: 'tool', name: 'patch', args: 'recetas/lentejas.md', input: { path: 'C:\\Users\\demo\\recetas\\lentejas.md', old_string: '- 1 chorizo', new_string: '- 1 chorizo (o sin él, para la versión vegetal)' }, done: true, output: 'Cambio aplicado', seconds: 0.1 },
     { type: 'text', text: '¡Claro! **Lentejas estofadas** para 4:\n\n| Ingrediente | Cantidad |\n|---|---|\n| Lentejas pardinas | 400 g |\n| Chorizo | 1 |\n| Zanahoria | 2 |\n\n1. Sofríe la cebolla y el pimiento.\n2. Añade las lentejas y cubre con agua.\n3. Cuece **35 minutos** a fuego medio.\n\n```bash\n# temporizador\nsleep 2100 && echo "¡Lentejas listas!"\n```' }
   ] },
   { role: 'user', text: 'Hazme un dibujo del plato.' },

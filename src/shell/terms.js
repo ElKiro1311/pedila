@@ -288,11 +288,23 @@ export function createTerms(ctx) {
   }
 
   // ── Barra lateral ──
+  /** El estado de una consola, siempre: [clase, texto]. Los de Claude salen de `claude agents --json`. */
   function statusOf(info) {
-    if (!info.alive) { return ['exit', 'terminó'] }
-    if (info.kind === 'claude' && info.status === 'busy') { return ['busy', 'trabajando…'] }
-    if (info.kind === 'claude' && info.status === 'waiting') { return ['wait', 'te espera'] }
-    return ['idle', '']
+    if (!info.alive) { return info.code ? ['exit err', `terminó (${info.code})`] : ['exit', 'terminó'] }
+    if (info.kind === 'claude') {
+      if (info.status === 'busy') { return ['busy', 'trabajando'] }
+      if (info.status === 'waiting') { return ['wait', 'te espera'] }
+      if (info.status) { return ['idle', 'en espera'] }
+      // Aún sin enlazar con su sesión (Claude arrancando, o pidiendo confiar en la carpeta).
+      return ['open', Date.now() - (info.startedAt || 0) < 60000 ? 'abriendo…' : 'en marcha']
+    }
+    return ['idle', 'en marcha']
+  }
+
+  function stateBadge(info) {
+    const [cls, text] = statusOf(info)
+    const tips = { busy: 'Claude está trabajando en esta consola', wait: 'Claude espera tu respuesta en esta consola', idle: info.kind === 'claude' ? 'Claude espera tu próximo mensaje' : 'El programa sigue abierto', open: 'Claude está arrancando (o te pregunta algo en la consola)', exit: 'El programa se cerró; puedes reabrirlo o cerrar la pestaña' }
+    return el('span', { class: 'live-badge ' + cls.split(' ').map(c => 'st-' + c).join(' '), title: tips[cls.split(' ')[0]] || '' }, cls === 'busy' ? el('i') : null, text)
   }
 
   function renderSide() {
@@ -314,7 +326,6 @@ export function createTerms(ctx) {
         const tab = T.tabs.get(id)
         if (!tab) { continue }
         const i = tab.info
-        const [st, stText] = statusOf(i)
         const title = tab.userTitle || i.title || i.label
         rows.push(el('div', { class: 'chat-row-wrap' },
           el('button', {
@@ -324,9 +335,9 @@ export function createTerms(ctx) {
             oncontextmenu: ev => { ev.preventDefault(); tabMenu(id, ev.clientX, ev.clientY) },
             onauxclick: ev => { if (ev.button === 1) { ev.preventDefault(); closeTab(id) } }
           },
-          el('div', { class: 't' }, el('span', { class: 'ti small ' + i.kind, text: KIND_ICON[i.kind] }), el('span', { text: title }), st === 'busy' ? el('i', { class: 'run' }) : null, tab.unread && id !== T.active ? el('i', { class: 'unread' }) : null),
-          el('div', { class: 'p' }, el('span', { text: base(i.cwd) }), stText ? el('span', { class: 'st ' + st, text: ' · ' + stText }) : null)),
-          el('button', { class: 'row-more', title: 'Cerrar (Ctrl+Mayús+W)', 'aria-label': 'Cerrar terminal', text: '✕', onclick: ev => { ev.stopPropagation(); closeTab(id) } })))
+          el('div', { class: 't' }, el('span', { class: 'ti small ' + i.kind, text: KIND_ICON[i.kind] }), el('span', { text: title }), tab.unread && id !== T.active ? el('i', { class: 'unread', title: 'Hay salida nueva que no has visto' }) : null, stateBadge(i)),
+          el('div', { class: 'p' }, el('span', { text: `${base(i.cwd)} · ${i.label}` }))),
+          el('button', { class: 'row-more term-x', title: 'Cerrar esta consola (Ctrl+Mayús+W)', 'aria-label': 'Cerrar esta consola', text: '✕', onclick: ev => { ev.stopPropagation(); closeTab(id) } })))
       }
     }
     const outside = T.agents.filter(a => !a.term && a.kind === 'interactive')
@@ -484,8 +495,10 @@ export function createTerms(ctx) {
       if (!tab) { return { title: 'Consolas', meta: T.order.length ? '' : 'Claude Code, Hermes y consolas tal cual, dentro de Pedila' } }
       const i = tab.info
       const [, stText] = statusOf(i)
-      return { title: tab.userTitle || i.title || i.label, meta: [i.label, i.cwd, stText].filter(Boolean).join(' · ') }
+      return { title: tab.userTitle || i.title || i.label, meta: [i.label, i.cwd, stText].filter(Boolean).join(' · '), canClose: true, busy: i.alive && i.status === 'busy' }
     },
+    /** El botón «Cerrar consola» de arriba: cierra la que se ve (pregunta si Claude está trabajando). */
+    closeActive() { if (T.active) { closeTab(T.active) } },
     /** Para la mascota y el panel: cuántas pestañas de Claude están trabajando. */
     busyCount() { return [...T.tabs.values()].filter(t => t.info.alive && t.info.status === 'busy').length },
     /** Tarjeta del panel derecho con las sesiones de Claude Code (las de Pedila y las de fuera). */

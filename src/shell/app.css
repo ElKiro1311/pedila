@@ -26,6 +26,10 @@
 [data-palette="anfora"][data-mode="light"] { --bg: #f6ede3; --surface: #fffaf4; --surface-2: #efe3d6; --surface-3: #e6d6c6; --line: #e0cfbd; --text: #2a1810; --muted: #7a6152; --theme-accent: #b4532a; --theme-on-accent: #fff; }
 /* Olivo: verdes tranquilos. */
 [data-palette="olivo"] { --bg: #0f120e; --surface: #161a15; --surface-2: #1f241d; --surface-3: #283026; --line: #2b3329; --text: #e8ece4; --muted: #98a391; --theme-accent: #a5b960; --theme-on-accent: #12150c; }
+/* Claude: pizarra, marfil y terracota, como Claude (acento del modo claro más oscuro para que el
+   texto blanco de los botones se lea: 4,8:1; en oscuro, texto oscuro sobre el naranja: 5,3:1). */
+[data-palette="claude"] { --bg: #262624; --surface: #1f1e1d; --surface-2: #30302e; --surface-3: #3c3b38; --line: #3e3d39; --text: #faf9f5; --muted: #a6a39b; --theme-accent: #d97757; --theme-on-accent: #1f1e1d; }
+[data-palette="claude"][data-mode="light"] { --bg: #faf9f5; --surface: #ffffff; --surface-2: #f0eee6; --surface-3: #e6e3d8; --line: #e0ddd2; --text: #141413; --muted: #6b6a63; --theme-accent: #b5573a; --theme-on-accent: #fff; }
 [data-palette="olivo"][data-mode="light"] { --bg: #f2f4ee; --surface: #fdfefb; --surface-2: #e6eadf; --surface-3: #dbe1d2; --line: #d3dac9; --text: #1b2117; --muted: #5f6a57; --theme-accent: #5f7a24; --theme-on-accent: #fff; }
 /* Color de acento elegido a mano (sustituye al del tema). */
 :root[data-accent="oro"] { --accent: #d6a83e; --on-accent: #16130c; }
@@ -571,3 +575,69 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none !i
 .live-badge.busy { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .live-badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1s infinite; }
 .chat-row-wrap .chat-row .t .live-badge { margin-right: 14px; }
+
+/* ── Herramientas como en Claude Code: grupos plegables con su detalle ── */
+.tgroup { margin: 4px 0; font-size: .86rem; }
+.tg-head, .ti-head { display: flex; align-items: center; gap: 7px; width: 100%; min-width: 0; border: 0; background: transparent; color: var(--muted); padding: 4px 6px; border-radius: 8px; text-align: left; cursor: pointer; }
+.tg-head:hover, .ti-head:hover { background: var(--surface-2); color: var(--text); }
+.tg-chev { flex: none; display: inline-block; width: 10px; font-size: 1rem; line-height: 1; transition: transform .12s; color: var(--muted); }
+.tgroup.open > .tg-head .tg-chev, .titem.open > .ti-head .tg-chev { transform: rotate(90deg); }
+.tg-text, .ti-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-diff { flex: none; font-family: var(--mono); font-size: .78rem; display: inline-flex; gap: 5px; }
+.tg-diff .add { color: var(--ok); }
+.tg-diff .del { color: var(--bad); }
+.tg-fail { flex: none; color: var(--bad); font-size: .78rem; font-weight: 600; }
+.tg-time { flex: none; margin-left: auto; font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tg-head .spin, .ti-head .spin, .tout-label .spin { width: 11px; height: 11px; flex: none; }
+.tg-body { margin: 4px 0 6px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.tgroup.single > .tg-body { padding: 8px 10px; }
+.titem { border-radius: 9px; }
+.titem.open { background: var(--surface-2); }
+.titem.open > .tdetails { padding: 2px 10px 10px 24px; }
+.titem.fail > .ti-head .ti-title { color: var(--text); }
+.tdetails { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tbox-wrap { min-width: 0; }
+.tbox-path { font-family: var(--mono); font-size: .74rem; color: var(--muted); margin: 0 0 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tbox { margin: 0; font-family: var(--mono); font-size: .78rem; line-height: 1.45; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.tbox.cmd .prompt { color: var(--muted); user-select: none; }
+.tbox.diff .dl { display: block; }
+.tbox.diff .dl.add { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.tbox.diff .dl.del { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.tbox.diff .dl.hunk { color: var(--info); }
+.tbox.out { color: var(--muted); max-height: 220px; }
+.tbox.out.err { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.tout-label { display: flex; align-items: center; gap: 4px; font-size: .76rem; color: var(--muted); }
+.tout-label.fail { color: var(--bad); font-weight: 600; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
+.thumb { border: 1px solid var(--line); background: var(--surface-2); padding: 0; border-radius: 10px; overflow: hidden; cursor: zoom-in; line-height: 0; }
+.thumb img { display: block; max-width: 220px; max-height: 160px; object-fit: contain; }
+.tdetails .media-img img { max-width: 260px; max-height: 200px; border-radius: 10px; border: 1px solid var(--line); cursor: zoom-in; }
+/* Tus imágenes dentro de tu mensaje. */
+.msg.user .bubble.with-images { display: flex; flex-direction: column; gap: 8px; }
+.msg.user .bubble .thumbs { justify-content: flex-end; }
+.msg.user .bubble .thumb img { max-width: 260px; max-height: 200px; }
+.btext { white-space: pre-wrap; }
+/* El recuadro de escribir: la miniatura se puede ver en grande. */
+.att img { cursor: zoom-in; }
+/* Lo que Hermes escribe como si fuera tuyo (resúmenes, avisos): nota plegable. */
+.chat-note { margin: 8px auto; max-width: 92%; border: 1px dashed var(--line); border-radius: 10px; font-size: .82rem; color: var(--muted); }
+.chat-note > summary { cursor: pointer; padding: 6px 12px; list-style: none; }
+.chat-note > summary::-webkit-details-marker { display: none; }
+.chat-note .note-text { padding: 0 12px 10px; white-space: pre-wrap; max-height: 320px; overflow: auto; font-size: .78rem; }
+
+/* ── Consolas: botón de cerrar a la vista y estados ─────────────── */
+.top-btn { flex: none; -webkit-app-region: no-drag; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 4px 10px; font-size: .8rem; margin-left: auto; }
+.top-btn:hover { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
+#term-close:not([hidden]) + #panel-toggle { margin-left: 6px; }
+#term-list .row-more.term-x { opacity: .55; }
+#term-list .chat-row-wrap:hover .row-more.term-x, #term-list .row-more.term-x:focus-visible { opacity: 1; }
+#term-list .row-more.term-x:hover { color: var(--bad); }
+#term-list .term-row .t .live-badge { margin-right: 18px; }
+.live-badge.st-idle { }
+.live-badge.st-busy { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.live-badge.st-wait { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.live-badge.st-open, .live-badge.st-exit { background: transparent; color: var(--muted); border-color: var(--line); }
+.live-badge.st-exit.st-err { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+/* El título manda sobre la ruta y el estado de la barra de arriba. */
+#chat-title { flex: 0 1 auto; min-width: 80px; max-width: 46%; }
+#chat-meta { flex: 1 1 0; min-width: 0; }

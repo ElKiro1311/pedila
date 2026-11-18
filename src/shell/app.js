@@ -1,6 +1,7 @@
 // Pedila: la pantalla. Sin Node; habla con el proceso principal por window.hp (preload).
 import { Pet, loadSheet } from './pet.js'
 import { createTerms } from './terms.js'
+import { describeTool, groupSummary, failedText } from './tools.mjs'
 import { kfmt, setHour12, hhmm, full, dayLabel, span, ago, tokensOf, modelName, tasksLine, usd, nextUtcReset, dayAhead } from './fmt.mjs'
 
 const demo = new URLSearchParams(location.search).get('demo') === '1'
@@ -164,7 +165,8 @@ const PALETTES = [
   { id: 'clasico', name: 'Clásico', desc: 'El de siempre: grises fríos y violeta.' },
   { id: 'egeo', name: 'Egeo', desc: 'Azul noche del mar y oro.' },
   { id: 'anfora', name: 'Ánfora', desc: 'Negro y terracota, como la cerámica griega.' },
-  { id: 'olivo', name: 'Olivo', desc: 'Verdes de olivar, tranquilos.' }
+  { id: 'olivo', name: 'Olivo', desc: 'Verdes de olivar, tranquilos.' },
+  { id: 'claude', name: 'Claude', desc: 'Pizarra, marfil y terracota, como Claude.' }
 ]
 
 function lookMode() {
@@ -402,6 +404,7 @@ function setTopbar() {
     $('#chat-title').textContent = t.title
     $('#chat-meta').textContent = t.meta
     $('#chat-actions').hidden = true
+    $('#term-close').hidden = !t.canClose
     $('#ctx-warn').hidden = true
     document.title = `${t.title} · Pedila`
     schedulePanel()
@@ -414,6 +417,7 @@ function setTopbar() {
   if (ch && ch.usage && ch.usage.used && ch.usage.max) { bits.push(`contexto ${kfmt(ch.usage.used)} / ${kfmt(ch.usage.max)}`) }
   $('#chat-meta').textContent = bits.join(' · ')
   $('#chat-actions').hidden = !ch
+  $('#term-close').hidden = true
   const pct = ch && ch.usage && ch.usage.used && ch.usage.max ? Math.min(100, Math.round(ch.usage.used / ch.usage.max * 100)) : 0
   const bar = $('#ctx-bar')
   bar.hidden = !pct
@@ -475,7 +479,12 @@ async function openChat(conn, sid) {
 }
 
 let liveRaf = 0
+// Mientras se pulsa algo del chat no se repinta el turno en directo (el clic caería en un botón
+// que ya no existe); se repinta al soltar.
+let liveHold = false
+let liveHeld = false
 function scheduleLive() {
+  if (liveHold) { liveHeld = true; return }
   if (liveRaf) { return }
   liveRaf = requestAnimationFrame(() => { liveRaf = 0; renderLiveOnly() })
 }
@@ -525,26 +534,131 @@ function whoRow() {
 
 function renderBlocks(blocks) {
   const out = []
+  // Las herramientas seguidas (sin texto entre ellas) van juntas en un grupo plegable, como en Claude Code.
+  let group = []
+  const flush = () => { if (group.length) { out.push(renderToolGroup(group)); group = [] } }
   for (const b of blocks) {
+    if (b.type === 'tool') { group.push(b); continue }
+    flush()
     if (b.type === 'text') {
       const d = el('div', { class: 'md' })
       d.innerHTML = md(b.text)
       decorate(d)
       fillMedia(d, S.current.conn)
       out.push(d)
-    } else if (b.type === 'tool') {
-      out.push(renderTool(b))
     }
   }
+  flush()
   return out
 }
 
-function renderTool(b) {
-  const st = b.done ? el('span', { class: 'st ok', text: b.seconds ? `✓ ${b.seconds.toFixed(1)} s` : '✓' }) : el('span', { class: 'st' }, el('span', { class: 'spin' }), b.percent ? ` ${b.percent} %` : '')
-  const body = el('div', { class: 'body', hidden: true, text: b.summary || b.message || (b.done ? 'Sin resumen.' : 'En marcha…') })
-  const head = el('div', { class: 'head' }, el('span', { text: '🔧' }), el('span', { class: 'name', text: b.name || 'herramienta' }), el('span', { class: 'args', text: b.args || '' }), st)
-  head.addEventListener('click', () => { body.hidden = !body.hidden })
-  return el('div', { class: 'tool' }, head, body)
+// ── Herramientas como en Claude Code ─────────────────────────────────────────────────────────
+// Cada grupo es una línea («Ejecutó 2 órdenes, leyó a.png · +12 −3 · 1 falló») que se abre; dentro,
+// cada herramienta con su título, lo que se le pasó (la orden, el código, el cambio) y lo que
+// devolvió. Lo abierto se recuerda mientras dura la ventana (también al repintar en directo).
+const toolOpen = new Map()
+let toolSeq = 0
+const keyOf = b => { if (!b._k) { Object.defineProperty(b, '_k', { value: 'k' + (++toolSeq), enumerable: true, writable: true }) } return b._k }
+
+function renderToolGroup(tools) {
+  const gk = 'g:' + keyOf(tools[0])
+  const open = toolOpen.get(gk) === true
+  const sum = groupSummary(tools)
+  const single = tools.length === 1
+  const t0 = tools[0]
+  const node = el('div', { class: 'tgroup' + (open ? ' open' : '') + (sum.failed ? ' fail' : '') + (single ? ' single' : '') })
+  const head = el('button', { class: 'tg-head', 'aria-expanded': String(open), title: open ? 'Pulsa para plegar' : 'Pulsa para ver qué hizo' },
+    el('span', { class: 'tg-chev', text: '›' }),
+    sum.running ? el('span', { class: 'spin' }) : null,
+    el('span', { class: 'tg-text', text: sum.text }),
+    sum.add || sum.del ? el('span', { class: 'tg-diff' }, sum.add ? el('span', { class: 'add', text: `+${sum.add}` }) : null, sum.del ? el('span', { class: 'del', text: `−${sum.del}` }) : null) : null,
+    sum.failed ? el('span', { class: 'tg-fail', text: single ? 'Falló' : failedText(sum.failed) }) : null,
+    single && t0.done && t0.seconds ? el('span', { class: 'tg-time', text: `${t0.seconds.toFixed(1)} s` }) : null)
+  head.addEventListener('click', () => {
+    toolOpen.set(gk, !open)
+    node.replaceWith(renderToolGroup(tools))
+  })
+  node.append(head)
+  if (open) {
+    node.append(el('div', { class: 'tg-body' }, ...(single ? [toolDetails(t0)] : tools.map(renderToolItem))))
+  }
+  return node
+}
+
+function renderToolItem(b) {
+  const tk = 't:' + keyOf(b)
+  const saved = toolOpen.get(tk)
+  const open = saved === undefined ? Boolean(b.error) : saved
+  const d = describeTool(b)
+  const node = el('div', { class: 'titem' + (open ? ' open' : '') + (b.error ? ' fail' : '') })
+  const head = el('button', { class: 'ti-head', 'aria-expanded': String(open) },
+    el('span', { class: 'tg-chev', text: '›' }),
+    !b.done ? el('span', { class: 'spin' }) : null,
+    el('span', { class: 'ti-title', text: d.title }),
+    d.add || d.del ? el('span', { class: 'tg-diff' }, d.add ? el('span', { class: 'add', text: `+${d.add}` }) : null, d.del ? el('span', { class: 'del', text: `−${d.del}` }) : null) : null,
+    b.error ? el('span', { class: 'tg-fail', text: 'Falló' }) : null,
+    b.done && b.seconds ? el('span', { class: 'tg-time', text: `${b.seconds.toFixed(1)} s` }) : null)
+  head.addEventListener('click', () => {
+    toolOpen.set(tk, !open)
+    node.replaceWith(renderToolItem(b))
+  })
+  node.append(head)
+  if (open) { node.append(toolDetails(b)) }
+  return node
+}
+
+/** Lo de dentro de una herramienta: lo que se le pasó, lo que devolvió y sus imágenes. */
+function toolDetails(b) {
+  const d = describeTool(b)
+  const parts = []
+  if (d.box && d.box.text) { parts.push(toolBox(d.box)) }
+  if (!b.done) {
+    parts.push(el('div', { class: 'tout-label' }, el('span', { class: 'spin' }), el('span', { text: b.message ? ` ${b.message}${b.percent ? ` (${b.percent} %)` : ''}` : ' En marcha…' })))
+  } else {
+    const out = typeof b.output === 'string' ? b.output : (b.summary || '')
+    if (out.trim()) {
+      parts.push(el('div', { class: 'tout-label' + (b.error ? ' fail' : ''), text: b.error ? 'Falló:' : 'Resultado:' }))
+      parts.push(el('pre', { class: 'tbox out' + (b.error ? ' err' : ''), text: out }))
+    } else if (b.error || !((Array.isArray(b.images) && b.images.length) || b.image)) {
+      parts.push(el('div', { class: 'tout-label muted', text: b.error ? 'Falló sin decir por qué.' : 'Sin resultado que enseñar.' }))
+    }
+  }
+  const thumbs = []
+  for (const im of Array.isArray(b.images) ? b.images : []) { thumbs.push(thumbOf(im.url, im.name || 'imagen')) }
+  if (b.image) {
+    const box = el('div', { class: 'media-img', 'data-media': encodeURIComponent(b.image) })
+    thumbs.push(box)
+    setTimeout(() => fillMedia(box.parentNode || box, S.current.conn), 0)
+  }
+  if (thumbs.length) { parts.push(el('div', { class: 'thumbs' }, ...thumbs)) }
+  return el('div', { class: 'tdetails' }, ...parts)
+}
+
+/** El recuadro de lo que se le pasó: «$ orden», código, cambios en verde y rojo, ruta o JSON. */
+function toolBox(box) {
+  const pre = el('pre', { class: 'tbox ' + box.lang })
+  if (box.lang === 'cmd') {
+    pre.append(el('span', { class: 'prompt', text: '$ ' }), document.createTextNode(box.text))
+  } else if (box.lang === 'diff') {
+    for (const line of box.text.split('\n')) {
+      const t = line.trimStart()
+      const cls = /^\+(?!\+\+)/.test(t) ? 'add' : /^-(?!--)/.test(t) ? 'del' : /^@@/.test(t) ? 'hunk' : ''
+      pre.append(el('span', { class: 'dl ' + cls, text: line + '\n' }))
+    }
+  } else {
+    pre.textContent = box.text
+  }
+  const wrap = el('div', { class: 'tbox-wrap' })
+  if (box.path) { wrap.append(el('div', { class: 'tbox-path', text: box.path })) }
+  wrap.append(pre)
+  return wrap
+}
+
+/** Miniatura de una imagen (data:); al pulsar, se ve en grande. */
+function thumbOf(url, name) {
+  const img = el('img', { src: url, alt: name, title: name, loading: 'lazy' })
+  const b = el('button', { class: 'thumb', title: `${name} (pulsa para verla en grande)`, onclick: e => { e.stopPropagation(); openImage(url, name) } }, img)
+  return b
 }
 
 function renderReasoning(text, live) {
@@ -554,7 +668,16 @@ function renderReasoning(text, live) {
 }
 
 function renderTurn(t) {
-  if (t.role === 'user') { return el('div', { class: 'msg user' }, el('div', { class: 'bubble', text: t.text })) }
+  if (t.role === 'user') {
+    const images = Array.isArray(t.images) ? t.images : []
+    return el('div', { class: 'msg user' }, el('div', { class: 'bubble' + (images.length ? ' with-images' : '') },
+      images.length ? el('div', { class: 'thumbs' }, ...images.map(im => thumbOf(im.url, im.name || 'imagen'))) : null,
+      t.text ? el('div', { class: 'btext', text: t.text }) : null))
+  }
+  // Lo que Hermes escribe como si fuera tuyo (resúmenes de memoria, avisos): una nota plegable.
+  if (t.role === 'note') {
+    return el('details', { class: 'chat-note' }, el('summary', { text: `ℹ ${t.title}` }), el('div', { class: 'note-text', text: t.text }))
+  }
   return el('div', { class: 'msg assistant' }, whoRow(), renderReasoning(t.reasoning, false), renderBlocks(t.blocks), turnActions(t))
 }
 
@@ -726,7 +849,8 @@ async function onSendClick() {
   // Con Hermes ya trabajando el mensaje va en cola: la tarea en marcha sigue contando desde antes.
   if (!busy(c)) { c.turnAt = Date.now() }
   if (c.live && c.live.done) { c.transcript.push(liveToTurn(c.live)); c.live = null }
-  c.transcript.push({ role: 'user', text: images.length ? `${text}\n📎 ${images.map(i => i.name).join(', ')}` : text })
+  // Tus imágenes se ven en tu mensaje (miniaturas que se abren en grande).
+  c.transcript.push({ role: 'user', text, ...(images.length ? { images: images.map(i => ({ url: i.url, name: i.name })) } : {}) })
   if (!c.live) { c.live = { blocks: [], reasoning: '', status: 'Enviando', done: false, startedAt: Date.now() } }
   c.running = true
   setTopbar()
@@ -1040,8 +1164,20 @@ function onEvent(evt) {
       if (evt.phase === 'start') { if (b.generating) { b.startedAt = Date.now() } b.generating = false; if (evt.id) { b.id = evt.id } }
       if (evt.args) { b.args = evt.args }
       if (evt.name) { b.name = evt.name }
+      // El detalle para el grupo plegable: lo que se le pasó, lo que devolvió, si falló, el cambio
+      // de un archivo y las imágenes (las de Claude vienen dentro; la de Hermes, por su ruta).
+      if (evt.input && typeof evt.input === 'object') { b.input = evt.input }
       if (evt.phase === 'progress') { b.percent = evt.percent; b.message = evt.message }
-      if (evt.phase === 'complete') { b.done = true; b.summary = evt.summary; b.seconds = evt.seconds }
+      if (evt.phase === 'complete') {
+        b.done = true
+        b.summary = evt.summary
+        b.seconds = evt.seconds !== null && evt.seconds !== undefined ? evt.seconds : (b.startedAt ? (Date.now() - b.startedAt) / 1000 : null)
+        if (typeof evt.output === 'string') { b.output = evt.output }
+        b.error = Boolean(evt.error)
+        if (evt.diff) { b.diff = evt.diff }
+        if (Array.isArray(evt.images) && evt.images.length) { b.images = evt.images }
+        if (evt.image) { b.image = evt.image }
+      }
       L.status = evt.phase === 'complete' ? 'Pensando' : `Usando ${b.name}`
       break
     }
@@ -1673,10 +1809,13 @@ function chatMarkdown(conn, sid) {
   const lines = [`# ${ch.title || 'Chat'}`, '', `_Exportado de Pedila · ${CONN_NAMES[conn]}${ch.model ? ' · ' + ch.model : ''} · ${new Date().toLocaleString('es')}_`, '']
   const turns = [...ch.transcript, ...(ch.live && ch.live.done ? [liveToTurn(ch.live)] : [])]
   for (const t of turns) {
-    if (t.role === 'user') { lines.push('## Tú', '', t.text, ''); continue }
+    if (t.role === 'note') { lines.push(`> ℹ ${t.title}`, ''); continue }
+    if (t.role === 'user') { lines.push('## Tú', '', t.text + (t.images && t.images.length ? `\n\n_(${t.images.length === 1 ? 'una imagen' : t.images.length + ' imágenes'})_` : ''), ''); continue }
     lines.push(`## ${WHO(conn)}`, '')
     for (const b of t.blocks) {
-      if (b.type === 'text') { lines.push(b.text, '') } else { lines.push(`> 🔧 ${b.name}${b.args ? ' — `' + b.args.replace(/`/g, "'") + '`' : ''}`, '') }
+      if (b.type === 'text') { lines.push(b.text, ''); continue }
+      const d = describeTool(b)
+      lines.push(`> 🔧 ${d.title.replace(/`/g, "'")}${b.error ? ' — **falló**' : ''}`, '')
     }
   }
   return lines.join('\n')
@@ -1742,8 +1881,8 @@ function updateExtrasPills() {
 function renderAttach() {
   const strip = $('#attach-strip')
   strip.replaceChildren(...S.attach.map((a, i) => el('div', { class: 'att' },
-    el('img', { src: a.url, alt: a.name, title: a.name }),
-    el('button', { class: 'att-x', text: '✕', title: 'Quitar', onclick: () => { URL.revokeObjectURL(a.url); S.attach.splice(i, 1); renderAttach(); updateComposer() } }))))
+    el('img', { src: a.url, alt: a.name, title: `${a.name} (pulsa para verla en grande)`, onclick: () => openImage(a.url, a.name) }),
+    el('button', { class: 'att-x', text: '✕', title: 'Quitar', onclick: () => { S.attach.splice(i, 1); renderAttach(); updateComposer() } }))))
   strip.hidden = !S.attach.length
 }
 
@@ -1756,7 +1895,9 @@ async function addImages(files) {
     let bin = ''
     for (let i = 0; i < buf.length; i += 0x8000) { bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000)) }
     const ext = file.type.split('/')[1].replace('jpeg', 'jpg')
-    S.attach.push({ name: file.name && file.name !== 'image.png' ? file.name : `captura-${Date.now()}.${ext}`, b64: btoa(bin), url: URL.createObjectURL(file) })
+    const b64 = btoa(bin)
+    // La miniatura va como data: (la política de seguridad de la ventana no deja cargar blob:).
+    S.attach.push({ name: file.name && file.name !== 'image.png' ? file.name : `captura-${Date.now()}.${ext}`, b64, url: `data:${file.type};base64,${b64}` })
   }
   renderAttach()
   updateComposer()
@@ -2590,7 +2731,10 @@ function showUpdate(version, notes) {
     el('button', { class: 'btn-primary', text: 'Actualizar y reiniciar', onclick: async e => {
       e.target.disabled = true
       e.target.textContent = 'Descargando…'
-      try { await call(api.updateInstall) } catch (err) { e.target.disabled = false; e.target.textContent = 'Actualizar y reiniciar'; showToastLine(`No pude actualizar: ${err.message}`) }
+      try {
+        // «Ahora no» al aviso de las consolas abiertas: el botón vuelve a estar listo.
+        if (await call(api.updateInstall) === false) { e.target.disabled = false; e.target.textContent = 'Actualizar y reiniciar' }
+      } catch (err) { e.target.disabled = false; e.target.textContent = 'Actualizar y reiniciar'; showToastLine(`No pude actualizar: ${err.message}`) }
     } }))
   b.hidden = false
 }
@@ -2662,6 +2806,7 @@ function wireExtras() {
   })
   $('#open-usage').addEventListener('click', () => openUsage())
   $('#panel-toggle').addEventListener('click', () => saveSetting({ window: { sidePanel: !panelOn() } }).then(applyPanel))
+  $('#term-close').addEventListener('click', () => terms.closeActive())
   wireResizers()
   // Al acabar una respuesta se recalcula el uso; además, cada 2 minutos.
   setInterval(() => { if (panelOn()) { loadPanelUsage(S.active, true) } }, 120000)
@@ -2670,7 +2815,12 @@ function wireExtras() {
   setInterval(() => { if (panelOn()) { reconcileSubagents() } }, 10000)
   // Mientras se pulsa algo del panel no se rehace (el clic acabaría en un botón que ya no existe).
   $('#panel-body').addEventListener('pointerdown', () => { P.hold = true })
-  const release = () => { if (P.hold) { P.hold = false; if (P.held) { P.held = false; schedulePanel() } } }
+  // Lo mismo en el chat: al pulsar un grupo de herramientas mientras Claude o Hermes escriben.
+  $('#messages').addEventListener('pointerdown', () => { liveHold = true })
+  const release = () => {
+    if (P.hold) { P.hold = false; if (P.held) { P.held = false; schedulePanel() } }
+    if (liveHold) { liveHold = false; if (liveHeld) { liveHeld = false; setTimeout(scheduleLive, 0) } }
+  }
   addEventListener('pointerup', release, true)
   addEventListener('pointercancel', release, true)
   addEventListener('blur', release)

@@ -176,8 +176,86 @@ function toolCallsOf(row) {
     const fn = c && c.function ? c.function : c || {}
     let args = fn.arguments ?? c.args
     if (typeof args === 'string') { try { args = JSON.parse(args) } catch { args = { _: args } } }
-    return { id: c.id || c.tool_call_id || '', name: str(fn.name || c.name) || 'herramienta', args: argsSummary(args) }
+    return { id: c.id || c.tool_call_id || '', name: str(fn.name || c.name) || 'herramienta', args: argsSummary(args), input: boundInput(args) }
   })
+}
+
+// ── Detalle de las herramientas (como en Claude Code: qué se le pasó y qué devolvió) ─────────
+const MAX_FIELD = 6000 // cada texto que se le pasó a una herramienta
+const MAX_OUTPUT = 8000 // lo que devolvió
+
+/** Copia acotada de lo que se le pasó a una herramienta (textos largos recortados, sin ciclos). */
+function boundInput(v, depth = 0) {
+  if (typeof v === 'string') { return v.length > MAX_FIELD ? v.slice(0, MAX_FIELD) + '\n… (recortado)' : v }
+  if (v === null || typeof v === 'number' || typeof v === 'boolean') { return v }
+  if (depth > 4) { return '…' }
+  if (Array.isArray(v)) { return v.slice(0, 60).map(x => boundInput(x, depth + 1)) }
+  if (typeof v === 'object') {
+    const out = {}
+    for (const k of Object.keys(v).slice(0, 40)) { out[k] = boundInput(v[k], depth + 1) }
+    return out
+  }
+  return null
+}
+
+const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g
+const capText = s => (s.length > MAX_OUTPUT ? s.slice(0, MAX_OUTPUT) + '\n… (recortado)' : s)
+
+/**
+ * Lo que devolvió una herramienta de Hermes, para leerlo: { text, error }.
+ * Hermes guarda los resultados como JSON; el de la terminal trae output, exit_code y error.
+ * El fallo se decide como en Hermes (agent/display.py _detect_tool_failure), solo por su forma.
+ */
+function hermesToolOutput(name, result, isError) {
+  const raw = typeof result === 'string' ? result : result === undefined || result === null ? '' : JSON.stringify(result)
+  let data = null
+  if (result && typeof result === 'object') { data = result } else if (/^\s*[{[]/.test(raw)) { try { data = JSON.parse(raw) } catch {} }
+  let error = isError === true
+  let text = raw
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    if (isError === undefined || isError === null) {
+      if (name === 'terminal') { error = data.exit_code !== undefined && data.exit_code !== null && data.exit_code !== 0 } else {
+        error = Boolean(data.user_summary) || data.success === false || Boolean((data.error || data.message) && (data.success === false || 'error' in data) && data.error)
+      }
+    }
+    if (typeof data.output === 'string' || typeof data.stdout === 'string') {
+      const bits = [str(data.output || data.stdout)]
+      if (str(data.stderr)) { bits.push(str(data.stderr)) }
+      if (data.error) { bits.push('Error: ' + (typeof data.error === 'string' ? data.error : JSON.stringify(data.error))) }
+      if (data.exit_code !== undefined && data.exit_code !== null && data.exit_code !== 0) { bits.push(`(terminó con el código ${data.exit_code})`) }
+      text = bits.filter(Boolean).join('\n')
+    } else if (data.user_summary) {
+      text = str(data.user_summary)
+    } else if (error && typeof data.error === 'string') {
+      text = data.error
+    } else if (typeof data.content === 'string') {
+      text = data.content
+    } else {
+      try { text = JSON.stringify(data, null, 2) } catch {}
+    }
+  }
+  return { text: capText(text.replace(ANSI, '')), error }
+}
+
+/** Imágenes que vienen dentro de un mensaje (partes image_url con data:): [{url, name}]. */
+function contentImages(c) {
+  if (!Array.isArray(c)) { return [] }
+  const out = []
+  for (const p of c) {
+    const url = p && (p.type === 'image_url' ? str(p.image_url && (p.image_url.url || p.image_url)) : p.type === 'image' && p.source && p.source.type === 'base64' ? `data:${str(p.source.media_type) || 'image/png'};base64,${str(p.source.data)}` : '')
+    if (/^data:image\/(png|jpe?g|gif|webp);base64,/.test(url) && url.length < 6 * 1024 * 1024) { out.push({ url, name: 'imagen' }) }
+    if (out.length >= 6) { break }
+  }
+  return out
+}
+
+// Filas de «usuario» que en realidad escribe Hermes (resúmenes de memoria, avisos de procesos o de
+// subagentes): se enseñan como una nota plegable, no como un mensaje tuyo.
+const NOTE_KINDS = { internal_notification: 'Aviso de Hermes', process_complete: 'Terminó un proceso', async_delegation_complete: 'Terminó un subagente', model_switch: 'Cambio de modelo' }
+function noteOf(r, text) {
+  if (/^\[CONTEXT COMPACTION/.test(text)) { return { role: 'note', kind: 'compaction', title: 'Hermes resumió la conversación anterior para que quepa', text, ts: r.timestamp || null } }
+  if (NOTE_KINDS[r.display_kind]) { return { role: 'note', kind: r.display_kind, title: NOTE_KINDS[r.display_kind], text, ts: r.timestamp || null } }
+  return null
 }
 
 /** Filas guardadas de /api/sessions/{id}/messages → turnos para la interfaz. */
@@ -190,18 +268,28 @@ function normalizeTranscript(rows) {
     if (r.role === 'user') {
       turn = null
       const text = contentText(r.content)
-      if (text.trim()) { out.push({ role: 'user', text, ts: r.timestamp || null }) }
+      const note = text.trim() ? noteOf(r, text) : null
+      if (note) { out.push(note); continue }
+      const images = contentImages(r.content)
+      const shown = images.length ? text.replace(/^\[imagen\]\n?/gm, '').trim() : text
+      if (shown.trim() || images.length) { out.push({ role: 'user', text: shown, ts: r.timestamp || null, ...(images.length ? { images } : {}) }) }
     } else if (r.role === 'assistant') {
       if (!turn) { turn = { role: 'assistant', blocks: [], reasoning: '', ts: r.timestamp || null }; out.push(turn) }
       const reasoning = str(r.reasoning || r.reasoning_content)
       if (reasoning) { turn.reasoning += (turn.reasoning ? '\n\n' : '') + reasoning }
       const text = contentText(r.content)
       if (text.trim()) { turn.blocks.push({ type: 'text', text }) }
-      for (const c of toolCallsOf(r)) { turn.blocks.push({ type: 'tool', id: c.id, name: c.name, args: c.args, done: false }) }
+      for (const c of toolCallsOf(r)) { turn.blocks.push({ type: 'tool', id: c.id, name: c.name, args: c.args, input: c.input, done: false }) }
     } else if (r.role === 'tool') {
       if (!turn) { continue }
       const b = turn.blocks.find(x => x.type === 'tool' && !x.done && (!r.tool_call_id || x.id === r.tool_call_id))
-      if (b) { b.done = true; b.summary = cut(contentText(r.content).replace(/\s+/g, ' ').trim(), 160) }
+      if (b) {
+        const o = hermesToolOutput(b.name, typeof r.content === 'string' ? r.content : contentText(r.content), null)
+        b.done = true
+        b.summary = cut(o.text.replace(/\s+/g, ' ').trim(), 160)
+        b.output = o.text
+        b.error = o.error
+      }
     }
   }
   for (const t of out) { if (t.blocks) { for (const b of t.blocks) { if (b.type === 'tool') { b.done = true } } } }
@@ -440,13 +528,25 @@ class Connection extends EventEmitter {
         this.ui({ kind: 'tool', sid, phase: 'generating', id: str(p.tool_id), name: str(p.name) })
         break
       case 'tool.start':
-        this.ui({ kind: 'tool', sid, phase: 'start', id: str(p.tool_id), name: str(p.name), args: argsSummary(p.args, p.args_text || p.preview) })
+        this.ui({ kind: 'tool', sid, phase: 'start', id: str(p.tool_id || p.tool_call_id), name: str(p.name || p.tool_name), args: argsSummary(p.args, p.args_text || p.preview || p.context), input: p.args && typeof p.args === 'object' ? boundInput(p.args) : null })
         break
       case 'tool.progress':
         this.ui({ kind: 'tool', sid, phase: 'progress', id: str(p.tool_id), name: str(p.name), percent: typeof p.percent === 'number' ? p.percent : null, message: str(p.message) })
         break
       case 'tool.complete': {
-        this.ui({ kind: 'tool', sid, phase: 'complete', id: str(p.tool_id), name: str(p.name), summary: cut(str(p.summary || p.result_text).replace(/\s+/g, ' ').trim(), 200), seconds: typeof p.duration_s === 'number' ? p.duration_s : null })
+        // Lo que devolvió (result, o result_text en modo «verbose»), si falló, el cambio de un
+        // archivo ya dibujado (inline_diff) y la imagen que produjo o miró (image_path).
+        const name = str(p.name || p.tool_name)
+        const o = hermesToolOutput(name, p.result !== undefined ? p.result : p.result_text, typeof p.is_error === 'boolean' ? p.is_error : null)
+        this.ui({
+          kind: 'tool', sid, phase: 'complete', id: str(p.tool_id || p.tool_call_id), name,
+          summary: cut(str(p.summary || p.result_text || o.text).replace(/\s+/g, ' ').trim(), 200),
+          seconds: typeof p.duration_s === 'number' ? p.duration_s : null,
+          output: o.text, error: o.error,
+          diff: str(p.inline_diff) ? capText(str(p.inline_diff).replace(ANSI, '')) : '',
+          image: str(p.image_path),
+          ...(p.args && typeof p.args === 'object' ? { input: boundInput(p.args) } : {})
+        })
         const st = Array.isArray(p.todos) ? todoSnapshot(p) : null
         if (st) { this.ui({ kind: 'todos', sid, ...st }) }
         break
@@ -886,4 +986,4 @@ class Connection extends EventEmitter {
   }
 }
 
-module.exports = { quotaData, paidKindOf, Connection, normalizeTranscript, sessionRow, argsSummary, isLocalUrl, todoSnapshot, todoStateOf, isTodoCall }
+module.exports = { quotaData, paidKindOf, Connection, normalizeTranscript, sessionRow, argsSummary, boundInput, hermesToolOutput, contentImages, isLocalUrl, todoSnapshot, todoStateOf, isTodoCall }
