@@ -1,7 +1,7 @@
 {
   "name": "pedila",
   "productName": "Pedila",
-  "version": "0.9.0-beta",
+  "version": "0.9.1-beta",
   "private": true,
   "description": "Pedila: una ventana sencilla para usar Hermes Agent (el de tu PC y el de tu servidor). Cliente no oficial.",
   "author": "Pedila",

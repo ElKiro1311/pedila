@@ -1311,6 +1311,7 @@ async function submitLogin(e) {
       $('#login-dialog').close()
       S.listError.server = ''
       S.settings.serverSignedIn = true
+      if (Q.login.server || Q.installed.server) { Q.login.server = false; Q.err.server = ''; Q.at.server = 0; setTimeout(() => loadQuotas('server', true), 1500) }
       if (S.active === 'server') { S.listLoaded.server = false; renderList(); loadSessions('server') }
     } else {
       $('#login-error').textContent = (r && r.error) || 'No se pudo entrar.'
@@ -1941,7 +1942,7 @@ function panelModelsCard() {
 // Las lee el complemento «pedila» dentro de Hermes (las claves no salen de allí). La tarjeta solo
 // aparece si ese Hermes tiene alguna de esas APIs: con el complemento, las que tienen clave; sin él,
 // un botón para activarlo si Hermes tiene alguna puesta. Si no, no se ve nada.
-const Q = { data: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, again: { local: false, server: false }, gen: { local: 0, server: 0 }, err: { local: '', server: '' }, note: { local: '', server: '' }, busy: { local: '', server: '' }, ask: { local: null, server: null }, installed: { local: false, server: false } }
+const Q = { data: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, again: { local: false, server: false }, gen: { local: 0, server: 0 }, err: { local: '', server: '' }, login: { local: false, server: false }, note: { local: '', server: '' }, busy: { local: '', server: '' }, ask: { local: null, server: null }, installed: { local: false, server: false } }
 const QUOTA_NAMES = { openrouter: 'OpenRouter', venice: 'Venice', 'opencode-go': 'OpenCode Go', 'opencode-zen': 'OpenCode Zen' }
 const RESET_NAMES = { daily: 'cada día', weekly: 'cada semana', monthly: 'cada mes' }
 
@@ -1968,9 +1969,10 @@ async function loadQuotas(conn, fresh = false) {
     if (gen !== Q.gen[conn]) { return }
     Q.data[conn] = r
     Q.err[conn] = ''
+    Q.login[conn] = false
     if (r && r.state === 'ok') { Q.note[conn] = ''; Q.installed[conn] = false }
   } catch (e) {
-    if (gen === Q.gen[conn]) { Q.err[conn] = e.message || String(e) }
+    if (gen === Q.gen[conn]) { Q.err[conn] = e.message || String(e); Q.login[conn] = Boolean(e.needLogin) }
   } finally {
     if (gen === Q.gen[conn]) { Q.at[conn] = Date.now() }
     Q.loading[conn] = false
@@ -1996,7 +1998,7 @@ async function installQuotas(conn, force = false) {
       return
     }
     Q.installed[conn] = true
-    if (r.restart) { Q.note[conn] = 'Complemento instalado. Hermes pide reiniciarse para cargarlo: cuando lo reinicies, las cuotas aparecerán aquí.' }
+    if (r.restart) { Q.note[conn] = 'Complemento instalado. Si las cuotas no salen en un momento, reinicia Hermes y pulsa «Ya lo reinicié: comprobar».' }
     schedulePanel()
     await loadQuotas(conn, true)
   } catch (e) {
@@ -2097,7 +2099,7 @@ function panelQuotasCard() {
   const err = Q.err[conn] ? el('div', { class: 'q-line warn', text: `No pude leer las cuotas: ${Q.err[conn]}` }) : null
   if (!q) {
     // La primera lectura falló: se dice, con la opción de reintentar (si no, no hay nada que enseñar).
-    return err ? el('section', { class: 'sp-card' }, el('h4', {}, el('span', { class: 'grow', text: title }), refresh), err) : null
+    return err ? el('section', { class: 'sp-card' }, el('h4', {}, el('span', { class: 'grow', text: title }), refresh), err, Q.login[conn] ? loginAgain(conn) : null) : null
   }
   if (q.state === 'missing') {
     if (!Array.isArray(q.paid) || !q.paid.length) { return null }
@@ -2107,6 +2109,8 @@ function panelQuotasCard() {
     const parts = [el('h4', { text: title }),
       el('p', { class: 'small', text: `Este Hermes usa ${names}. Pedila puede enseñarte lo que te queda de cada una: saldo, límites, cuándo se reinician y lo que llevas gastado.` }),
       el('p', { class: 'muted small', text: 'Para eso instala en Hermes un complemento pequeño de Pedila: lee el saldo dentro de Hermes y solo devuelve números, así tus claves no salen de allí. No toca tus chats ni reinicia Hermes.' })]
+    // Al cargar un complemento, un Hermes con usuario y contraseña sin «secret» fijo cierra las sesiones de su web.
+    if (conn === 'server') { parts.push(el('p', { class: 'muted small', text: 'Ojo: al cargarlo, el Hermes del servidor puede cerrar las sesiones de su página (también la de Pedila) y tendrás que volver a iniciar sesión una vez.' })) }
     if (ask && ask.scan === 'dangerous') {
       parts.push(el('div', { class: 'q-ask' },
         el('p', { class: 'small warn', text: 'El análisis de seguridad de Hermes no deja instalar este complemento.' }),
@@ -2126,6 +2130,7 @@ function panelQuotasCard() {
     }
     if (note) { parts.push(note) }
     if (err) { parts.push(err) }
+    if (Q.login[conn]) { parts.push(loginAgain(conn)) }
     return el('section', { class: 'sp-card' }, ...parts)
   }
   const provs = q.data && Array.isArray(q.data.providers) ? q.data.providers : []
@@ -2135,7 +2140,13 @@ function panelQuotasCard() {
     el('h4', {}, el('span', { class: 'grow', text: title }),
       Number.isFinite(at) ? el('span', { class: 'q-ago', text: ago(at), title: `Leído: ${full(at)}` }) : null, refresh),
     ...provs.map(quotaBlock),
-    err)
+    err, Q.login[conn] ? loginAgain(conn) : null)
+}
+
+/** Hermes cerró la sesión (por ejemplo, al cargar el complemento): botón para entrar otra vez. */
+function loginAgain(conn) {
+  if (conn !== 'server') { return null }
+  return el('div', { class: 'q-actions' }, el('button', { class: 'btn-primary', text: 'Iniciar sesión otra vez', onclick: () => openLogin() }))
 }
 
 function panelConnsCard() {
