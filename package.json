@@ -1,7 +1,7 @@
 {
   "name": "pedila",
   "productName": "Pedila",
-  "version": "0.11.1-beta",
+  "version": "0.11.2-beta",
   "private": true,
   "description": "Pedila: una ventana sencilla para usar Hermes Agent (el de tu PC y el de tu servidor) y tus terminales de IA (Claude Code, Hermes, Antigravity) en pestañas. Cliente no oficial.",
   "author": "Pedila",

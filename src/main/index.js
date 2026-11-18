@@ -597,8 +597,8 @@ function main() {
       settings.patch({ terminals: { dirs: settings.data.terminals.dirs.filter(d => d !== dir) } })
       return settings.data.terminals.dirs
     })
-    handle('hp:term-agents', async watch => {
-      terms.setWatching(watch === true)
+    handle('hp:term-agents', async (watch, reason) => {
+      terms.setWatching(watch === true, reason === 'chats' ? 'chats' : 'consolas')
       await terms.refreshAgents(true)
       return terms.agentsView()
     })

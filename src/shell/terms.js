@@ -388,7 +388,7 @@ export function createTerms(ctx) {
     $('#app').classList.toggle('mode-terms', T.mode === 'terms')
     for (const b of document.querySelectorAll('#mode-switch button')) { b.classList.toggle('active', b.dataset.mode === T.mode) }
     if (save) { call(api.settings, { terminals: { mode: T.mode } }).catch(() => {}) }
-    call(api.termAgents, T.mode === 'terms').then(list => { T.agents = list || []; renderSide() }).catch(() => {})
+    call(api.termAgents, T.mode === 'terms').then(list => { T.agents = list || []; renderSide(); if (ctx.onAgents) { ctx.onAgents(T.agents) } }).catch(() => {})
     if (T.mode === 'chats') { ctx.onChatsMode && ctx.onChatsMode() }
     if (T.mode === 'terms') {
       if (T.active && T.tabs.has(T.active)) { activate(T.active) } else if (T.order.length) { activate(T.order[0]) } else { showEmpty(); call(api.viewing, 'term', null, '').catch(() => {}) }
@@ -426,6 +426,7 @@ export function createTerms(ctx) {
       case 'claude-agents':
         T.agents = evt.agents || []
         renderSide()
+        if (ctx.onAgents) { ctx.onAgents(T.agents) }
         return true
       case 'focus-term':
         setMode('terms')

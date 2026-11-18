@@ -28,6 +28,8 @@ const S = {
   // Carpeta del próximo chat nuevo de Claude y lo último que dijo Claude de tu cuota.
   claudeDir: '',
   claudeLimits: null,
+  // Las conversaciones de Claude abiertas ahora mismo (en una consola o en otra ventana): id → estado.
+  claudeOpen: new Map(),
   search: '',
   found: { local: [], server: [], claude: [] },
   attach: [],
@@ -295,6 +297,7 @@ function renderBanner() {
 async function switchConn(c) {
   if (S.active === c) { return }
   S.active = c
+  watchClaudeList()
   renderConnSwitch()
   renderBanner()
   newChatView()
@@ -383,7 +386,7 @@ function chatRow(conn, r) {
   const ch = chat(conn, r.id)
   const running = ch.running || (ch.live && !ch.live.done)
   const row = el('button', { class: 'chat-row' + (S.current.conn === conn && S.current.sid === r.id ? ' active' : ''), title: r.title },
-    el('div', { class: 't' }, running ? el('span', { class: 'run' }) : null, el('span', { text: r.title })),
+    el('div', { class: 't' }, running ? el('span', { class: 'run' }) : null, el('span', { text: r.title }), activeBadge(conn, r, running)),
     r.preview ? el('div', { class: 'p', text: r.preview }) : null)
   row.addEventListener('click', () => openChat(conn, r.id))
   row.addEventListener('contextmenu', e => { e.preventDefault(); openChatMenu(conn, r.id, e.clientX, e.clientY) })
@@ -1549,6 +1552,7 @@ async function start() {
   setInterval(() => { if (!$('#welcome').hidden) { welcomePet.flash('waving', 1) } }, 15000)
   await loadSessions(S.active)
   for (const other of visibleConns()) { if (other !== S.active) { loadSessions(other) } }
+  watchClaudeList()
   S.claudeDir = (S.settings.terminals && S.settings.terminals.dirs && S.settings.terminals.dirs[0]) || ''
   updateComposer()
   updateExtrasPills()
@@ -1564,9 +1568,10 @@ function makeTerms() {
   return createTerms({
     api, call, el, $, showPopup, askBox,
     toast: text => askBox({ title: 'No pude abrir la terminal', text, ok: 'Vale' }),
+    onAgents: list => onClaudeAgents(list),
     onTopbar: () => setTopbar(),
     onChange: () => { schedulePanel(); updatePet() },
-    onChatsMode: () => { const ch = currentChat(); call(api.viewing, S.current.conn, S.current.sid, ch ? ch.title : '').catch(() => {}) }
+    onChatsMode: () => { watchClaudeList(); const ch = currentChat(); call(api.viewing, S.current.conn, S.current.sid, ch ? ch.title : '').catch(() => {}) }
   })
 }
 
@@ -2922,4 +2927,49 @@ function renderLayoutSettings() {
 
 for (const [box, key] of [['#lay-modes', 'modes'], ['#lay-conns', 'conns'], ['#lay-cards', 'cards']]) {
   sortable($(box), { items: '.lay-row', handle: '.lay-grip', done: ids => saveLayout({ [key]: ids }) })
+}
+
+// ── Chats activos: un distintivo en la lista ─────────────────────────────────────────────────
+/**
+ * «trabajando» si ese chat está respondiendo (aquí, en una consola o en otra ventana de Claude
+ * Code); «abierto» si está abierto en algún sitio pero esperando; «en Pedila» si lo tiene abierto
+ * Pedila como chat. Las conversaciones abiertas las dice `claude agents --json`.
+ */
+function activeBadge(conn, r, running) {
+  const open = conn === 'claude' ? S.claudeOpen.get(r.id) : null
+  const busy = running || (open && open.status === 'busy')
+  let text = ''
+  let title = ''
+  if (busy) {
+    text = 'trabajando'
+    title = running ? 'Respondiendo ahora en Pedila' : open.term ? 'Respondiendo ahora en una consola de Pedila' : 'Respondiendo ahora en otra ventana de Claude Code'
+  } else if (open) {
+    text = 'abierto'
+    title = open.term ? 'Abierto en una consola de Pedila' : 'Abierto en otra ventana de Claude Code (si lo sigues aquí, ciérralo allí antes)'
+  } else if (conn === 'claude' && r.active) {
+    text = 'en Pedila'
+    title = 'Abierto en Pedila como chat'
+  }
+  if (!text) { return null }
+  return el('span', { class: 'live-badge' + (busy ? ' busy' : ''), title }, busy ? el('i') : null, text)
+}
+
+let claudeWatched = null
+/** Con la lista de Claude a la vista, Pedila mira cada 5 s qué conversaciones están abiertas. */
+function watchClaudeList() {
+  const on = S.active === 'claude' && terms.mode !== 'terms'
+  if (on === claudeWatched) { return }
+  claudeWatched = on
+  call(api.termAgents, on, 'chats').then(list => onClaudeAgents(list || [])).catch(() => {})
+}
+
+let claudeOpenSig = ''
+function onClaudeAgents(list) {
+  const m = new Map()
+  for (const a of list || []) { if (a && a.sessionId) { m.set(a.sessionId, { status: a.status, term: a.term || null }) } }
+  const sig = [...m].map(([k, v]) => `${k}:${v.status}:${v.term || ''}`).sort().join('|')
+  if (sig === claudeOpenSig) { return }
+  claudeOpenSig = sig
+  S.claudeOpen = m
+  if (S.active === 'claude') { renderList() }
 }

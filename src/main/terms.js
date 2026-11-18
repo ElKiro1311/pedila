@@ -238,9 +238,14 @@ class Terms extends EventEmitter {
     this.timer = null
   }
 
-  /** Mientras se ve el modo Terminales también se vigilan las sesiones de fuera. */
-  setWatching(on) {
-    this.keepWatching = Boolean(on)
+  /**
+   * Mientras se ven las consolas o la lista de chats de Claude, también se vigilan las sesiones
+   * de fuera (cada 5 s). Cada sitio que mira se apunta con su nombre; con ninguno, se para.
+   */
+  setWatching(on, reason = 'consolas') {
+    if (!this.watchers) { this.watchers = new Set() }
+    if (on) { this.watchers.add(reason) } else { this.watchers.delete(reason) }
+    this.keepWatching = this.watchers.size > 0
     if (this.keepWatching) { this.watch() }
   }
 

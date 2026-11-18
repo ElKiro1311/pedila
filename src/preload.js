@@ -44,7 +44,7 @@ contextBridge.exposeInMainWorld('hp', {
   termTitle: (id, title, byUser) => call('hp:term-title', id, title, Boolean(byUser)),
   termPickDir: start => call('hp:term-pick-dir', start || ''),
   termForgetDir: dir => call('hp:term-forget-dir', dir),
-  termAgents: watch => call('hp:term-agents', Boolean(watch)),
+  termAgents: (watch, reason) => call('hp:term-agents', Boolean(watch), reason === 'chats' ? 'chats' : 'consolas'),
   termRestore: action => call('hp:term-restore', action),
   termInput: (id, data) => ipcRenderer.send('hp:term-input', id, data),
   termResize: (id, cols, rows) => ipcRenderer.send('hp:term-resize', id, cols, rows),
