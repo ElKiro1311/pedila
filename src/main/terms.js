@@ -70,6 +70,11 @@ class Terms extends EventEmitter {
     this.agentsAt = 0
     this.agentsBusy = false
     this.timer = null
+    this.adoptQueue = new Map() // sesiones de otras ventanas que esperan a terminar para traerse
+    this.adopting = new Set()
+    this.launch = new Map() // «pid:inicio» → true si ese Claude lo lleva un programa (ver isManagedCmd)
+    this.launchFailAt = 0
+    this.agentsP = null
   }
 
   /** Qué programas hay en este PC (se vuelve a mirar como mucho cada 30 s). */
@@ -239,6 +244,43 @@ class Terms extends EventEmitter {
   }
 
   /**
+   * Trae a una pestaña una sesión de Claude abierta en otra ventana: cierra aquel Claude y abre la
+   * misma conversación aquí (claude --resume), para que no quede en dos sitios. Si está trabajando,
+   * espera a que termine (se mira cada vez que llega la lista de sesiones).
+   * Devuelve { info } (abierta), { queued: true } (esperando) o { already: true }.
+   */
+  async adopt(sessionId, extraArgs) {
+    if (!SID.test(String(sessionId || ''))) { throw new Error('sesión no válida') }
+    const mine = [...this.terms.values()].find(t => t.alive && t.sessionId === sessionId)
+    if (mine) { return { already: true, info: this.publicOf(mine) } }
+    const a = this.agents.find(x => x.sessionId === sessionId && x.kind === 'interactive')
+    if (!a) { throw new Error('Esa sesión ya no está abierta en otra ventana.') }
+    if (a.managed === null) { await this.classify([a]); a.managed = this.managedOf(a) }
+    if (a.managed === true) { throw new Error('Esa conversación la lleva otro programa (otro Pedila, VS Code…), no una ventana de Claude Code: traerla aquí la cortaría.') }
+    if (a.status === 'busy') { this.adoptQueue.set(sessionId, extraArgs); this.watch(); return { queued: true } }
+    this.adoptQueue.delete(sessionId)
+    if (this.adopting.has(sessionId)) { return { queued: true } }
+    this.adopting.add(sessionId)
+    try {
+      // Si aquel Claude no se deja cerrar (p. ej., abierto como administrador), no se abre otra vez aquí.
+      if (a.pid && !(await killAndWait(a.pid))) { throw new Error('No pude cerrar el Claude de la otra ventana: ciérralo allí y vuelve a intentarlo.') }
+      const info = this.open({ kind: 'claude', cwd: a.cwd, resume: sessionId, extraArgs, cols: 120, rows: 32 })
+      this.log.info(`[terminal ${info.id}] traída de otra ventana: ${a.name || sessionId.slice(0, 8)} (pid ${a.pid} cerrado)`)
+      this.emit('ui', { kind: 'term-opened', info })
+      return { info }
+    } finally { this.adopting.delete(sessionId) }
+  }
+
+  /** Las que esperaban a terminar de trabajar: se traen en cuanto quedan libres. */
+  runAdoptQueue() {
+    for (const [sid, extraArgs] of this.adoptQueue) {
+      const a = this.agents.find(x => x.sessionId === sid && x.kind === 'interactive')
+      if (!a) { this.adoptQueue.delete(sid); this.emit('ui', { kind: 'term-adopt-gone', sessionId: sid }); continue }
+      if (a.status !== 'busy') { this.adopt(sid, extraArgs).catch(e => this.log.warn('[terminales] no pude traer', sid.slice(0, 8), e.message)) }
+    }
+  }
+
+  /**
    * Mientras se ven las consolas o la lista de chats de Claude, también se vigilan las sesiones
    * de fuera (cada 5 s). Cada sitio que mira se apunta con su nombre; con ninguno, se para.
    */
@@ -250,26 +292,55 @@ class Terms extends EventEmitter {
   }
 
   refreshAgents(force = false) {
-    if (this.agentsBusy || (!force && Date.now() - this.agentsAt < 4000)) { return Promise.resolve(this.agents) }
+    // Con una consulta en marcha se espera a esa (devolver la lista vieja dejaría al arranque sin nada).
+    if (this.agentsBusy) { return this.agentsP }
+    if (!force && Date.now() - this.agentsAt < 4000) { return Promise.resolve(this.agents) }
     this.tools()
     const exe = this.paths.claude
     if (!exe) { return Promise.resolve(this.agents) }
     const viaCmd = /\.(cmd|bat)$/i.test(exe)
     this.agentsBusy = true
-    return new Promise(resolve => {
+    this.agentsP = new Promise(resolve => {
       const file = viaCmd ? (process.env.ComSpec || 'cmd.exe') : exe
       const argv = viaCmd ? [cmdLine(exe, ['agents', '--json'])] : ['agents', '--json']
-      execFile(file, argv, { windowsHide: true, windowsVerbatimArguments: viaCmd, timeout: 15000, maxBuffer: 4 * 1024 * 1024, env: cleanEnv() }, (err, out) => {
+      execFile(file, argv, { windowsHide: true, windowsVerbatimArguments: viaCmd, timeout: 15000, maxBuffer: 4 * 1024 * 1024, env: cleanEnv() }, async (err, out) => {
+        let rows = null
+        if (!err) { try { rows = JSON.parse(String(out)) } catch {} }
+        if (Array.isArray(rows)) {
+          try { await this.classify(rows, true) } catch {}
+          this.applyAgents(rows)
+        }
         this.agentsBusy = false
         this.agentsAt = Date.now()
-        if (err) { return resolve(this.agents) }
-        let rows = null
-        try { rows = JSON.parse(String(out)) } catch {}
-        if (Array.isArray(rows)) { this.applyAgents(rows) }
         resolve(this.agents)
       })
     })
+    return this.agentsP
   }
+
+  /**
+   * Mira con qué se lanzó cada Claude de la lista (una vez por proceso): `claude agents` llama
+   * «interactive» también a los que lleva un programa (los chats de Pedila, VS Code, el SDK…).
+   */
+  async classify(rows, prune = false) {
+    const want = rows.filter(a => a && Number(a.pid) > 0 && !this.launch.has(launchKey(a)))
+    if (want.length && Date.now() - this.launchFailAt > 60000) {
+      const lines = await commandLines(want.map(a => Number(a.pid)))
+      if (lines === null) { this.launchFailAt = Date.now() }
+      for (const a of want) {
+        const cmd = lines && lines.get(Number(a.pid))
+        // Sin línea de órdenes (proceso de administrador, o ya cerrado) no se sabe: se queda sin marcar.
+        if (cmd) { this.launch.set(launchKey(a), isManagedCmd(cmd)) }
+      }
+    }
+    if (prune) {
+      const live = new Set(rows.map(launchKey))
+      for (const k of this.launch.keys()) { if (!live.has(k)) { this.launch.delete(k) } }
+    }
+  }
+
+  /** true: lo lleva un programa; false: es una ventana de Claude Code; null: no se sabe. */
+  managedOf(a) { const k = launchKey(a); return this.launch.has(k) ? this.launch.get(k) : null }
 
   /** Lee la salida de `claude agents --json`: pone a cada pestaña de Claude su conversación y su
    *  estado (por el pid) y avisa cuando una pasa de trabajar a esperar. */
@@ -281,7 +352,8 @@ class Terms extends EventEmitter {
       sessionId: String(a.sessionId),
       name: typeof a.name === 'string' ? a.name.slice(0, 80) : '',
       status: String(a.status || ''),
-      startedAt: Number(a.startedAt) || null
+      startedAt: Number(a.startedAt) || null,
+      managed: this.managedOf(a)
     }))
     let changed = false
     for (const t of this.terms.values()) {
@@ -302,6 +374,7 @@ class Terms extends EventEmitter {
       }
     }
     if (changed) { this.emit('changed') }
+    if (this.adoptQueue.size) { this.runAdoptQueue() }
     this.emit('ui', { kind: 'claude-agents', agents: this.agentsView() })
     if (![...this.terms.values()].some(t => t.alive && t.kind === 'claude') && !this.keepWatching) { this.unwatch() }
   }
@@ -312,6 +385,42 @@ class Terms extends EventEmitter {
     const bySid = new Map([...this.terms.values()].filter(t => t.alive && t.sessionId).map(t => [t.sessionId, t.id]))
     return this.agents.map(a => ({ ...a, term: byPid.get(a.pid) || bySid.get(a.sessionId) || null }))
   }
+}
+
+/** Cierra un proceso y espera a que se haya ido (como mucho 6 s). true si ya no está. */
+async function killAndWait(pid) {
+  try { process.kill(pid) } catch (e) { return e.code === 'ESRCH' }
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 150))
+    try { process.kill(pid, 0) } catch (e) { return e.code !== 'EPERM' }
+  }
+  return false
+}
+
+const launchKey = a => `${Number(a.pid) || 0}:${Number(a.startedAt) || 0}`
+
+// Un Claude que lleva un programa (Pedila, VS Code, el SDK…) y no una ventana de Claude Code:
+// va con -p/--print o habla en stream-json. Traerlo a una pestaña lo cortaría.
+const MANAGED = /(^|\s)(-p|--print|--input-format|--output-format|--sdk-url)(?=[\s=]|$)/
+const isManagedCmd = cmd => MANAGED.test(String(cmd || ''))
+
+/** Las líneas de órdenes de unos procesos (pid → texto) con una sola llamada; null si falla. */
+function commandLines(pids) {
+  return new Promise(resolve => {
+    if (process.platform !== 'win32' || !pids.length) { return resolve(new Map()) }
+    const filter = pids.map(p => `ProcessId=${Number(p)}`).join(' OR ')
+    const script = `[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process -Filter '${filter}' | ForEach-Object { [string]$_.ProcessId + [char]9 + ([string]$_.CommandLine -replace '[\\r\\n]', ' ') }`
+    const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    execFile(ps, ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 20000, maxBuffer: 2 * 1024 * 1024 }, (err, out) => {
+      if (err) { return resolve(null) }
+      const m = new Map()
+      for (const line of String(out).split(/\r?\n/)) {
+        const i = line.indexOf('\t')
+        if (i > 0) { m.set(Number(line.slice(0, i)), line.slice(i + 1)) }
+      }
+      resolve(m)
+    })
+  })
 }
 
 /**
@@ -350,4 +459,4 @@ function splitArgs(text) {
   return out.slice(0, 40)
 }
 
-module.exports = { Terms, KINDS, which, SID, splitArgs, cleanEnv, cmdLine }
+module.exports = { Terms, KINDS, which, SID, splitArgs, cleanEnv, cmdLine, isManagedCmd, commandLines }

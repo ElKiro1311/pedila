@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('hp', {
   termForgetDir: dir => call('hp:term-forget-dir', dir),
   termAgents: (watch, reason) => call('hp:term-agents', Boolean(watch), reason === 'chats' ? 'chats' : 'consolas'),
   termRestore: action => call('hp:term-restore', action),
+  termAdopt: sessionId => call('hp:term-adopt', sessionId),
   termInput: (id, data) => ipcRenderer.send('hp:term-input', id, data),
   termResize: (id, cols, rows) => ipcRenderer.send('hp:term-resize', id, cols, rows),
   pathOf: file => webUtils.getPathForFile(file),

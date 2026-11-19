@@ -328,6 +328,9 @@ async function loadSessions(conn = S.active) {
     for (const r of rows) {
       const ch = chat(conn, r.id)
       if (!ch.title) { ch.title = r.title }
+      // Claude dice qué chats trabajan (también los reenganchados al abrir Pedila, cuyo comienzo no
+      // vio la pantalla). Los que se siguen en directo desde aquí mandan sus propios avisos.
+      if (conn === 'claude' && typeof r.running === 'boolean' && (!ch.live || ch.live.done)) { ch.running = r.running }
     }
   } catch (e) {
     S.listError[conn] = e.needLogin ? 'login' : S.conns[conn].state === 'setup' ? 'setup' : e.message
@@ -468,7 +471,15 @@ async function openChat(conn, sid) {
   updateModelPill()
   try {
     const turns = await call(api.transcript, conn, sid)
-    ch.transcript = turns
+    const L = ch.live
+    if (conn === 'claude' && L && !L.done && L.startedAt) {
+      // Con un turno en directo (p. ej., al volver a este chat a mitad de respuesta), lo que ya guardó
+      // Claude de ese turno no se repite: lo enseña el turno en directo. Al acabar se relee entero.
+      ch.transcript = turns.filter(t => !(t.role === 'assistant' && t.ts && Date.parse(t.ts) >= L.startedAt - 1000))
+      ch.resumed = true
+    } else {
+      ch.transcript = turns
+    }
     ch.loaded = true
   } catch (e) {
     ch.loaded = true
@@ -481,7 +492,14 @@ async function openChat(conn, sid) {
   // Si el chat está cargado en el gateway (quizá respondiendo desde Hermes Desktop), me engancho
   // para recibir sus eventos en vivo y sus permisos pendientes.
   if ((row && row.active) || ch.running || (ch.live && !ch.live.done)) {
-    call(api.attach, conn, sid).then(r => { ch.running = r.running; if (!r.running && ch.live && ch.live.done) { ch.live = null } updateComposer(); renderList() }).catch(() => {})
+    call(api.attach, conn, sid).then(r => {
+      ch.running = r.running
+      if (!r.running && ch.live && ch.live.done) { ch.live = null; if (currentChat() === ch) { renderChat(false) } }
+      // Trabajando sin que la pantalla viera empezar el turno (reenganchado al abrir Pedila).
+      if (r.running && (!ch.live || ch.live.done)) { ch.resumed = true }
+      updateComposer()
+      renderList()
+    }).catch(() => {})
   }
   $('#input').focus()
 }
@@ -928,6 +946,25 @@ async function stopTurn(ch) {
   }
 }
 
+/** Una herramienta del último turno del historial que aún no tiene resultado (o null). */
+function pendingPastTool(ch, id) {
+  const last = ch.transcript[ch.transcript.length - 1]
+  if (!last || last.role !== 'assistant' || !Array.isArray(last.blocks)) { return null }
+  return last.blocks.find(b => b.type === 'tool' && b.id === id && !b.done) || null
+}
+
+/** Lo que trae el aviso de «herramienta terminada»: resultado, si falló, el cambio y las imágenes. */
+function toolDone(b, evt) {
+  b.done = true
+  b.summary = evt.summary
+  b.seconds = evt.seconds !== null && evt.seconds !== undefined ? evt.seconds : (b.startedAt ? (Date.now() - b.startedAt) / 1000 : null)
+  if (typeof evt.output === 'string') { b.output = evt.output }
+  b.error = Boolean(evt.error)
+  if (evt.diff) { b.diff = evt.diff }
+  if (Array.isArray(evt.images) && evt.images.length) { b.images = evt.images }
+  if (evt.image) { b.image = evt.image }
+}
+
 function liveToTurn(L) {
   return { role: 'assistant', blocks: L.blocks.map(b => ({ ...b, done: true })), reasoning: L.reasoning, stats: L.stats || null }
 }
@@ -1151,6 +1188,7 @@ function onEvent(evt) {
   if (!evt.sid) { return }
   const ch = chat(evt.conn, evt.sid)
   const isCur = currentChat() === ch
+  let fullRender = false // cambió algo del historial, no solo el turno en directo
   const ensureLive = () => {
     if (!ch.live || ch.live.done) {
       if (ch.live && ch.live.done) { ch.transcript.push(liveToTurn(ch.live)) }
@@ -1198,6 +1236,18 @@ function onEvent(evt) {
       }
       break
     case 'tool': {
+      // La que ya está en el historial sin terminar (turno empezado antes de que la pantalla lo
+      // siguiera, p. ej., reenganchado al abrir Pedila): se completa allí, no se repite en directo.
+      const inLive = ch.live && !ch.live.done && ch.live.blocks.some(x => x.type === 'tool' && x.id === evt.id)
+      const past = evt.id && !inLive ? pendingPastTool(ch, evt.id) : null
+      if (past) {
+        if (evt.phase === 'complete') { toolDone(past, evt) }
+        if (evt.input && typeof evt.input === 'object') { past.input = evt.input }
+        if (ch.live && !ch.live.done) { ch.live.status = evt.phase === 'complete' ? 'Pensando' : `Usando ${past.name}` }
+        ch.resumed = true
+        fullRender = true
+        break
+      }
       const L = ensureLive()
       let b = L.blocks.find(x => x.type === 'tool' && x.id && x.id === evt.id)
       // «Preparando» (tool.generating) y «en marcha» (tool.start) pueden llegar con ids distintos:
@@ -1215,16 +1265,7 @@ function onEvent(evt) {
       // de un archivo y las imágenes (las de Claude vienen dentro; la de Hermes, por su ruta).
       if (evt.input && typeof evt.input === 'object') { b.input = evt.input }
       if (evt.phase === 'progress') { b.percent = evt.percent; b.message = evt.message }
-      if (evt.phase === 'complete') {
-        b.done = true
-        b.summary = evt.summary
-        b.seconds = evt.seconds !== null && evt.seconds !== undefined ? evt.seconds : (b.startedAt ? (Date.now() - b.startedAt) / 1000 : null)
-        if (typeof evt.output === 'string') { b.output = evt.output }
-        b.error = Boolean(evt.error)
-        if (evt.diff) { b.diff = evt.diff }
-        if (Array.isArray(evt.images) && evt.images.length) { b.images = evt.images }
-        if (evt.image) { b.image = evt.image }
-      }
+      if (evt.phase === 'complete') { toolDone(b, evt) }
       L.status = evt.phase === 'complete' ? 'Pensando' : `Usando ${b.name}`
       break
     }
@@ -1243,6 +1284,23 @@ function onEvent(evt) {
         const out = evt.out || (ch.usage && ch.usage.out && ch.usage.outStart !== undefined ? ch.usage.out - ch.usage.outStart : 0)
         const streamMs = L.firstAt ? Date.now() - L.firstAt : 0
         L.stats = { ms: evt.ms || (L.startedAt ? Date.now() - L.startedAt : null), tps: out && streamMs > 500 ? out / (streamMs / 1000) : null }
+      }
+      if (ch.resumed && !evt.more) {
+        // El turno empezó sin la pantalla delante (o se volvió al chat a mitad): al acabar se lee entero
+        // del archivo, como una sola respuesta (si mientras tanto empieza otro turno desde aquí, ese manda).
+        ch.resumed = false
+        setTimeout(() => {
+          call(api.transcript, evt.conn, evt.sid).then(t => {
+            // Con un error o una nota («Parado.») se queda como está: releer la borraría.
+            if (ch.live !== L || ch.running || L.error || L.note) { return }
+            // La duración del turno se queda (el archivo no la guarda).
+            const last = t[t.length - 1]
+            if (last && last.role === 'assistant' && L.stats) { last.stats = L.stats }
+            ch.transcript = t
+            ch.live = null
+            if (currentChat() === ch) { renderChat(nearBottom()) }
+          }).catch(() => {})
+        }, 400)
       }
       if (S.settings.notify.chime && !evt.more && (!document.hasFocus() || !isCur)) { chime() }
       if (evt.more) {
@@ -1320,7 +1378,7 @@ function onEvent(evt) {
       return
   }
   if (isCur) {
-    if (['prompt', 'prompt-done', 'error', 'turn-lost', 'complete'].includes(evt.kind)) { renderChat(nearBottom()) } else if (['delta', 'reasoning', 'tool', 'status', 'thinking', 'turn-start', 'segment', 'running'].includes(evt.kind)) { scheduleLive() }
+    if (fullRender || ['prompt', 'prompt-done', 'error', 'turn-lost', 'complete'].includes(evt.kind)) { renderChat(nearBottom()) } else if (['delta', 'reasoning', 'tool', 'status', 'thinking', 'turn-start', 'segment', 'running'].includes(evt.kind)) { scheduleLive() }
     if (['info', 'usage', 'title'].includes(evt.kind)) { setTopbar() }
     updateComposer()
   }
@@ -1756,6 +1814,7 @@ function makeTerms() {
     api, call, el, $, showPopup, askBox,
     toast: text => askBox({ title: 'No pude abrir la terminal', text, ok: 'Vale' }),
     onAgents: list => onClaudeAgents(list),
+    openClaudeChat: sid => { terms.setMode('chats'); openChat('claude', sid) },
     onTopbar: () => setTopbar(),
     onChange: () => { schedulePanel(); updatePet() },
     onChatsMode: () => { watchClaudeList(); const ch = currentChat(); call(api.viewing, S.current.conn, S.current.sid, ch ? ch.title : '').catch(() => {}) }
@@ -3185,13 +3244,17 @@ for (const [box, key] of [['#lay-modes', 'modes'], ['#lay-conns', 'conns'], ['#l
  */
 function activeBadge(conn, r, running) {
   const open = conn === 'claude' ? S.claudeOpen.get(r.id) : null
-  const busy = running || (open && open.status === 'busy')
+  // Un chat de Pedila también sale en `claude agents` (su Claude lo lleva el anfitrión): no es «otra ventana».
+  // De esos, Pedila ya sabe si trabajan (lo de `claude agents` llega con hasta 5 s de retraso).
+  const mine = conn === 'claude' && r.active
+  const other = open && !(mine && !open.term) ? open : null
+  const busy = running || (other && other.status === 'busy')
   let text = ''
   let title = ''
   if (busy) {
     text = 'trabajando'
-    title = running ? 'Respondiendo ahora en Pedila' : open.term ? 'Respondiendo ahora en una consola de Pedila' : 'Respondiendo ahora en otra ventana de Claude Code'
-  } else if (open) {
+    title = running ? 'Respondiendo ahora en Pedila' : other.term ? 'Respondiendo ahora en una consola de Pedila' : 'Respondiendo ahora en otra ventana de Claude Code'
+  } else if (other) {
     text = 'abierto'
     title = open.term ? 'Abierto en una consola de Pedila' : 'Abierto en otra ventana de Claude Code (si lo sigues aquí, ciérralo allí antes)'
   } else if (conn === 'claude' && r.active) {

@@ -12,7 +12,8 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { argsSummary, boundInput, contentImages } = require('./connection')
-const { which, cleanEnv, splitArgs, SID } = require('./terms')
+const { which, cleanEnv, splitArgs, SID, cmdLine } = require('./terms')
+const host = require('./host')
 
 const str = v => (typeof v === 'string' ? v : '')
 const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
@@ -166,6 +167,9 @@ class ClaudeConnection extends EventEmitter {
     this.prompts = new Map()
     this.images = new Map() // id → { mime, data }
     this.imageIndex = new Map() // sid → { file, refs: ref → { start, end } } (dónde están sus imágenes)
+    // El anfitrión de cada chat (sobrevive a cerrar Pedila) y lo que dijo Claude mientras tanto.
+    this.hostDir = path.join(path.dirname(metaFile), 'host')
+    this.runDir = path.join(path.dirname(metaFile), 'claude-run')
     this.lastEffort = new Map() // sid → el esfuerzo con que respondió Claude por última vez (de la conversación)
     this.limits = null // lo último que dijo Claude de tu cuota
     this.meta = this.loadMeta()
@@ -188,6 +192,7 @@ class ClaudeConnection extends EventEmitter {
     this.setState(this.exe ? 'ready' : 'missing', this.exe ? '' : 'No encuentro Claude Code (el programa «claude») en este PC.')
     clearInterval(this.idleTimer)
     this.idleTimer = setInterval(() => this.reapIdle(), 60 * 1000)
+    this.reconnecting = this.reconnectHosts().catch(e => this.log.warn('[claude] no pude reengancharme a los chats:', e.message))
     // Si cambian las conversaciones guardadas (también desde una consola), la lista se refresca.
     try {
       this.watcher = fs.watch(path.join(configDir(), 'projects'), { recursive: true }, (_e, f) => {
@@ -202,7 +207,67 @@ class ClaudeConnection extends EventEmitter {
     this.stopped = true
     clearInterval(this.idleTimer)
     try { this.watcher && this.watcher.close() } catch {}
-    for (const s of this.procs.values()) { this.kill(s) }
+    for (const s of this.procs.values()) {
+      if (s.sock) { s.leaving = true; try { s.sock.end() } catch {} } else { this.kill(s) }
+    }
+  }
+
+  /** Los chats que se cortarían al cerrar Pedila (los que trabajan sin anfitrión). */
+  fragileBusyCount() { return [...this.procs.values()].filter(s => s.busy && !s.sock).length }
+
+  /** Al abrir Pedila: los chats cuyo anfitrión sigue vivo (trabajando o esperando) se reenganchan. */
+  async reconnectHosts() {
+    let files = []
+    try { files = fs.readdirSync(this.runDir).filter(f => /^[0-9a-f-]{36}\.json$/i.test(f)) } catch { return }
+    let n = 0
+    for (const f of files) {
+      const sid = f.slice(0, 36)
+      if (!SID.test(sid) || this.procs.has(sid)) { continue }
+      let info = null
+      try { info = JSON.parse(fs.readFileSync(path.join(this.runDir, f), 'utf8')) } catch {}
+      const sock = info ? await host.hostAlive(sid) : null
+      if (!sock) { this.cleanRun(sid); continue }
+      const s = this.newState(sid, info.cwd)
+      s.logFile = info.logFile
+      s.at = Number(info.at) || Date.now()
+      // Lo permitido «para toda la sesión» sigue valiendo (Claude es el mismo proceso).
+      if (Array.isArray(info.allow)) { for (const t of info.allow) { if (typeof t === 'string') { s.allow.add(t) } } }
+      this.procs.set(sid, s)
+      this.wireHost(s, sock)
+      s.ready = Promise.resolve()
+      n++
+      this.log.info(`[claude] chat ${sid.slice(0, 8)} siguió vivo mientras Pedila estaba cerrado: me reengancho`)
+    }
+    if (n) { this.ui({ kind: 'sessions-changed' }) }
+  }
+
+  newState(sid, cwd) {
+    return { sid, cwd, alive: true, busy: false, buf: '', err: '', blocks: new Map(), turnAt: 0, lastUsed: Date.now(), allow: new Set(), tasks: new Map(), controls: new Map() }
+  }
+
+  /** Engancha la tubería del anfitrión: lo que llega va por onData; si se corta sin aviso, el chat terminó. */
+  wireHost(s, sock) {
+    s.sock = sock
+    sock.setEncoding('utf8')
+    sock.on('data', d => this.onData(s, d))
+    sock.on('error', () => {})
+    sock.on('close', () => {
+      if (s.sock !== sock) { return }
+      s.sock = null
+      if (!s.exitSeen && !s.leaving && !this.stopped) { this.onExit(s, null) }
+    })
+  }
+
+  /** Lo que hace falta para reengancharse a un chat con anfitrión al volver a abrir Pedila. */
+  saveRunInfo(s) {
+    if (!s.logFile) { return }
+    if (!s.at) { s.at = Date.now() }
+    try { fs.writeFileSync(path.join(this.runDir, s.sid + '.json'), JSON.stringify({ sid: s.sid, cwd: s.cwd, logFile: s.logFile, at: s.at, allow: [...s.allow] })) } catch {}
+  }
+
+  /** Borra el rastro de un anfitrión que ya terminó. */
+  cleanRun(sid) {
+    for (const ext of ['.json', '.jsonl', '.jsonl.err']) { try { fs.unlinkSync(path.join(this.runDir, sid + ext)) } catch {} }
   }
 
   retryNow() { this.exe = null; this.start() }
@@ -290,7 +355,9 @@ class ClaudeConnection extends EventEmitter {
       this.files.set(f.sid, f.file)
       const r = this.rowOf(f)
       if (!r) { continue }
-      const row = { ...r, pinned: this.meta.pinned.includes(f.sid), archived: this.meta.archived.includes(f.sid), active: this.procs.has(f.sid) }
+      // running: la pantalla lo sabe aunque no viera empezar el turno (p. ej., reenganchado al abrir Pedila).
+      const p = this.procs.get(f.sid)
+      const row = { ...r, pinned: this.meta.pinned.includes(f.sid), archived: this.meta.archived.includes(f.sid), active: Boolean(p), running: Boolean(p && p.busy) }
       if (archived === 'exclude' && row.archived) { continue }
       if (archived === 'only' && !row.archived) { continue }
       rows.push(row)
@@ -420,7 +487,11 @@ class ClaudeConnection extends EventEmitter {
         }
       }
     }
-    for (const t of tools.values()) { t.done = true }
+    // Sin resultado = terminada, salvo las del último turno de un chat que sigue trabajando (la
+    // pantalla las enseña en marcha y les pone el resultado cuando llega en directo).
+    const proc = this.procs.get(sid)
+    const openTurn = proc && proc.busy && turn && out[out.length - 1] === turn ? turn : null
+    for (const t of tools.values()) { if (!t.done && !(openTurn && openTurn.blocks.includes(t))) { t.done = true } }
     if (todos) { this.ui({ kind: 'todos', sid, history: true, revision: 0, ...todos }) }
     if (lastEffort) { this.lastEffort.set(sid, lastEffort) }
     // Dónde están sus imágenes (de los últimos chats abiertos).
@@ -444,13 +515,19 @@ class ClaudeConnection extends EventEmitter {
     const s = this.procs.get(sid)
     const running = Boolean(s && s.busy)
     this.ui({ kind: 'running', sid, running })
+    // Los permisos que esperan respuesta (p. ej., pedidos antes de que la pantalla estuviera lista).
+    for (const [key, p] of this.prompts) {
+      if (p.sid !== sid) { continue }
+      const { input, ...pub } = p
+      this.ui({ ...pub, kind: 'prompt', promptKind: 'approval', key, again: true })
+    }
     return { running }
   }
 
-  /** El proceso de `claude` de ese chat (lo arranca si hace falta). */
-  ensure(sid) {
+  /** El proceso de `claude` de ese chat (lo arranca si hace falta, dentro de su anfitrión). */
+  async ensure(sid) {
     let s = this.procs.get(sid)
-    if (s && s.alive) { return s }
+    if (s && s.alive) { if (s.ready) { await s.ready } return s }
     if (!this.exe) { this.exe = which('claude') }
     if (!this.exe) { throw new Error('No encuentro Claude Code en este PC.') }
     const p = this.pending.get(sid) || (this.meta.opts && this.meta.opts[sid] ? { ...this.meta.opts[sid], cwd: null } : null)
@@ -472,14 +549,35 @@ class ClaudeConnection extends EventEmitter {
     if (p && typeof p.ultracode === 'boolean' && !/\.(cmd|bat)$/i.test(this.exe)) { args.push('--settings', JSON.stringify({ ultracode: p.ultracode })) }
     // Sin «saltarse los permisos», Claude pregunta por aquí y Pedila enseña la tarjeta de permiso.
     if (!skipPerms) { args.push('--permission-prompt-tool', 'stdio') }
+    const viaCmd = /\.(cmd|bat)$/i.test(this.exe)
+    // Con anfitrión, el chat sigue vivo aunque Pedila se cierre o se actualice.
+    const hostExe = host.hostExe(this.hostDir, this.log)
+    if (hostExe) {
+      s = this.newState(sid, cwd)
+      this.procs.set(sid, s)
+      this.pending.delete(sid)
+      fs.mkdirSync(this.runDir, { recursive: true })
+      const logFile = path.join(this.runDir, sid + '.jsonl')
+      s.logFile = logFile
+      s.ready = (async () => {
+        const live = await host.hostAlive(sid)
+        if (live) { this.wireHost(s, live); return }
+        host.startHost(hostExe, { sid, logFile, cwd, cmd: viaCmd ? (process.env.ComSpec || 'cmd.exe') : this.exe, args, raw: viaCmd ? cmdLine(this.exe, args) : null, env: cleanEnv() })
+        this.saveRunInfo(s)
+        this.wireHost(s, await host.connectHost(sid, 20000))
+      })()
+      try { await s.ready } catch (e) { s.alive = false; this.procs.delete(sid); throw e }
+      this.log.info(`[claude] chat ${sid.slice(0, 8)} abierto en ${cwd}${file ? ' (sigue una conversación guardada)' : ''} · con anfitrión`)
+      return s
+    }
     let exe = this.exe
     let argv = args
-    if (/\.(cmd|bat)$/i.test(exe)) {
+    if (viaCmd) {
       exe = process.env.ComSpec || 'cmd.exe'
       argv = ['/d', '/s', '/c', [this.exe, ...args].map(a => (/[\s&()^|<>"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a)).join(' ')]
     }
     const proc = spawn(exe, argv, { cwd, env: cleanEnv(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
-    s = { sid, cwd, proc, alive: true, busy: false, buf: '', err: '', blocks: new Map(), turnAt: 0, lastUsed: Date.now(), allow: new Set(), tasks: new Map(), controls: new Map() }
+    s = { ...this.newState(sid, cwd), proc }
     this.procs.set(sid, s)
     this.pending.delete(sid)
     proc.stdout.setEncoding('utf8')
@@ -494,11 +592,14 @@ class ClaudeConnection extends EventEmitter {
   }
 
   write(s, obj) {
-    try { s.proc.stdin.write(JSON.stringify(obj) + '\n') } catch (e) { throw new Error('No pude hablar con Claude: ' + e.message) }
+    const line = JSON.stringify(obj) + '\n'
+    try {
+      if (s.sock) { s.sock.write(line) } else if (s.proc) { s.proc.stdin.write(line) } else { throw new Error('Claude no está conectado') }
+    } catch (e) { throw new Error('No pude hablar con Claude: ' + e.message) }
   }
 
   async send(sid, text, attachments = []) {
-    const s = this.ensure(sid)
+    const s = await this.ensure(sid)
     s.lastUsed = Date.now()
     const content = [{ type: 'text', text }]
     for (const a of attachments) {
@@ -549,6 +650,44 @@ class ClaudeConnection extends EventEmitter {
 
   onMsg(s, m) {
     const sid = s.sid
+    if (m.type === 'pedila_host') {
+      if (m.event === 'hello') {
+        s.hostPid = m.hostPid
+        // Lo de este turno que se dijo sin Pedila delante: se repasa para que el chat se vea igual.
+        if (s.logFile && m.logEnd > m.turnStart) {
+          s.replaying = true
+          try {
+            for (const l of host.readLog(s.logFile, m.turnStart, m.logEnd)) {
+              let x = null
+              try { x = JSON.parse(l) } catch {}
+              if (x && x.type !== 'pedila_host') { this.onMsg(s, x) }
+            }
+          } finally { s.replaying = false }
+          // Los permisos que siguen sin contestar: si ya estaba permitido para toda la sesión se
+          // contesta solo; si no, se pide (y avisa) ahora.
+          for (const [k, p] of this.prompts) {
+            if (p.sid !== sid) { continue }
+            if (s.allow.has(p.tool)) { this.answer(k, 'once').catch(() => {}); continue }
+            const { input, ...pub } = p
+            this.ui({ ...pub, kind: 'prompt', promptKind: 'approval', key: k })
+          }
+        }
+      } else if (m.event === 'exit') {
+        s.exitSeen = true
+        this.onExit(s, Number.isFinite(m.code) ? m.code : null)
+      }
+      return
+    }
+    // Lo que Pedila le mandó a Claude (lo apunta el anfitrión). Al repasar: un permiso ya contestado
+    // no se vuelve a pedir.
+    if (m.type === 'pedila_in') {
+      const x = m.m
+      if (s.replaying && x && x.type === 'control_response' && x.response) {
+        const key = `cl:${x.response.request_id}`
+        if (this.prompts.has(key)) { this.prompts.delete(key); this.ui({ kind: 'prompt-done', key, sid }) }
+      }
+      return
+    }
     // Lo de los subagentes (Task/Agent) va con parent_tool_use_id: no se dibuja en el chat, pero
     // las herramientas que usan se cuentan en su tarea del panel.
     if (m.parent_tool_use_id) {
@@ -782,13 +921,15 @@ class ClaudeConnection extends EventEmitter {
   onPermission(s, m) {
     const rq = m.request
     const name = str(rq.tool_name)
-    if (s.allow.has(name)) {
+    // Al repasar no se contesta nada todavía: puede que ya se contestara (se sabe al acabar el repaso).
+    if (s.allow.has(name) && !s.replaying) {
       this.write(s, { type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { behavior: 'allow', updatedInput: rq.input || {} } } })
       return
     }
     const key = `cl:${m.request_id}`
     const prompt = { kind: 'approval', sid: s.sid, requestId: m.request_id, tool: name, input: rq.input || {}, command: `${name}: ${argsSummary(rq.input)}`, description: str(rq.description) || `Claude quiere usar ${name}`, choices: ['once', 'session', 'deny'] }
     this.prompts.set(key, prompt)
+    if (s.replaying) { return } // se enseña al acabar el repaso, si sigue sin contestar
     const { input, ...pub } = prompt
     this.ui({ ...pub, kind: 'prompt', promptKind: 'approval', key })
   }
@@ -801,7 +942,7 @@ class ClaudeConnection extends EventEmitter {
     this.prompts.delete(key)
     this.ui({ kind: 'prompt-done', key, sid: pr.sid })
     if (!s || !s.alive) { return { ok: false, gone: true } }
-    if (value === 'session') { s.allow.add(pr.tool) }
+    if (value === 'session') { s.allow.add(pr.tool); this.saveRunInfo(s) }
     const response = value === 'deny'
       ? { behavior: 'deny', message: 'La persona no lo permitió desde Pedila.' }
       : { behavior: 'allow', updatedInput: pr.input }
@@ -819,6 +960,10 @@ class ClaudeConnection extends EventEmitter {
     for (const w of s.controls ? s.controls.values() : []) { clearTimeout(w.t); w.ko(new Error('Claude se cerró antes de aplicar el cambio')) }
     if (s.controls) { s.controls.clear() }
     for (const [k, pr] of this.prompts) { if (pr.sid === s.sid) { this.prompts.delete(k); this.ui({ kind: 'prompt-done', key: k, sid: s.sid }) } }
+    if (s.logFile) {
+      try { const e = fs.readFileSync(s.logFile + '.err', 'utf8'); s.err = (s.err + e).slice(-4000) } catch {}
+      this.cleanRun(s.sid)
+    }
     if (s.busy) {
       const why = s.err.trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 300)
       this.ui({ kind: 'error', sid: s.sid, message: `Claude Code se cerró (código ${code})${why ? ': ' + why : ''}` })
@@ -830,6 +975,13 @@ class ClaudeConnection extends EventEmitter {
 
   kill(s) {
     if (!s.alive) { return }
+    if (s.sock) {
+      try { this.write(s, { type: 'pedila_host_cmd', cmd: 'close' }) } catch {}
+      const t = setTimeout(() => { try { if (s.alive && s.sock) { this.write(s, { type: 'pedila_host_cmd', cmd: 'kill' }) } } catch {} }, 5000)
+      if (t.unref) { t.unref() }
+      return
+    }
+    if (!s.proc) { return }
     try { s.proc.stdin.end() } catch {}
     const t = setTimeout(() => { try { s.proc.kill() } catch {} }, 3000)
     s.proc.once('exit', () => clearTimeout(t))

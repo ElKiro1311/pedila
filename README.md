@@ -45,11 +45,14 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - **Tareas en segundo plano:** lo que Claude lanza aparte (órdenes, agentes, flujos de trabajo) sale en la tarjeta «Tareas» del panel, con lo que va haciendo y cuándo termina.
   - **Tu plan de Claude:** el panel enseña el % usado de tu cuota y cuándo se reinicia, tal como lo manda Claude Code con cada respuesta.
   - **Seguir en una consola:** desde el menú ⋯ del chat, abre la misma conversación con `claude --resume` en una pestaña de consola, para lo que solo existe allí (menús de `/model`, `/resume`…).
+  - **Siguen trabajando sin Pedila:** cerrar o actualizar Pedila no corta los chats de Claude ni sus tareas. Cada `claude` va dentro de un programa pequeño aparte (`PedilaHost.exe`, en los datos de Pedila), que guarda lo que dice Claude; al volver a abrir Pedila, el chat se reengancha tal cual: «trabajando» en la lista, la herramienta en marcha, los permisos que esperan respuesta y el final. Ese programa se compila la primera vez con el compilador de C# que trae Windows (.NET Framework 4), sin descargar nada. Un chat que nadie mira se cierra solo tras 6 horas sin Pedila y 30 minutos en silencio.
   - Fijar y archivar se guardan en Pedila. Borrar manda la conversación a la papelera de Windows.
 - **Consolas en pestañas** («▣ Consolas»): Claude Code, Hermes, Antigravity o PowerShell tal cual, dentro de Pedila, sin ventanas aparte. Cada una lleva su estado (trabajando, en espera, te espera, en marcha, terminó) y se cierra con «✕ Cerrar consola» o con la ✕ de su fila.
   - Son consolas de verdad de Windows (ConPTY): los programas funcionan igual que en Windows Terminal.
-  - En las de Claude Code, Pedila sabe qué conversación lleva cada pestaña y si está trabajando (lo lee de `claude agents --json`), y avisa cuando termina. Las sesiones de Claude abiertas en otras ventanas aparecen en la lista y se traen con un clic (`claude --resume`).
-  - Al salir con consolas abiertas Pedila pregunta, y la próxima vez ofrece reabrirlas (las de Claude con su conversación).
+  - En las de Claude Code, Pedila sabe qué conversación lleva cada pestaña y si está trabajando (lo lee de `claude agents --json`), y avisa cuando termina.
+  - **Las de otras ventanas, a pestañas:** al abrir Pedila, las sesiones de Claude Code abiertas en otras ventanas (Windows Terminal u otra consola) se traen solas a pestañas, sin preguntar: Pedila cierra aquel Claude y sigue la misma conversación aquí (`claude --resume`); las que están trabajando esperan a terminar. También se traen con un clic desde la lista. Solo se tocan ventanas de Claude Code de verdad: lo que lleva otro programa (los chats de Pedila, VS Code, el SDK… se reconocen porque van con `-p` o `stream-json`) no se cierra nunca.
+  - Al salir con consolas abiertas Pedila pregunta (lo que trabaje en ellas se corta) y la próxima vez se reabren solas (las de Claude con su conversación).
+  - Las dos cosas se apagan en Ajustes → Claude y consolas.
   - Teclas: Ctrl+Mayús+T, nueva; Ctrl+Tab, siguiente; Ctrl+Mayús+W, cerrar; Ctrl+C con texto marcado, copiar; Ctrl+V, pegar. Soltar un archivo escribe su ruta.
 - **Opciones de Claude** (Ajustes → Claude y consolas): por ejemplo `--effort max`, para los chats y las consolas de Claude. Con `--dangerously-skip-permissions` no pide permisos.
 - Los programas no vienen con Pedila: usa los que tengas instalados.
@@ -145,6 +148,8 @@ Solo en desarrollo:
 ### English
 
 **Pedila** (Greek *πέδιλα*, Hermes' winged sandals, Latin *talaria*) is an unofficial Windows desktop client, with Pedila the messenger girl as its mascot, for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It talks to the Hermes on this PC (the same one Hermes Desktop uses) and to a remote `hermes dashboard`. It also talks to your own Claude Code as a chat (Pedila only relays: it runs your `claude` CLI in stream-json mode, Claude uses its own tools, your Claude Code conversations become the chat list, and the panel shows your plan usage), and hosts your AI consoles (Claude Code, Hermes, Antigravity, PowerShell) in tabs as real ConPTY terminals.
+
+Claude chats keep working when Pedila is closed or updated: each `claude` runs inside a tiny separate host (`PedilaHost.exe`, compiled on first use with the C# compiler that ships with Windows), which logs its output so Pedila reattaches and catches up when it starts again. Claude Code sessions open in other terminal windows are moved into tabs automatically when Pedila starts (only real interactive windows; anything driven by another program is never touched).
 
 Features: live chat, tool and permission cards, chat management (pin, rename, archive, delete), full-text search, images, a «read-only» mode, a reasoning level, snippets, usage stats, what is left on the paid APIs your Hermes uses (OpenRouter, Venice, OpenCode — read by a small companion Hermes plugin, so API keys never leave Hermes), a tray icon, five themes (dark and light) and an animated pet: Pedila by default, or any of 5,000+ from Petdex.
 

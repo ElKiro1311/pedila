@@ -124,6 +124,50 @@ test('claude: responder a un permiso manda la respuesta a claude', async () => {
   assert.equal(c.prompts.size, 0)
 })
 
+test('claude: al reengancharse se repasa el turno, y un permiso ya contestado no se vuelve a pedir', async () => {
+  // El registro del anfitrión: lo que dijo Claude y (pedila_in) lo que le mandó Pedila.
+  const logFile = path.join(tmp, 'run-' + SID + '.jsonl')
+  const L = [
+    { type: 'result', subtype: 'success', result: 'turno anterior' },
+    { type: 'pedila_in', m: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'sigue' }] } } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'ta', name: 'Bash', input: { command: 'ls' } }] } },
+    { type: 'control_request', request_id: 'ra', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' } } },
+    { type: 'pedila_in', m: { type: 'control_response', response: { subtype: 'success', request_id: 'ra', response: { behavior: 'allow' } } } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'ta', content: 'a.txt' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tb', name: 'Write', input: { file_path: 'b' } }] } },
+    { type: 'control_request', request_id: 'rb', request: { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: 'b' } } }
+  ].map(x => JSON.stringify(x) + '\n')
+  fs.writeFileSync(logFile, L.join(''))
+  const hello = { type: 'pedila_host', event: 'hello', pid: 1, hostPid: 2, turnStart: Buffer.byteLength(L[0]), logEnd: Buffer.byteLength(L.join('')) }
+  const reconnect = allow => {
+    const c = conn()
+    const ev = []
+    const sent = []
+    c.on('ui', e => ev.push(e))
+    const s = c.newState(SID, tmp)
+    s.logFile = logFile
+    s.sock = { write: x => sent.push(JSON.parse(x)) }
+    for (const t of allow) { s.allow.add(t) }
+    c.procs.set(SID, s)
+    c.onMsg(s, hello)
+    return { c, s, ev, sent }
+  }
+  const { c, s, ev, sent } = reconnect([])
+  // Otra vez trabajando; solo queda pendiente (y se avisa) el permiso sin contestar.
+  assert.equal(s.busy, true)
+  assert.deepEqual([...c.prompts.values()].map(p => p.requestId), ['rb'])
+  assert.deepEqual(ev.filter(e => e.kind === 'prompt').map(e => e.requestId), ['rb'])
+  assert.equal(sent.length, 0)
+  // Al abrir el chat se enseña otra vez (sin volver a avisar).
+  ev.length = 0
+  assert.deepEqual(await c.attach(SID), { running: true })
+  assert.deepEqual(ev.filter(e => e.kind === 'prompt').map(e => [e.requestId, e.again]), [['rb', true]])
+  // Con «Write» permitido para toda la sesión, se contesta solo al acabar el repaso.
+  const r2 = reconnect(['Write'])
+  assert.deepEqual(r2.sent.map(x => x.response.request_id), ['rb'])
+  assert.equal(r2.c.prompts.size, 0)
+})
+
 test('cmd.exe: rutas con espacios y opciones con comillas', () => {
   assert.equal(cmdLine('C:/Users/Juan Perez/npm/claude.cmd', ['--resume', 'abc', '--append-system-prompt', 'responde en español']),
     '/d /s /c ""C:/Users/Juan Perez/npm/claude.cmd" --resume abc --append-system-prompt "responde en español""')

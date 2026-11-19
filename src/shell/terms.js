@@ -32,6 +32,7 @@ export function createTerms(ctx) {
     active: null,
     agents: [],
     newKind: 'claude',
+    adoptPending: new Set(), // sesiones de otras ventanas que se traerán al terminar de trabajar
     newDir: '',
     newCont: false
   }
@@ -340,7 +341,7 @@ export function createTerms(ctx) {
           el('button', { class: 'row-more term-x', title: 'Cerrar esta consola (Ctrl+Mayús+W)', 'aria-label': 'Cerrar esta consola', text: '✕', onclick: ev => { ev.stopPropagation(); closeTab(id) } })))
       }
     }
-    const outside = T.agents.filter(a => !a.term && a.kind === 'interactive')
+    const outside = T.agents.filter(a => !a.term && a.kind === 'interactive' && a.managed !== true)
     if (outside.length) {
       rows.push(el('div', { class: 'group-label', text: 'Claude Code en otras ventanas' }))
       for (const a of outside) {
@@ -350,7 +351,7 @@ export function createTerms(ctx) {
           onclick: () => adoptOutside(a)
         },
         el('div', { class: 't' }, el('span', { class: 'ti small claude', text: KIND_ICON.claude }), el('span', { text: a.name || 'Claude Code' }), a.status === 'busy' ? el('i', { class: 'run' }) : null),
-        el('div', { class: 'p', text: `${base(a.cwd)} · ${a.status === 'busy' ? 'trabajando…' : 'en espera'}` })))
+        el('div', { class: 'p', text: `${base(a.cwd)} · ${T.adoptPending.has(a.sessionId) ? 'se traerá al terminar' : a.status === 'busy' ? 'trabajando…' : 'en espera'}` })))
       }
     }
     if (!rows.length) { rows.push(el('div', { class: 'list-empty', text: 'No hay consolas abiertas. Pulsa «Nueva consola» para abrir Claude Code, Hermes o PowerShell tal cual dentro de Pedila.' })) }
@@ -375,13 +376,25 @@ export function createTerms(ctx) {
     ctx.showPopup(items, x, y)
   }
 
+  /**
+   * Trae a una pestaña una sesión de Claude de otra ventana, sin preguntar: Pedila cierra aquel
+   * Claude y abre la misma conversación aquí. Si está trabajando, se trae al terminar.
+   */
   async function adoptOutside(a) {
-    const ok = await ctx.askBox({
-      title: 'Traer esta conversación a Pedila',
-      text: `Se abrirá «${a.name || 'Claude Code'}» (${a.cwd}) en una pestaña nueva con «claude --resume». Cierra antes la otra ventana: si sigue abierta, la misma conversación quedaría en dos sitios a la vez.${a.status === 'busy' ? ' Ahora mismo está trabajando: mejor espera a que termine.' : ''}`,
-      ok: 'Traer aquí'
-    })
-    if (ok) { await open({ kind: 'claude', cwd: a.cwd, resume: a.sessionId }) }
+    let r
+    try { r = await call(api.termAdopt, a.sessionId) } catch (e) { ctx.toast(e.message); return }
+    if (r && r.chat) { if (ctx.openClaudeChat) { ctx.openClaudeChat(a.sessionId) } return }
+    if (r && r.queued) { T.adoptPending.add(a.sessionId); renderSide(); return }
+    if (r && r.info) { addOpened(r.info, true) }
+  }
+
+  /** Una pestaña que abrió Pedila por su cuenta (al arrancar, o traída al quedar libre). */
+  function addOpened(info, focus) {
+    if (!info || !info.id) { return }
+    if (info.sessionId) { T.adoptPending.delete(info.sessionId) }
+    if (!T.tabs.has(info.id)) { makeTab(info) }
+    renderSide()
+    if (focus || (T.mode === 'terms' && !T.active)) { if (T.mode !== 'terms') { setMode('terms') } activate(info.id) }
   }
 
   async function restoreAll() {
@@ -439,6 +452,13 @@ export function createTerms(ctx) {
         renderSide()
         if (ctx.onAgents) { ctx.onAgents(T.agents) }
         return true
+      case 'term-opened':
+        addOpened(evt.info, false)
+        return true
+      case 'term-adopt-gone':
+        T.adoptPending.delete(evt.sessionId)
+        renderSide()
+        return true
       case 'focus-term':
         setMode('terms')
         if (evt.id) { activate(evt.id) }
@@ -454,7 +474,7 @@ export function createTerms(ctx) {
     T.dirs = info.dirs || []
     T.home = info.home || ''
     T.restore = info.restore || []
-    for (const i of info.list || []) { makeTab(i) }
+    for (const i of info.list || []) { if (!T.tabs.has(i.id)) { makeTab(i) } }
     T.ready = true
     wireNewDialog()
     for (const b of document.querySelectorAll('#mode-switch button')) { b.addEventListener('click', () => setMode(b.dataset.mode)) }
@@ -504,7 +524,7 @@ export function createTerms(ctx) {
     /** Tarjeta del panel derecho con las sesiones de Claude Code (las de Pedila y las de fuera). */
     panelCard() {
       const mine = [...T.tabs.values()].filter(t => t.info.alive)
-      const outside = T.agents.filter(a => !a.term && a.kind === 'interactive')
+      const outside = T.agents.filter(a => !a.term && a.kind === 'interactive' && a.managed !== true)
       const busy = mine.filter(t => t.info.status === 'busy').length + outside.filter(a => a.status === 'busy').length
       const rows = [
         ...mine.map(t => el('div', { class: 'sp-conn', title: t.info.cwd }, el('span', { class: 'dot ' + (t.info.status === 'busy' ? 'connecting' : 'ready') }), el('span', { text: `${KIND_ICON[t.info.kind]} ${t.userTitle || t.info.title || t.info.label}` }), el('span', { class: 's', text: statusOf(t.info)[1] || base(t.info.cwd) }))),

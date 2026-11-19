@@ -144,8 +144,44 @@ function main() {
       if (settings.data.local.enabled) { conns.local.start() }
       if (settings.data.server.enabled) { conns.server.start() }
       conns.claude.start()
+      // Las consolas de la última vez y las sesiones de Claude de otras ventanas, sin preguntar.
+      setTimeout(() => { autoStartTerminals().catch(e => log.warn('[terminales] al arrancar:', e.message)) }, 2500)
     }
   })
+
+  /**
+   * Al abrir Pedila: reabre las consolas de la última vez (las de Claude con su conversación) y trae
+   * a pestañas las sesiones de Claude abiertas en otras ventanas (cerrando aquel Claude; las que
+   * trabajan esperan a terminar). Las dos cosas se pueden apagar en Ajustes → Claude y consolas.
+   */
+  async function autoStartTerminals() {
+    const t = settings.data.terminals
+    const extraArgs = splitArgs(t.claudeArgs)
+    if (t.autoRestore && pendingRestore.length) {
+      const list = pendingRestore
+      pendingRestore = []
+      for (const r of list) {
+        try {
+          const info = terms.open({ kind: r.kind, cwd: r.cwd, resume: r.kind === 'claude' ? r.sessionId : null, extraArgs: r.kind === 'claude' ? extraArgs : undefined, cols: 120, rows: 32 })
+          send({ kind: 'term-opened', info })
+        } catch (e) { log.warn('[terminales] no pude reabrir', r.kind, r.cwd, e.message) }
+      }
+      saveTerminals(true)
+    }
+    if (!t.adoptOutside) { return }
+    // Los chats que siguieron vivos con su anfitrión se reenganchan antes (no son «de otra ventana»).
+    await conns.claude.reconnecting
+    await terms.refreshAgents(true)
+    for (const a of terms.agents) {
+      // Solo ventanas de Claude Code de verdad: lo que lleva un programa (chats de Pedila, VS Code,
+      // el SDK…) o no se sabe qué es, no se toca.
+      if (a.kind !== 'interactive' || !a.sessionId || a.managed !== false) { continue }
+      // La que ya está abierta en Pedila como chat no se duplica.
+      if (conns.claude.procs.has(a.sessionId)) { continue }
+      if (terms.list().some(x => x.alive && x.sessionId === a.sessionId)) { continue }
+      terms.adopt(a.sessionId, extraArgs).catch(e => log.warn('[terminales] no pude traer', a.sessionId.slice(0, 8), e.message))
+    }
+  }
 
   app.on('will-quit', () => { try { globalShortcut.unregisterAll() } catch {} })
 
@@ -349,7 +385,8 @@ function main() {
           (chatTitle ? `${chatTitle}: ` : '') + (evt.text || (failed ? `Resultado: ${evt.outcome}` : 'Respuesta lista')).replace(/\s+/g, ' '), open)
       }
     } else if (evt.kind === 'prompt') {
-      if (notify.decide('needs', { notify: settings.data.notify, focusedOnChat })) {
+      // again: la misma petición enseñada otra vez al abrir el chat (ya avisó cuando llegó).
+      if (!evt.again && notify.decide('needs', { notify: settings.data.notify, focusedOnChat })) {
         const approval = evt.promptKind === 'approval'
         const what = approval ? (evt.command || evt.description || 'Quiere tu permiso') : (evt.questions && evt.questions[0] ? evt.questions[0].question : 'Espera tu respuesta')
         alertUser(approval ? `${who} te necesita · ${where}` : `${who} te pregunta · ${where}`, (chatTitle ? `${chatTitle}: ` : '') + what, open)
@@ -444,14 +481,14 @@ function main() {
   /** Lo que se cortaría al salir de Pedila, para preguntar antes: { text, detail } o null. */
   function whatWouldStop() {
     const n = terms ? terms.alive() : 0
-    const busy = conns.claude && typeof conns.claude.busyCount === 'function' ? conns.claude.busyCount() : 0
+    const busy = conns.claude && typeof conns.claude.fragileBusyCount === 'function' ? conns.claude.fragileBusyCount() : 0
     if (!n && !busy) { return null }
     const bits = []
     if (n) { bits.push(n === 1 ? '1 consola abierta' : `${n} consolas abiertas`) }
     if (busy) { bits.push(busy === 1 ? 'Claude trabajando en 1 chat' : `Claude trabajando en ${busy} chats`) }
     return {
       text: 'Hay ' + bits.join(' y ') + '.',
-      detail: [n ? 'Las consolas se cierran (si algo estaba trabajando, se corta); la próxima vez Pedila te ofrecerá reabrirlas, las de Claude Code con su conversación.' : '', busy ? 'Lo que Claude está haciendo en sus chats se corta; la conversación queda guardada y la puedes seguir después.' : ''].filter(Boolean).join(' ')
+      detail: [n ? `Las consolas se cierran (si algo estaba trabajando, se corta); la próxima vez ${settings.data.terminals.autoRestore ? 'se reabren solas' : 'Pedila te ofrecerá reabrirlas'}, las de Claude Code con su conversación.` : '', busy ? 'Lo que Claude está haciendo en sus chats se corta; la conversación queda guardada y la puedes seguir después.' : ''].filter(Boolean).join(' ')
     }
   }
 
@@ -611,7 +648,7 @@ function main() {
     })
     // ── Terminales ──
     const termIdOf = s => { if (typeof s !== 'string' || !/^t\d{1,6}$/.test(s)) { throw new Error('terminal no válida') } return s }
-    handle('hp:term-info', () => ({ tools: terms.tools(), dirs: settings.data.terminals.dirs, home: app.getPath('home'), restore: pendingRestore, list: terms.list(true) }))
+    handle('hp:term-info', () => ({ tools: terms.tools(), dirs: settings.data.terminals.dirs, home: app.getPath('home'), restore: settings.data.terminals.autoRestore ? [] : pendingRestore, list: terms.list(true) }))
     handle('hp:term-open', opts => {
       const o = opts && typeof opts === 'object' ? opts : {}
       const t = terms.open({ kind: String(o.kind || ''), cwd: typeof o.cwd === 'string' ? o.cwd.slice(0, 400) : '', resume: typeof o.resume === 'string' ? o.resume : null, cont: o.cont === true, cols: o.cols, rows: o.rows, extraArgs: splitArgs(settings.data.terminals.claudeArgs) })
@@ -635,6 +672,12 @@ function main() {
       return terms.agentsView()
     })
     // 'take': la pantalla las reabre; 'dismiss': se olvidan. En los dos casos dejan de ofrecerse.
+    handle('hp:term-adopt', async sessionId => {
+      if (typeof sessionId !== 'string' || !/^[0-9a-f-]{36}$/i.test(sessionId)) { throw new Error('sesión no válida') }
+      // Abierta ya en Pedila como chat: no se duplica; la pantalla lleva a ese chat.
+      if (conns.claude.procs.has(sessionId)) { return { chat: true } }
+      return terms.adopt(sessionId, splitArgs(settings.data.terminals.claudeArgs))
+    })
     handle('hp:term-restore', action => {
       const list = pendingRestore
       pendingRestore = []

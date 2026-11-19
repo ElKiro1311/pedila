@@ -198,6 +198,9 @@
           <label class="field">Opciones que se añaden siempre al abrir Claude Code<input id="term-claude-args" spellcheck="false" placeholder="por ejemplo: --effort max"></label>
           <p class="muted small">Valen para los chats de Claude y para sus consolas: las mismas que pondrías detrás de <span class="mono">claude</span>. Con <span class="mono">--dangerously-skip-permissions</span> no te pedirá permiso para nada. Si en tu consola usas una función o alias que añade opciones, ponlas aquí: Pedila abre <span class="mono">claude</span> directamente.</p>
           <div class="row-buttons"><button id="term-args-save" class="btn-ghost">Guardar</button><span id="term-args-status" class="muted small"></span></div>
+          <label class="toggle"><input type="checkbox" data-set="terminals.adoptOutside"><span>Al abrir Pedila, traer a pestañas las sesiones de Claude abiertas en otras ventanas (cierra aquel Claude y sigue la conversación aquí; las que trabajan esperan a terminar)</span></label>
+          <label class="toggle"><input type="checkbox" data-set="terminals.autoRestore"><span>Al abrir Pedila, reabrir solas las consolas de la última vez (las de Claude con su conversación)</span></label>
+          <p class="muted small">Los chats de Claude siguen trabajando aunque cierres o actualices Pedila: al volver a abrirlo, se reenganchan y ves lo que hicieron mientras tanto.</p>
         </section>
         <section data-sec="mascota" hidden>
           <h3>Mascota</h3>

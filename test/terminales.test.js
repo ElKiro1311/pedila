@@ -30,7 +30,24 @@ test('ajustes de terminales: modo, carpetas, lista para reabrir y opciones de Cl
   assert.equal(s.terminals.claudeArgs, '--effort max')
   assert.equal(sanitize({ terminals: { claudeArgs: 'a\nb' } }).terminals.claudeArgs, '')
   assert.equal(sanitize({ terminals: { mode: 'raro' } }).terminals.mode, 'chats')
-  assert.deepEqual(sanitize({}).terminals, { mode: 'chats', dirs: [], restore: [], claudeArgs: '' })
+  assert.deepEqual(sanitize({}).terminals, { mode: 'chats', dirs: [], restore: [], claudeArgs: '', adoptOutside: true, autoRestore: true })
+  assert.equal(sanitize({ terminals: { adoptOutside: false, autoRestore: 'no' } }).terminals.adoptOutside, false)
+  assert.equal(sanitize({ terminals: { autoRestore: 'no' } }).terminals.autoRestore, true)
+})
+
+test('ajustes: un settings.json guardado con BOM se lee igual (no se pierde)', () => {
+  const fs = require('node:fs')
+  const os = require('node:os')
+  const path = require('node:path')
+  const { Settings } = require('../src/main/settings')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pedila-bom-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'settings.json'), '﻿' + JSON.stringify({ terminals: { adoptOutside: false, claudeArgs: '--effort max' } }))
+    const s = new Settings(dir).load()
+    assert.equal(s.terminals.adoptOutside, false)
+    assert.equal(s.terminals.claudeArgs, '--effort max')
+    assert.ok(!fs.existsSync(path.join(dir, 'settings.json.broken')))
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('opciones de Claude: comillas y espacios', () => {
@@ -67,6 +84,41 @@ test('terminales: la sesión de Claude se reconoce por el pid y avisa al pasar d
   const view = t.agentsView()
   assert.equal(view[0].term, 't1')
   assert.deepEqual(t.snapshot(), [{ kind: 'claude', cwd: 'C:\\p', sessionId: ID, title: 'Claude Code' }])
+})
+
+test('sesiones de fuera: las que lleva un programa no se traen (ni se cierran)', async () => {
+  const { isManagedCmd, commandLines } = require('../src/main/terms')
+  // Ventanas de Claude Code de verdad.
+  assert.equal(isManagedCmd('"C:\\Users\\x\\.local\\bin\\claude.exe"'), false)
+  assert.equal(isManagedCmd('"C:\\Users\\x\\.local\\bin\\claude.exe" --resume ' + ID + ' --effort max'), false)
+  assert.equal(isManagedCmd('claude.exe "explica git log -p"'), false)
+  // Las que lleva un programa: chats de Pedila (con o sin anfitrión), VS Code, el SDK.
+  assert.equal(isManagedCmd('claude.exe -p --input-format stream-json --output-format stream-json --verbose --session-id ' + ID), true)
+  assert.equal(isManagedCmd('claude.exe --output-format=stream-json --print'), true)
+  assert.equal(isManagedCmd('claude.exe --sdk-url wss://x'), true)
+  assert.equal(isManagedCmd(''), false)
+
+  const t = new Terms({ log: { info() {}, warn() {} } })
+  const rows = [
+    { pid: 101, startedAt: 5, sessionId: ID, status: 'idle', kind: 'interactive', cwd: 'C:\\p' },
+    { pid: 102, startedAt: 6, sessionId: ID.replace('8', '9'), status: 'idle', kind: 'interactive', cwd: 'C:\\p' },
+    { pid: 103, startedAt: 7, sessionId: ID.replace('8', '7'), status: 'idle', kind: 'interactive', cwd: 'C:\\p' }
+  ]
+  t.launch.set('101:5', true)
+  t.launch.set('102:6', false)
+  t.launchFailAt = Date.now() // sin PowerShell en la prueba: la 103 se queda «sin saber»
+  t.applyAgents(rows)
+  assert.deepEqual(t.agents.map(a => a.managed), [true, false, null])
+  assert.deepEqual(t.agentsView().map(a => a.managed), [true, false, null])
+  await assert.rejects(t.adopt(ID), /otro programa/)
+  // Lo de procesos que ya no están se olvida.
+  await t.classify([rows[1]], true)
+  assert.deepEqual([...t.launch.keys()], ['102:6'])
+
+  if (process.platform === 'win32') {
+    const m = await commandLines([process.pid])
+    assert.ok(m && /node/i.test(m.get(process.pid) || ''), 'lee la línea de órdenes de un proceso')
+  }
 })
 
 test('diseño: orden completo, nombres conocidos y siempre algo a la vista', () => {

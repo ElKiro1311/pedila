@@ -96,7 +96,9 @@ function defaults() {
     // Terminales dentro de Pedila: el modo que se ve (chats de Hermes o terminales), las carpetas
     // usadas hace poco y las terminales que quedaron abiertas al salir (para ofrecer reabrirlas).
     // claudeArgs: opciones que se añaden siempre al abrir Claude Code (por ejemplo «--effort max»).
-    terminals: { mode: 'chats', dirs: [], restore: [], claudeArgs: '' },
+    // adoptOutside: al abrir Pedila, traer a pestañas las sesiones de Claude de otras ventanas.
+    // autoRestore: al abrir Pedila, reabrir solas las consolas de la última vez.
+    terminals: { mode: 'chats', dirs: [], restore: [], claudeArgs: '', adoptOutside: true, autoRestore: true },
     // Diseño: orden y visibilidad de las pestañas, los modos, las tarjetas del panel (en cada modo)
     // y los botones; swap = lista de chats a la derecha y panel a la izquierda.
     layout: defaultLayout(),
@@ -172,6 +174,8 @@ function sanitize(raw) {
   s.window.panelWidth = clampInt(w.panelWidth, PANEL_WIDTH[0], PANEL_WIDTH[1], null)
   const te = isObj(raw.terminals) ? raw.terminals : {}
   s.terminals.mode = pick(te.mode, ['chats', 'terms'], 'chats')
+  s.terminals.adoptOutside = bool(te.adoptOutside, true)
+  s.terminals.autoRestore = bool(te.autoRestore, true)
   s.terminals.claudeArgs = typeof te.claudeArgs === 'string' && te.claudeArgs.length <= 400 && !/[\0\r\n]/.test(te.claudeArgs) ? te.claudeArgs.trim() : ''
   s.terminals.dirs = Array.isArray(te.dirs) ? [...new Set(te.dirs.filter(okDir))].slice(0, 10) : []
   s.terminals.restore = Array.isArray(te.restore)
@@ -196,7 +200,8 @@ class Settings {
 
   load() {
     try {
-      this.data = sanitize(JSON.parse(fs.readFileSync(this.file, 'utf8')))
+      // Sin el BOM que ponen algunos editores (Bloc de notas, PowerShell 5): si no, se perderían los ajustes.
+      this.data = sanitize(JSON.parse(fs.readFileSync(this.file, 'utf8').replace(/^﻿/, '')))
     } catch (e) {
       if (e.code !== 'ENOENT') {
         try { fs.renameSync(this.file, this.file + '.broken') } catch {}
