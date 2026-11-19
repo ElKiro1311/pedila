@@ -173,6 +173,16 @@ class RemoteTransport {
     return { status: res.status, json }
   }
 
+  /** Lo que Hermes enseña sin iniciar sesión (/api/status: versión y si está trabajando). */
+  async publicJson(p, { timeoutMs = 15000 } = {}) {
+    const base = await this.pickBase()
+    const res = await fetch(base + p, { headers: this.hasSession() ? { Cookie: this.cookieHeader() } : {}, signal: AbortSignal.timeout(timeoutMs) })
+    const text = await res.text()
+    let json = null
+    try { json = JSON.parse(text) } catch {}
+    return { status: res.status, json }
+  }
+
   invalidate() {
     this.base = null
   }

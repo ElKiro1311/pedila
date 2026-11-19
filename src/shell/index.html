@@ -187,7 +187,7 @@
         <section data-sec="ventana" hidden>
           <h3>Ventana</h3>
           <label class="toggle"><input type="checkbox" data-set="window.closeToTray"><span>Al cerrar, seguir en la bandeja (junto al reloj)</span></label>
-          <label class="toggle"><input type="checkbox" data-set="window.openAtLogin"><span>Abrir al iniciar Windows (oculta en la bandeja)</span></label>
+          <label class="toggle"><input type="checkbox" data-set="window.openAtLogin"><span>Iniciar con Windows (se abre escondida en la bandeja; también en el menú del icono de la bandeja)</span></label>
           <label class="toggle"><input type="checkbox" data-set="shortcut.enabled"><span>Atajo Ctrl+Alt+H para mostrar u ocultar la app desde cualquier sitio</span></label>
         </section>
         <section data-sec="acerca" hidden>
@@ -201,7 +201,12 @@
           <h4>Actualizaciones</h4>
           <label class="field">Carpeta de actualizaciones (con su version.json)<input id="upd-url" spellcheck="false" placeholder="http://servidor:8185/pedila"></label>
           <label class="toggle"><input type="checkbox" data-set="updates.auto"><span>Buscar versiones nuevas al abrir y cada 6 horas</span></label>
+          <label class="toggle"><input type="checkbox" data-set="updates.autoInstall"><span>Instalarlas solas cuando no uses Pedila: 10 minutos sin tocarla, sin nada escrito sin enviar y sin Hermes trabajando. Vuelve a abrirse como estaba, sin quitarte el foco.</span></label>
           <div class="row-buttons"><button id="upd-save" class="btn-ghost">Guardar dirección</button><button id="upd-check" class="btn-ghost">Buscar actualizaciones</button><button id="upd-install" class="btn-primary" hidden>Actualizar y reiniciar</button><span id="upd-status" class="muted small"></span></div>
+          <h4>Hermes</h4>
+          <label class="toggle"><input type="checkbox" data-set="hermes.autoUpdate"><span>Actualizar solo el Hermes de este PC cuando haya versión nueva y lleve 10 minutos sin usarse (sin chats trabajando ni con actividad)</span></label>
+          <div id="hermes-upd"></div>
+          <p class="muted small">Pedila mira cada 6 horas si hay versión nueva. Un Hermes en Docker (como el de un servidor) no puede actualizarse a sí mismo: se actualiza desde su servidor, y aquí solo se avisa.</p>
         </section>
       </div>
       <button id="settings-close" class="icon-btn" aria-label="Cerrar">✕</button>

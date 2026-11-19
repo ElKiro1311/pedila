@@ -465,6 +465,9 @@ class Connection extends EventEmitter {
       this.attempt = 0
       this.setState('ready', this.canonical ? 'protocolo nuevo' : 'protocolo clásico')
       this.ui({ kind: 'reconnected' })
+      // Los chats que siguen trabajando se vuelven a seguir enseguida (al abrir o actualizar Pedila):
+      // si se quedaran sin nadie mirando, a los 5 min Hermes cortaría sus tareas en segundo plano.
+      this.reattachRunning().catch(e => this.log.warn(`[${this.id}] al reengancharme:`, e.message))
     } catch (e) {
       if (e.needLogin) {
         this.setState('login', e.message)
@@ -797,6 +800,21 @@ class Connection extends EventEmitter {
       status: str(x && x.status),
       title: str(x && x.title)
     })).filter(x => x.id && ['working', 'waiting', 'starting'].includes(x.status))
+  }
+
+  /** Se engancha a los chats en los que Hermes está trabajando ahora (los empezara quien los empezara). */
+  async reattachRunning() {
+    const list = await this.activeList()
+    for (const x of list) {
+      if (this.stopped || this.state !== 'ready') { return }
+      if (this.live.has(x.id)) { continue }
+      try {
+        await this.attach(x.id)
+        this.log.info(`[${this.id}] sigo el chat ${x.id.slice(0, 12)} («${x.title.slice(0, 40)}»), que estaba trabajando`)
+      } catch (e) {
+        this.log.warn(`[${this.id}] no pude seguir el chat ${x.id.slice(0, 12)}:`, e.message)
+      }
+    }
   }
 
   async archived() {

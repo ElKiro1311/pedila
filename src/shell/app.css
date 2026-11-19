@@ -574,3 +574,10 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none !i
 /* El título manda sobre los datos de la barra de arriba. */
 #chat-title { flex: 0 1 auto; min-width: 80px; max-width: 46%; }
 #chat-meta { flex: 1 1 0; min-width: 0; }
+
+/* Versión de Hermes bajo cada conexión (tarjeta «Conexiones») y en Ajustes → Acerca de. */
+.sp-hint.sp-hermes { padding: 0 0 6px 16px; font-size: .74rem; }
+.sp-hint.sp-hermes.warn, .hermes-upd-row .warn { color: var(--warn); }
+.hermes-upd-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin: 6px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.hermes-upd-row .grow { flex: 1; min-width: 0; }
+.hermes-upd-row button { flex: none; }

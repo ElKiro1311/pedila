@@ -139,6 +139,14 @@ export const demoApi = {
   updateInstall: () => new Promise(r => setTimeout(() => r({ ok: true, value: false }), 600)),
   openLogs: () => ok(true),
   testNotify: () => ok(true),
+  // Versiones de Hermes de muestra: el del PC se puede actualizar solo; el del servidor va en Docker.
+  hermesUpdates: () => ok({
+    local: { version: '0.23.0', latest: '0.23.2', available: true, canApply: true, method: 'git', checkedAt: now, busy: false, why: 'observando', applying: null, lastResult: null },
+    server: { version: '0.23.1', latest: '0.23.2', available: true, canApply: false, method: 'managed-runtime', checkedAt: now, busy: false, why: 'servidor', applying: null, lastResult: null }
+  }),
+  hermesCheck: conn => demoApi.hermesUpdates().then(r => ({ ok: true, value: r.value[conn] })),
+  hermesUpdate: () => Promise.resolve({ ok: false, error: 'En la demostración no se actualiza nada.' }),
+  uiState: () => ok(true),
   // Cambiar el modelo o el esfuerzo de un chat empezado: en la demostración se acepta sin más.
   chatOptions: (conn, sid, o) => ok(o ? { applied: 'now', model: o.model || null, effort: o.reasoning || null } : { model: null, effort: null }),
   onEvent: cb => { listeners.add(cb); return () => listeners.delete(cb) }

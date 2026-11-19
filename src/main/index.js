@@ -8,12 +8,16 @@ const { pathToFileURL } = require('node:url')
 const log = require('./log')
 const { Settings } = require('./settings')
 const secrets = require('./secrets')
-const { LocalTransport } = require('./local')
+const { LocalTransport, hermesExe } = require('./local')
 const { RemoteTransport } = require('./remote')
 const { Connection } = require('./connection')
 const notify = require('./notify')
 const { Pets } = require('./pets')
 const extras = require('./extras')
+const { HermesUpdates, IDLE_MS } = require('./hermes-updates')
+
+// Lo que cuenta como que usas Pedila (para no actualizarla mientras tanto).
+const USER_INPUT = new Set(['mouseDown', 'mouseUp', 'mouseWheel', 'keyDown', 'rawKeyDown', 'char', 'gestureScrollBegin', 'gestureTap', 'touchStart'])
 
 const APP_ID = 'org.pedila.app'
 const TOAST_CLSID = '{6B1E3C2A-9F4D-4E7B-A1C5-3D8F2B6E9A41}'
@@ -69,7 +73,12 @@ function main() {
   const conns = {}
   const titles = new Map() // `${conn}:${sid}` → título conocido (para los avisos)
   const startHidden = process.argv.includes('--oculto')
+  // Tras una actualización automática con la ventana a la vista: se enseña sin quitarte el foco.
+  const startInactive = !startHidden && process.argv.includes('--sin-foco')
   const demo = !app.isPackaged && process.env.PEDILA_DEMO === '1'
+  let hermesUpdates = null
+  let lastInput = Date.now() // la última vez que tocaste la ventana de Pedila
+  let uiDraft = false // hay algo escrito (o una imagen) sin enviar
 
   app.on('second-instance', () => showWindow())
 
@@ -110,11 +119,17 @@ function main() {
     for (const c of Object.values(conns)) {
       c.on('ui', evt => onConnEvent(evt))
     }
+    // Versiones de Hermes: avisa de las nuevas y actualiza el del PC cuando lleva 10 min sin usarse.
+    hermesUpdates = new HermesUpdates({ conns, settings, log, hermesExe })
+    hermesUpdates.on('change', view => { send({ kind: 'hermes-updates', view }); refreshTray() })
 
     registerIpc(remote)
     applyShortcut()
+    applyLoginItem()
     setTimeout(() => autoCheckUpdate(), 20000)
     setInterval(() => autoCheckUpdate(), 6 * 60 * 60 * 1000)
+    // Pedila se instala sola su versión nueva cuando no la usas (lo mira cada minuto).
+    setInterval(() => { autoInstallIfIdle().catch(e => log.warn('[actualizar] instalación automática:', e.message)) }, 60000)
     createWindow()
     createTray()
     Notification.handleActivation?.(() => showWindow())
@@ -122,6 +137,7 @@ function main() {
     if (!demo) {
       if (settings.data.local.enabled) { conns.local.start() }
       if (settings.data.server.enabled) { conns.server.start() }
+      hermesUpdates.start()
     }
   })
 
@@ -129,6 +145,7 @@ function main() {
 
   app.on('before-quit', () => {
     quitting = true
+    if (hermesUpdates) { hermesUpdates.stop() }
     for (const c of Object.values(conns)) { try { c.stop() } catch {} }
   })
 
@@ -211,9 +228,10 @@ function main() {
         spellcheck: true
       }
     })
-    if (w.maximized) { win.maximize() }
     win.loadURL(demo ? SHELL_URL + '?demo=1' : SHELL_URL)
-    win.once('ready-to-show', () => { if (!startHidden) { win.show() } })
+    // Maximizar enseña la ventana: por eso se hace al enseñarla (reveal), no al crearla, y así
+    // «--oculto» (al iniciar Windows) sigue en la bandeja aunque la última vez estuviera maximizada.
+    win.once('ready-to-show', () => { if (!startHidden) { reveal(startInactive) } })
     let saveT = null
     const saveBounds = () => {
       clearTimeout(saveT)
@@ -231,7 +249,9 @@ function main() {
         win.hide()
       }
     })
-    win.on('focus', () => { try { win.flashFrame(false); setBadge(false) } catch {} })
+    win.on('focus', () => { lastInput = Date.now(); try { win.flashFrame(false); setBadge(false) } catch {} })
+    // Tocar la ventana (ratón, teclado, rueda) cuenta como usar Pedila.
+    win.webContents.on('input-event', (_e, input) => { if (USER_INPUT.has(input.type)) { lastInput = Date.now() } })
     win.on('closed', () => { win = null })
     nativeTheme.on('updated', () => {
       if (win && !win.isDestroyed()) {
@@ -241,10 +261,27 @@ function main() {
     })
   }
 
+  /**
+   * Enseña la ventana. La primera vez, maximizada si lo estaba. Con `inactive` (tras una
+   * actualización automática) aparece sin quitarte el foco; si estaba maximizada, se maximiza
+   * cuando vuelvas a ella (maximizar la activaría y te sacaría, por ejemplo, de un juego).
+   */
+  let revealed = false
+  function reveal(inactive = false) {
+    const first = !revealed
+    revealed = true
+    if (inactive) {
+      win.showInactive()
+      if (first && settings.data.window.maximized) { win.once('focus', () => { if (win && !win.isDestroyed() && !win.isMaximized()) { win.maximize() } }) }
+      return
+    }
+    if (first && settings.data.window.maximized) { win.maximize() } else { win.show() }
+  }
+
   function showWindow() {
     if (!win) { createWindow() }
     if (win.isMinimized()) { win.restore() }
-    win.show()
+    reveal()
     win.focus()
   }
 
@@ -263,7 +300,7 @@ function main() {
 
   function refreshTray() {
     if (!tray) { return }
-    const label = c => ({ ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', error: 'error', off: 'apagado' })[c.state] || c.state
+    const label = c => ({ ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', updating: 'actualizando Hermes…', error: 'error', off: 'apagado' })[c.state] || c.state
     // Solo los Hermes que esta persona tiene: el del PC si está instalado, el servidor si puso su dirección.
     const mine = Object.values(conns).filter(c => c.state !== 'missing' && !(c.id === 'server' && !settings.data.server.urls.length))
     const lines = mine.map(c => `${c.name}: ${label(c)}`)
@@ -274,8 +311,24 @@ function main() {
       { type: 'separator' },
       ...mine.map(c => ({ label: `${c.name}: ${label(c)}`, enabled: false })),
       { type: 'separator' },
+      { label: 'Iniciar con Windows', type: 'checkbox', checked: settings.data.window.openAtLogin, click: item => setOpenAtLogin(item.checked) },
+      { type: 'separator' },
       { label: 'Salir', click: () => { quitting = true; app.quit() } }
     ]))
+  }
+
+  /** Que Windows abra Pedila al iniciar sesión (en la bandeja), según el ajuste. Solo la instalada. */
+  function applyLoginItem() {
+    if (!app.isPackaged) { return }
+    try { app.setLoginItemSettings({ openAtLogin: settings.data.window.openAtLogin, args: ['--oculto'] }) } catch (e) { log.warn('[ventana] inicio con Windows:', e.message) }
+  }
+
+  function setOpenAtLogin(on) {
+    settings.patch({ window: { openAtLogin: Boolean(on) } })
+    applyLoginItem()
+    log.info(`[ventana] iniciar con Windows: ${on ? 'sí' : 'no'}`)
+    refreshTray()
+    send({ kind: 'settings', settings: settings.publicView() })
   }
 
   // ── Eventos de las conexiones ──────────────────────────────────────────────────────────────
@@ -387,6 +440,52 @@ function main() {
       log.warn('[actualizar]', e.message)
       return null
     }
+  }
+
+  let installing = null
+  /**
+   * Instala la versión nueva de Pedila y la vuelve a abrir. Pedida a mano, vuelve a la vista; sola
+   * (auto), vuelve como estaba: en la bandeja si estaba escondida o minimizada, y si estaba a la
+   * vista, a la vista pero sin quitarte el foco.
+   */
+  function installPedila({ auto = false } = {}) {
+    if (installing) { return installing }
+    installing = (async () => {
+      const u = settings.data.updates
+      const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion(), REPO)
+      if (!info || !info.available) { throw new Error('no hay versión nueva') }
+      const visible = Boolean(win && !win.isDestroyed() && win.isVisible() && !win.isMinimized())
+      const args = auto ? [visible ? '--sin-foco' : '--oculto'] : []
+      await extras.installUpdate(info, log, { exe: app.isPackaged ? process.execPath : '', args })
+      setTimeout(() => { quitting = true; app.quit() }, 600)
+      return true
+    })()
+    installing.finally(() => { installing = null }).catch(() => {})
+    return installing
+  }
+
+  /**
+   * Por qué no se puede reiniciar Pedila ahora ('' = se puede): hay que llevar 10 min sin tocarla,
+   * sin nada escrito sin enviar y sin Hermes trabajando (si Pedila se cerrara con un chat suyo en
+   * marcha, Hermes cortaría sus tareas a los 5 min sin nadie mirando).
+   */
+  function pedilaBusy(now = Date.now()) {
+    if (now - lastInput < IDLE_MS) { return 'la usaste hace poco' }
+    if (uiDraft) { return 'tienes algo escrito sin enviar' }
+    if (hermesUpdates && hermesUpdates.applyingAny()) { return 'se está actualizando Hermes' }
+    for (const c of Object.values(conns)) {
+      if (c.prompts.size) { return 'Hermes espera tu respuesta' }
+      for (const rec of c.live.values()) { if (rec.running) { return 'Hermes está trabajando' } }
+      if (hermesUpdates && hermesUpdates.busyWithin(c.id, IDLE_MS, now)) { return 'Hermes ha trabajado hace poco' }
+    }
+    return ''
+  }
+
+  async function autoInstallIfIdle() {
+    if (!app.isPackaged || installing || !pendingUpdate || !pendingUpdate.available || !settings.data.updates.autoInstall) { return }
+    if (pedilaBusy()) { return }
+    log.info(`[actualizar] ${pendingUpdate.version}: Pedila lleva 10 min sin usarse; la instalo sola`)
+    await installPedila({ auto: true })
   }
 
   // ── IPC ────────────────────────────────────────────────────────────────────────────────────
@@ -523,20 +622,13 @@ function main() {
       return { saved: true, file: r.filePath }
     })
     handle('hp:update-check', () => autoCheckUpdate(true))
-    let installing = null
-    handle('hp:update-install', () => {
-      if (installing) { return installing }
-      installing = (async () => {
-        const u = settings.data.updates
-        const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion(), REPO)
-        if (!info || !info.available) { throw new Error('no hay versión nueva') }
-        await extras.installUpdate(info, log)
-        setTimeout(() => { quitting = true; app.quit() }, 600)
-        return true
-      })()
-      installing.finally(() => { installing = null }).catch(() => {})
-      return installing
-    })
+    handle('hp:update-install', () => installPedila())
+    // Versiones de Hermes (la tarjeta Conexiones y Ajustes → Acerca de).
+    handle('hp:hermes-updates', () => hermesUpdates.view())
+    handle('hp:hermes-check', id => hermesUpdates.checkNow(String(id)))
+    handle('hp:hermes-update', id => hermesUpdates.applyNow(String(id)))
+    // La pantalla dice si hay algo escrito sin enviar (entonces Pedila no se reinicia sola).
+    handle('hp:ui-state', st => { uiDraft = Boolean(st && st.draft); return true })
     handle('hp:login', async (user, pass) => {
       if (typeof user !== 'string' || typeof pass !== 'string' || !user || !pass || user.length > 200 || pass.length > 500) { throw new Error('Escribe usuario y contraseña') }
       const r = await remote.login(user, pass)
@@ -562,9 +654,7 @@ function main() {
         settings.patch(patch)
         nativeTheme.themeSource = settings.data.look.theme
         if (patch.look && win && !win.isDestroyed()) { try { win.setTitleBarOverlay(overlay()); win.setBackgroundColor(windowBg()) } catch {} }
-        if (app.isPackaged) {
-          app.setLoginItemSettings({ openAtLogin: settings.data.window.openAtLogin, args: ['--oculto'] })
-        }
+        if (patch.window) { applyLoginItem(); refreshTray() }
         if (JSON.stringify(settings.data.server.urls) !== before) { remote.invalidate(); conns.server.forgetModelStats(); conns.server.retryNow() }
         if (patch.shortcut) { applyShortcut() }
       }

@@ -77,8 +77,22 @@ async function checkUpdate(url, current, repo) {
   return { ...m, available: newer(m.version, current), download: exe.browser_download_url }
 }
 
-/** Baja el instalador, comprueba su SHA-256 y lo lanza en silencio; al terminar vuelve a abrir la app. */
-async function installUpdate(info, log) {
+/**
+ * El .cmd que instala la versión nueva y vuelve a abrir Pedila: el instalador en silencio (cmd espera
+ * a que acabe) y después la app con `args` (['--oculto'] = sigue en la bandeja; ['--sin-foco'] = se
+ * ve, pero sin quitar el foco a lo que estés usando). En un .cmd, «%» se escribe «%%». Pura.
+ */
+function relaunchScript(setup, exe, args = []) {
+  const q = s => `"${String(s).replace(/"/g, '').replace(/%/g, '%%')}"`
+  const extra = args.filter(a => /^--[a-z-]+$/.test(a))
+  return ['@echo off', `${q(setup)} /S`, `start "" ${q(exe)}${extra.length ? ' ' + extra.join(' ') : ''}`, ''].join('\r\n')
+}
+
+/**
+ * Baja el instalador, comprueba su SHA-256 y lo lanza en silencio; al terminar vuelve a abrir la app
+ * (`exe`, con `args`). Sin `exe` (en desarrollo) solo instala.
+ */
+async function installUpdate(info, log, { exe = '', args = [] } = {}) {
   const res = await fetch(info.download, { headers: { 'User-Agent': 'pedila-updater' }, signal: AbortSignal.timeout(15 * 60000) })
   if (!res.ok) { throw new Error(`no pude bajar el instalador (${res.status})`) }
   const buf = Buffer.from(await res.arrayBuffer())
@@ -86,8 +100,16 @@ async function installUpdate(info, log) {
   if (sha !== info.sha256) { throw new Error('el instalador descargado no coincide con su huella (SHA-256)') }
   const file = path.join(os.tmpdir(), `Pedila-Setup-${info.version}.exe`)
   fs.writeFileSync(file, buf)
-  log.info(`[actualizar] ${info.version} descargada y comprobada; lanzo el instalador`)
-  const child = spawn(file, ['/S', '--force-run'], { detached: true, stdio: 'ignore', windowsHide: true })
+  log.info(`[actualizar] ${info.version} descargada y comprobada; lanzo el instalador${args.length ? ` (al volver: ${args.join(' ')})` : ''}`)
+  let child
+  if (exe) {
+    const script = path.join(os.tmpdir(), 'pedila-actualizar.cmd')
+    fs.writeFileSync(script, relaunchScript(file, exe, args))
+    // /s y las comillas dobles: así cmd acepta una ruta con espacios.
+    child = spawn('cmd.exe', ['/d', '/s', '/c', `""${script}""`], { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true })
+  } else {
+    child = spawn(file, ['/S'], { detached: true, stdio: 'ignore', windowsHide: true })
+  }
   child.unref()
   return { ok: true }
 }
@@ -189,4 +211,4 @@ function modelUsageFrom(j) {
   return [...out.values()].sort(byTokens).slice(0, 200)
 }
 
-module.exports = { checkUpdate, installUpdate, usageStats, modelUsageFrom, newer, INSTALADOR }
+module.exports = { checkUpdate, installUpdate, relaunchScript, usageStats, modelUsageFrom, newer, INSTALADOR }

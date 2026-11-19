@@ -62,8 +62,9 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - «Tareas», como en Claude Code: el plan de Hermes (su lista de tareas, con subtareas) y cuánto lleva hecho, lo que está haciendo ahora, las herramientas en marcha y sus subagentes;
   - la lista de chats y el panel se ensanchan o estrechan arrastrando su raya (o con las flechas; doble clic: el ancho de siempre);
   - «Tu uso», calculado solo con tus datos;
-  - bandeja del sistema y atajo **Ctrl+Alt+H**;
-  - actualizaciones desde GitHub Releases;
+  - bandeja del sistema y atajo **Ctrl+Alt+H**; «Iniciar con Windows» en Ajustes → Ventana y en el menú del icono de la bandeja;
+  - actualizaciones desde GitHub Releases, que se instalan solas cuando no usas Pedila (10 minutos sin tocarla, sin nada escrito sin enviar y sin Hermes trabajando) y la vuelven a abrir como estaba, sin quitarte el foco;
+  - **versiones de Hermes:** Pedila mira cada 6 horas si hay una nueva (la tarjeta «Conexiones» y Ajustes → Acerca de lo dicen). El Hermes de este PC, si es una instalación que Hermes sabe actualizar (la del instalador oficial), se actualiza solo con su propia orden `hermes update` cuando lleva 10 minutos sin usarse: sin chats trabajando ni con actividad. Un Hermes en Docker (un servidor) no puede actualizarse a sí mismo: Pedila avisa y se actualiza desde su servidor;
   - Pedila, la mascota, que reacciona a lo que hace Hermes; si prefieres otra, se elige entre más de 5.000 de [Petdex](https://petdex.dev).
 - **Diseño a tu gusto** (Ajustes → Diseño): ordena y esconde las pestañas (Este PC/Servidor), elige qué tarjetas del panel salen y en qué orden, esconde los botones que no uses y pon la lista de chats a la derecha si lo prefieres. Las pestañas y las tarjetas también se arrastran directamente en su sitio.
 - **Cuotas con el mismo diseño para todos:** cada proveedor (OpenRouter, Venice y OpenCode) sale igual: lo que te queda en grande y, debajo, cada medida con su barra y cuándo se reinicia. Para los saldos sin total (Venice), la barra cuenta lo gastado desde el saldo más alto que Pedila ha visto.

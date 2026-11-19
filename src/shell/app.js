@@ -7,6 +7,7 @@ const demo = new URLSearchParams(location.search).get('demo') === '1'
 const api = demo ? (await import('./demo.js')).demoApi : window.hp
 const $ = sel => document.querySelector(sel)
 const CONN_NAMES = { local: 'Este PC', server: 'Servidor' }
+const CONN_STATES = { ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', missing: 'sin Hermes instalado', updating: 'actualizando Hermes…', error: 'error', off: 'apagado' }
 const CHOICE_LABELS = { once: 'Permitir una vez', session: 'Permitir en este chat', always: 'Permitir siempre', deny: 'Denegar' }
 
 // ── Estado ───────────────────────────────────────────────────────────────────────────────────
@@ -25,6 +26,8 @@ const S = {
   models: { local: null, server: null },
   search: '',
   found: { local: [], server: [] },
+  // Versiones de Hermes de cada conexión (las manda el proceso principal).
+  hermesUpd: {},
   attach: [],
   readOnly: false,
   reasoning: '',
@@ -254,7 +257,7 @@ function renderConnSwitch() {
 
 function connLabel(c) {
   const st = S.conns[c]
-  const what = { ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', missing: 'sin Hermes instalado', error: 'error', off: 'apagado' }[st.state] || st.state
+  const what = CONN_STATES[st.state] || st.state
   return `${CONN_NAMES[c]}: ${what}${st.detail && st.state !== 'ready' ? ' — ' + st.detail : ''}`
 }
 
@@ -279,6 +282,9 @@ function renderBanner() {
     b.className = st.state
     b.append(el('div', { class: 'grow' }, el('strong', { text: `Sin conexión con ${CONN_NAMES[S.active]}. ` }), el('span', { class: 'muted', text: st.detail || '' })),
       el('button', { class: 'btn-ghost', text: 'Reintentar', onclick: () => call(api.retry, S.active).catch(() => {}) }))
+  } else if (st.state === 'updating') {
+    b.className = 'login'
+    b.append(el('div', { class: 'grow' }, el('strong', { text: 'Actualizando Hermes de este PC' + (st.detail ? ` (${st.detail})` : '') + '. ' }), el('span', { class: 'muted', text: 'Tarda unos minutos; Pedila se vuelve a conectar sola al acabar.' })))
   } else if (st.state === 'connecting' && st.detail) {
     b.append(el('div', { class: 'grow muted', text: `Conectando con ${CONN_NAMES[S.active]}… ${st.detail}` }))
   } else {
@@ -805,6 +811,16 @@ function updateComposer() {
   }
   $('#input').placeholder = S.current.sid ? 'Escribe a Hermes…' : `Escribe a Hermes (${CONN_NAMES[S.current.conn]})…`
   if (typeof updateExtrasPills === 'function') { updateExtrasPills() }
+  reportDraft()
+}
+
+// Con algo escrito sin enviar (o una imagen preparada), Pedila no se reinicia sola para actualizarse.
+let draftSent = null
+function reportDraft() {
+  const draft = $('#input').value.trim().length > 0 || S.attach.length > 0
+  if (draft === draftSent) { return }
+  draftSent = draft
+  if (api.uiState) { call(api.uiState, { draft }).catch(() => { draftSent = null }) }
 }
 
 function autoGrow() {
@@ -1119,6 +1135,15 @@ function onEvent(evt) {
       return
     case 'update':
       showUpdate(evt.version, evt.notes)
+      return
+    case 'hermes-updates':
+      S.hermesUpd = evt.view || {}
+      schedulePanel()
+      if ($('#settings-dialog').open) { renderHermesUpd() }
+      return
+    case 'settings':
+      // Un ajuste cambiado fuera de Ajustes (por ejemplo «Iniciar con Windows» en la bandeja).
+      if (evt.settings) { S.settings = evt.settings; if ($('#settings-dialog').open) { renderSettings() } }
       return
     default:
       break
@@ -1587,6 +1612,7 @@ function renderSettings() {
   renderSnippetSettings()
   $('#upd-url').value = (st.updates && st.updates.url) || ''
   renderLayoutSettings()
+  renderHermesUpd()
 }
 
 async function saveSetting(patch) {
@@ -1675,6 +1701,8 @@ async function start() {
   wirePetPicker()
   wireExtras()
   S.reasoning = init.settings.chat?.reasoning || ''
+  // Versiones de Hermes que el proceso principal ya conozca (luego llegan con los avisos).
+  try { S.hermesUpd = (await call(api.hermesUpdates)) || {} } catch { S.hermesUpd = {} }
   updateExtrasPills()
 
   for (const b of document.querySelectorAll('#conn-switch button')) { b.addEventListener('click', () => switchConn(b.dataset.conn)) }
@@ -1899,6 +1927,7 @@ function renderAttach() {
     el('img', { src: a.url, alt: a.name, title: `${a.name} (pulsa para verla en grande)`, onclick: () => openImage(a.url, a.name) }),
     el('button', { class: 'att-x', text: '✕', title: 'Quitar', onclick: () => { S.attach.splice(i, 1); renderAttach(); updateComposer() } }))))
   strip.hidden = !S.attach.length
+  reportDraft()
 }
 
 async function addImages(files) {
@@ -2430,11 +2459,66 @@ function loginAgain(conn) {
 
 function panelConnsCard() {
   return el('section', { class: 'sp-card' }, el('h4', { text: 'Conexiones' }),
-    ...visibleConns().filter(c => S.conns[c]).map(c => {
+    ...visibleConns().filter(c => S.conns[c]).flatMap(c => {
       const st = S.conns[c]
-      const what = { ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', missing: 'sin Hermes instalado', error: 'error', off: 'apagado' }[st.state] || st.state
-      return el('div', { class: 'sp-conn', title: connLabel(c) }, el('span', { class: 'dot ' + st.state }), el('span', { text: CONN_NAMES[c] }), el('span', { class: 's', text: st.state === 'ready' && st.detail ? `${what} · ${st.detail}` : what }))
+      const what = CONN_STATES[st.state] || st.state
+      const row = el('div', { class: 'sp-conn', title: connLabel(c) }, el('span', { class: 'dot ' + st.state }), el('span', { text: CONN_NAMES[c] }), el('span', { class: 's', text: st.state === 'ready' && st.detail ? `${what} · ${st.detail}` : what }))
+      // Debajo, la versión de su Hermes y si hay una nueva (pulsando, Ajustes → Acerca de).
+      const u = hermesUpdText(c)
+      if (!u) { return [row] }
+      return [row, el('button', { class: 'sp-hint sp-hermes' + (u.warn ? ' warn' : ''), 'data-focus': 'hermes-' + c, text: u.text, title: 'Versiones de Hermes: Ajustes → Acerca de', onclick: () => openSettings('acerca') })]
     }))
+}
+
+/** La versión de Hermes de una conexión, para la tarjeta y Ajustes: { text, warn } o null. */
+function hermesUpdText(c) {
+  const u = S.hermesUpd && S.hermesUpd[c]
+  if (!u || !u.version) { return null }
+  const to = u.latest ? ` ${u.latest}` : ''
+  if (u.applying) { return { text: `Actualizando Hermes ${u.applying.from} → ${u.applying.to || 'lo último'}…`, warn: true } }
+  const r = u.lastResult
+  if (u.available && r && !r.ok) { return { text: `Hermes ${u.version} · no se pudo actualizar (${r.error}); se reintentará en unas horas`, warn: true } }
+  if (u.available && !u.canApply) { return { text: `Hermes ${u.version} · hay versión nueva${to}: se actualiza desde su servidor`, warn: false } }
+  if (u.available && !S.settings.hermes.autoUpdate) { return { text: `Hermes ${u.version} · hay versión nueva${to}`, warn: true } }
+  if (u.available) { return { text: `Hermes ${u.version} · hay versión nueva${to}: se instalará sola cuando Hermes lleve 10 min sin usarse`, warn: false } }
+  if (r && r.ok && Date.now() - r.at < 24 * 3600e3) { return { text: `Hermes ${u.version} · actualizado ${ago(r.at)}`, warn: false } }
+  return { text: `Hermes ${u.version} · al día`, warn: false }
+}
+
+/** Ajustes → Acerca de → Hermes: cada conexión con su versión y los botones. */
+function renderHermesUpd() {
+  const box = $('#hermes-upd')
+  if (!box) { return }
+  box.replaceChildren(...visibleConns().filter(c => S.conns[c]).map(c => {
+    const u = S.hermesUpd[c] || {}
+    const t = hermesUpdText(c)
+    const check = el('button', { class: 'btn-ghost', text: 'Buscar ahora', disabled: Boolean(u.applying), onclick: async e => {
+      e.target.disabled = true
+      e.target.textContent = 'Buscando…'
+      try { S.hermesUpd[c] = await call(api.hermesCheck, c) } catch (err) { showToastLine(`No pude mirarlo: ${err.message}`) }
+      renderHermesUpd()
+      schedulePanel()
+    } })
+    const apply = u.available && u.canApply && !u.applying
+      ? el('button', { class: 'btn-primary', text: `Actualizar ahora${u.latest ? ' a ' + u.latest : ''}`, onclick: () => hermesUpdateNow(c) })
+      : null
+    return el('div', { class: 'hermes-upd-row' },
+      el('div', { class: 'grow' }, el('b', { text: CONN_NAMES[c] }), el('div', { class: 'muted small' + (t && t.warn ? ' warn' : ''), text: t ? t.text : 'Sin conexión: no sé su versión.' })),
+      check, apply)
+  }))
+}
+
+async function hermesUpdateNow(c) {
+  const u = S.hermesUpd[c] || {}
+  const ok = await askBox({
+    title: `¿Actualizar Hermes${u.latest ? ' a ' + u.latest : ''}?`,
+    text: u.busy
+      ? 'Hermes está trabajando ahora mismo: actualizarlo lo reinicia y corta lo que esté haciendo. Si puedes, espera a que termine (se instala solo cuando lleve 10 minutos sin usarse).'
+      : 'Hermes se cierra unos minutos para actualizarse y Pedila se vuelve a conectar sola al acabar.',
+    ok: 'Actualizar', danger: Boolean(u.busy)
+  })
+  if (!ok) { return }
+  try { await call(api.hermesUpdate, c) } catch (e) { showToastLine(`No pude actualizar Hermes: ${e.message}`) }
 }
 
 function renderPanel() {

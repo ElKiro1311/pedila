@@ -201,6 +201,11 @@ class LocalTransport {
     return { status: res.status, json }
   }
 
+  /** Lo público de Hermes (/api/status); en el PC va con su ticket, como todo lo demás. */
+  publicJson(p, opts) {
+    return this.fetchJson(p, opts)
+  }
+
   /** Tras una caída del socket: el gateway pudo reiniciarse con otro puerto o instancia. */
   invalidate() {
     this.ep = null
@@ -211,4 +216,4 @@ class LocalTransport {
   }
 }
 
-module.exports = { LocalTransport, PROTOCOL }
+module.exports = { LocalTransport, PROTOCOL, hermesExe }

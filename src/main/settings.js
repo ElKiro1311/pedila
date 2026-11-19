@@ -81,7 +81,10 @@ function defaults() {
     ],
     shortcut: { enabled: true },
     // Dirección de una carpeta con version.json para buscar versiones nuevas ('' = no buscar).
-    updates: { url: '', auto: true },
+    // autoInstall: instalarlas solas cuando Pedila lleve 10 min sin usarse (y Hermes sin trabajar).
+    updates: { url: '', auto: true, autoInstall: true },
+    // Hermes: actualizarlo solo (las instalaciones que Hermes sabe actualizar) tras 10 min sin uso.
+    hermes: { autoUpdate: true },
     pet: { visible: true, size: 'normal', slug: DEFAULT_PET },
     // sidePanel: el panel derecho con el uso y los parámetros. sideWidth / panelWidth: el ancho de la
     // lista de chats y del panel en píxeles, ajustado arrastrando su raya (null = el de siempre).
@@ -141,6 +144,8 @@ function sanitize(raw) {
   const up = isObj(raw.updates) ? raw.updates : {}
   s.updates.url = typeof up.url === 'string' && up.url ? (validUrl(up.url) ? up.url.replace(/[/]+$/, '') : '') : ''
   s.updates.auto = bool(up.auto, true)
+  s.updates.autoInstall = bool(up.autoInstall, true)
+  s.hermes.autoUpdate = bool(isObj(raw.hermes) ? raw.hermes.autoUpdate : undefined, true)
   s.notify.minDurationSec = clampInt(n.minDurationSec, 0, 3600, d.notify.minDurationSec)
   const pet = isObj(raw.pet) ? raw.pet : {}
   s.pet.visible = bool(pet.visible, true)
@@ -192,7 +197,7 @@ class Settings {
   patch(partial) {
     if (!isObj(partial)) { return this.data }
     const next = JSON.parse(JSON.stringify(this.data))
-    for (const key of ['look', 'server', 'notify', 'pet', 'window', 'models', 'chat', 'shortcut', 'updates', 'layout']) {
+    for (const key of ['look', 'server', 'notify', 'pet', 'window', 'models', 'chat', 'shortcut', 'updates', 'hermes', 'layout']) {
       if (isObj(partial[key])) { next[key] = { ...next[key], ...partial[key] } }
     }
     if (partial.lastConnection !== undefined) { next.lastConnection = partial.lastConnection }
