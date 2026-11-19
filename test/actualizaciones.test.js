@@ -3,9 +3,13 @@
 // reinstala Pedila y la vuelve a abrir, y los ajustes nuevos.
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const crypto = require('node:crypto')
 const { sanitize } = require('../src/main/settings')
-const { relaunchScript } = require('../src/main/extras')
-const { HermesUpdates, infoFrom, decide, newestActivity, IDLE_MS } = require('../src/main/hermes-updates')
+const { relaunchScript, verifiedFile } = require('../src/main/extras')
+const { HermesUpdates, infoFrom, decide, newestActivity, rosterBusy, IDLE_MS } = require('../src/main/hermes-updates')
 
 const MIN = 60 * 1000
 
@@ -48,6 +52,19 @@ test('cuándo se instala Hermes solo', () => {
   assert.equal(decide({ ...base, lastResult: { ok: false, to: '0.23.2', at: now - 7 * 60 * MIN } }, { now: now, auto: true }), 'instalar')
   assert.equal(decide({ ...base, lastResult: { ok: false, to: '0.23.1', at: now - MIN } }, { now, auto: true }), 'instalar')
   assert.equal(decide({ ...base, applying: { at: now } }, { now, auto: true }), 'instalando')
+  // Sin poder comprobar subagentes o chats, no; y tampoco si tú estás usando Pedila o el PC.
+  assert.equal(decide({ ...base, blind: true }, { now, auto: true }), 'sin-saber')
+  assert.equal(decide(base, { now, auto: true, userBusy: 'usas el PC' }), 'tu-uso')
+  assert.equal(decide({ ...base, busy: true }, { now, auto: true, userBusy: 'usas el PC' }), 'en-uso')
+})
+
+test('subagent.roster: subagentes o procesos en segundo plano', () => {
+  assert.equal(rosterBusy({ sessions: [] }), false)
+  assert.equal(rosterBusy({ sessions: [{ session_id: 'a', subagents: 0, background: 0 }] }), false)
+  assert.equal(rosterBusy({ sessions: [{ session_id: 'a', subagents: 1, background: 0 }] }), true)
+  assert.equal(rosterBusy({ sessions: [{ session_id: 'a', subagents: 0, background: 2 }] }), true)
+  assert.equal(rosterBusy(null), null, 'una respuesta rara no se da por «nada en marcha»')
+  assert.equal(rosterBusy({}), null)
 })
 
 test('actividad más reciente de los chats de Hermes (segundos o milisegundos)', () => {
@@ -57,33 +74,59 @@ test('actividad más reciente de los chats de Hermes (segundos o milisegundos)',
   assert.equal(newestActivity(null), 0)
 })
 
-test('el .cmd que instala Pedila y la vuelve a abrir como estaba', () => {
-  const s = relaunchScript('C:\\Temp\\Pedila-Setup-1.0.0.exe', 'C:\\Users\\a b\\AppData\\Local\\Programs\\pedila\\Pedila.exe', ['--oculto'])
-  assert.deepEqual(s.split('\r\n'), ['@echo off', '"C:\\Temp\\Pedila-Setup-1.0.0.exe" /S', 'start "" "C:\\Users\\a b\\AppData\\Local\\Programs\\pedila\\Pedila.exe" --oculto', ''])
-  // «%» se dobla (en un .cmd sería una variable), las comillas no se cuelan y solo pasan opciones --así.
-  const raro = relaunchScript('C:\\T\\100%\\s"e.exe', 'C:\\P\\Pedila.exe', ['--sin-foco', '& del *', '--x'])
-  assert.match(raro, /"C:\\T\\100%%\\se\.exe" \/S/)
-  assert.match(raro, /Pedila\.exe" --sin-foco --x\r\n$/)
+test('el .cmd que instala Pedila y la vuelve a abrir como estaba: sin rutas dentro (cmd rompería las tildes)', () => {
+  const s = relaunchScript(['--oculto'])
+  assert.deepEqual(s.split('\r\n'), ['@echo off', '"%PEDILA_SETUP%" /S', 'start "" "%PEDILA_EXE%" --oculto', ''])
+  assert.match(s, /^[\x20-\x7e\r\n]*$/, 'solo ASCII: se lee igual con cualquier página de códigos')
+  // Solo pasan opciones --así.
+  const raro = relaunchScript(['--sin-foco', '& del *', '--x'])
+  assert.match(raro, /"%PEDILA_EXE%" --sin-foco --x\r\n$/)
   assert.doesNotMatch(raro, /del \*/)
-  assert.match(relaunchScript('a.exe', 'b.exe'), /start "" "b\.exe"\r\n$/)
+  assert.match(relaunchScript(), /start "" "%PEDILA_EXE%"\r\n$/)
 })
 
-/** Un Hermes de mentira: lo que contestaría /api/status, la lista de chats y /api/hermes/update/check. */
+test('instalador ya bajado: se reutiliza solo si su huella sigue cuadrando', () => {
+  const tmp = path.join(os.tmpdir(), `pedila-prueba-${process.pid}.bin`)
+  fs.writeFileSync(tmp, 'hola')
+  const sha = crypto.createHash('sha256').update('hola').digest('hex')
+  assert.equal(verifiedFile(tmp, sha), true)
+  fs.writeFileSync(tmp, 'cambiado')
+  assert.equal(verifiedFile(tmp, sha), false)
+  fs.unlinkSync(tmp)
+  assert.equal(verifiedFile(tmp, sha), false)
+})
+
+/**
+ * Un Hermes de mentira: lo que contestaría /api/status, la lista de chats, /api/hermes/update/check
+ * (null = falla), session.active_list y subagent.roster (un objeto, o una función por llamada).
+ */
 function fakeConn(id, over = {}) {
   const c = {
     id, state: 'ready', stopped: false, calls: [],
     status: { version: '0.23.0', active_agents: 0, gateway_busy: false },
     sessions: [{ last_active: 1 }],
+    active: [],
+    roster: { sessions: [] },
+    rosterFail: false,
     check: { install_method: 'git', can_apply: true, current_version: '0.23.0', update_available: true, source_version: '0.23.2' },
     transport: {
       publicJson: async p => { c.calls.push('GET ' + p); return { status: 200, json: c.status } },
       fetchJson: async p => {
         c.calls.push('GET ' + p)
         if (p.startsWith('/api/sessions')) { return { status: 200, json: { sessions: c.sessions } } }
-        if (p.startsWith('/api/hermes/update/check')) { return { status: 200, json: c.check } }
+        if (p.startsWith('/api/hermes/update/check')) { return c.check ? { status: 200, json: c.check } : { status: 500, json: null } }
         return { status: 404, json: null }
       },
-      invalidate: () => c.calls.push('invalidate')
+      invalidate: () => c.calls.push('invalidate'),
+      pause: () => c.calls.push('pause'),
+      resume: () => c.calls.push('resume')
+    },
+    async activeList() { c.calls.push('RPC session.active_list'); return c.active },
+    async rpc(method) {
+      c.calls.push('RPC ' + method)
+      if (method !== 'subagent.roster') { throw new Error('rpc desconocida') }
+      if (c.rosterFail) { throw new Error('method not found') }
+      return typeof c.roster === 'function' ? c.roster() : c.roster
     },
     stop() { c.stopped = true; c.calls.push('stop') },
     start() { c.stopped = false; c.state = 'ready'; c.calls.push('start') },
@@ -92,6 +135,9 @@ function fakeConn(id, over = {}) {
   }
   return c
 }
+
+const quiet = { info() {}, warn() {} }
+const settingsOn = { data: { hermes: { autoUpdate: true } } }
 
 test('Hermes del PC: espera 10 min sin uso, cierra la conexión, actualiza y vuelve a conectar', async () => {
   let t = 1000 * MIN
@@ -119,11 +165,143 @@ test('Hermes del PC: espera 10 min sin uso, cierra la conexión, actualiza y vue
   t += 2 * MIN
   await hu.tickOne(local)
   assert.deepEqual(runs, [['C:\\hermes\\bin\\hermes.exe', 'update']])
-  const seq = local.calls.filter(x => !x.startsWith('GET'))
-  assert.deepEqual(seq, ['stop', 'state updating 0.23.0 → 0.23.2', 'invalidate', 'state connecting', 'start'])
+  const seq = local.calls.filter(x => !x.startsWith('GET') && !x.startsWith('RPC'))
+  // El transporte se pausa durante la actualización: nada de Hermes se arranca mientras tanto.
+  assert.deepEqual(seq, ['stop', 'pause', 'state updating 0.23.0 → 0.23.2', 'resume', 'invalidate', 'state connecting', 'start'])
+  // La lista de chats va por la última actividad (si no, Hermes la ordena por fecha de creación).
+  assert.ok(local.calls.some(x => x.startsWith('GET /api/sessions') && x.includes('order=recent')))
   const v = hu.view().local
   assert.equal(v.lastResult.ok, true)
   assert.equal(v.applying, null)
+})
+
+test('Hermes del PC: con subagentes o procesos en segundo plano no se actualiza (active_agents no los cuenta)', async () => {
+  let t = 4000 * MIN
+  const local = fakeConn('local')
+  local.roster = { sessions: [{ session_id: 's1', subagents: 0, background: 1 }] }
+  let runs = 0
+  const hu = new HermesUpdates({ conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, run: async () => { runs++; return { code: 0 } } })
+  for (let i = 0; i < 15; i++) { await hu.tickOne(local); t += MIN }
+  assert.equal(runs, 0)
+  assert.equal(hu.view().local.why, 'en-uso')
+  // Un chat trabajando según session.active_list, igual.
+  local.roster = { sessions: [] }
+  local.active = [{ id: 'x', status: 'working' }]
+  for (let i = 0; i < 12; i++) { await hu.tickOne(local); t += MIN }
+  assert.equal(runs, 0)
+  // Todo termina: 10 min después, sí.
+  local.active = []
+  for (let i = 0; i < 9; i++) { await hu.tickOne(local); t += MIN }
+  assert.equal(runs, 0, 'menos de 10 min desde lo último en marcha')
+  t += 2 * MIN
+  await hu.tickOne(local)
+  assert.equal(runs, 1)
+})
+
+test('Hermes del PC: si algo empieza justo antes de actualizar, se vuelve a mirar y no se actualiza', async () => {
+  let t = 4500 * MIN
+  const local = fakeConn('local')
+  let n = 0
+  // 1.ª mirada y 2.ª (la que decide) sin nada; la 3.ª, justo antes de actualizar, ve un subagente.
+  local.roster = () => (++n >= 3 ? { sessions: [{ session_id: 's', subagents: 1, background: 0 }] } : { sessions: [] })
+  let runs = 0
+  const hu = new HermesUpdates({ conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, run: async () => { runs++; return { code: 0 } } })
+  await hu.tickOne(local)
+  t += 11 * MIN
+  await hu.tickOne(local)
+  assert.equal(n, 3)
+  assert.equal(runs, 0)
+  assert.equal(hu.view().local.why, 'en-uso')
+  assert.ok(!local.calls.includes('stop'), 'ni siquiera se cerró la conexión')
+})
+
+test('Hermes del PC: sin poder comprobar los subagentes no se actualiza, pero eso no frena a Pedila', async () => {
+  let t = 5000 * MIN
+  const local = fakeConn('local')
+  local.rosterFail = true
+  let runs = 0
+  const hu = new HermesUpdates({ conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, run: async () => { runs++; return { code: 0 } } })
+  for (let i = 0; i < 12; i++) { await hu.tickOne(local); t += MIN }
+  assert.equal(runs, 0)
+  assert.equal(hu.view().local.why, 'sin-saber')
+  assert.equal(hu.busyWithin('local', IDLE_MS, t), false, 'reiniciar Pedila no corta nada de Hermes')
+})
+
+test('Hermes del PC: si estás usando Pedila o el PC, espera', async () => {
+  let t = 5500 * MIN
+  const local = fakeConn('local')
+  let you = 'usas el PC'
+  let runs = 0
+  const hu = new HermesUpdates({ conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, userBusy: () => you, run: async () => { runs++; return { code: 0 } } })
+  await hu.tickOne(local)
+  t += 11 * MIN
+  await hu.tickOne(local)
+  assert.equal(runs, 0)
+  assert.equal(hu.view().local.why, 'tu-uso')
+  you = ''
+  t += MIN
+  await hu.tickOne(local)
+  assert.equal(runs, 1)
+})
+
+test('versión «0.23.0+12.gabc» (compilación por delante de su etiqueta): no se comprueba cada minuto', async () => {
+  let t = 6000 * MIN
+  const local = fakeConn('local')
+  local.check = { install_method: 'git', can_apply: true, current_version: '0.23.0+12.gabc1234', update_available: false }
+  const hu = new HermesUpdates({ conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, run: async () => ({ code: 0 }) })
+  for (let i = 0; i < 10; i++) { await hu.tickOne(local); t += MIN }
+  assert.equal(local.calls.filter(x => x.includes('/update/check')).length, 1)
+})
+
+test('GitHub respondiendo 403: no se le vuelve a preguntar en horas (el límite sin clave es por IP)', async () => {
+  let t = 7000 * MIN
+  const server = fakeConn('server', { state: 'login' })
+  server.status = { version: '0.23.1', active_agents: 0, gateway_busy: false }
+  let gh = 0
+  const hu = new HermesUpdates({ conns: { server }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, fetchImpl: async () => { gh++; return { ok: false, status: 403 } } })
+  await hu.tickOne(server)
+  assert.equal(gh, 1)
+  for (let i = 0; i < 3; i++) { t += MIN; await hu.checkNow('server') }
+  assert.equal(gh, 1, '«Buscar ahora» tampoco insiste')
+  t += 6 * 60 * MIN + MIN
+  await hu.tickOne(server)
+  assert.equal(gh, 2)
+})
+
+test('Hermes del PC: si la comprobación falla una vez, se queda lo que se sabía y se repite a los 15 min', async () => {
+  let t = 8000 * MIN
+  const local = fakeConn('local')
+  const hu = new HermesUpdates({ conns: { local }, settings: { data: { hermes: { autoUpdate: false } } }, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, fetchImpl: async () => assert.fail('no hace falta GitHub') })
+  await hu.tickOne(local)
+  assert.equal(hu.view().local.canApply, true)
+  const checks = () => local.calls.filter(x => x.includes('/update/check')).length
+  local.check = null
+  t += 6 * 60 * MIN + MIN
+  await hu.tickOne(local)
+  assert.equal(checks(), 2)
+  assert.equal(hu.view().local.canApply, true, 'no pasa a «se actualiza desde su servidor»')
+  t += 10 * MIN
+  await hu.tickOne(local)
+  assert.equal(checks(), 2)
+  t += 6 * MIN
+  await hu.tickOne(local)
+  assert.equal(checks(), 3)
+})
+
+test('Este PC: mientras Hermes se actualiza no se arranca nada suyo, y después se vuelve a preguntar dónde está', async () => {
+  const { LocalTransport } = require('../src/main/local')
+  const tr = new LocalTransport({ log: quiet })
+  tr.ep = { api_origin: 'http://127.0.0.1:1', profile_id: 'x' }
+  let disposed = 0
+  tr.bridge = { dispose: () => { disposed++ }, mint: async () => assert.fail('no debería pedir tickets') }
+  tr.pause()
+  assert.equal(disposed, 1)
+  await assert.rejects(tr.fetchJson('/api/sessions'), /se está actualizando/)
+  await assert.rejects(tr.wsTarget(), /se está actualizando/)
+  tr.resume()
+  assert.equal(tr.paused, false)
+  assert.equal(tr.ep, null)
+  assert.equal(tr.bridge, null)
 })
 
 test('Hermes del PC: si la actualización falla, no se reintenta hasta pasadas 6 h', async () => {
@@ -160,7 +338,7 @@ test('Hermes del servidor en Docker: solo avisa, nunca actualiza; sin sesión ta
   await hu.tickOne(server)
   const v = hu.view().server
   assert.deepEqual([v.version, v.latest, v.available, v.canApply], ['0.23.1', '0.23.2', true, false])
-  assert.ok(!server.calls.some(x => x.includes('/api/sessions') || x.includes('/update/check')), 'sin sesión solo lee /api/status')
+  assert.ok(!server.calls.some(x => x.includes('/api/sessions') || x.includes('/update/check') || x.startsWith('RPC')), 'sin sesión solo lee /api/status')
   await hu.applyNow('server').then(() => assert.fail('no debería'), e => assert.match(e.message, /servidor/))
   assert.equal(runs, 0)
   assert.equal(IDLE_MS, 10 * MIN)
@@ -177,4 +355,36 @@ test('al conectar, Pedila vuelve a seguir los chats que están trabajando (y no 
   c.attach = async sid => { if (sid === 'a') { throw new Error('se cayó') } attached.push(sid) }
   await c.reattachRunning()
   assert.deepEqual(attached, ['d'], 'a falló, b no trabaja, c ya estaba enganchado, d sí')
+})
+
+test('modelo y esfuerzo de un chat empezado, protocolo nuevo: session.mutate con sus vallas, confirmación y reintento', async () => {
+  const { Connection } = require('../src/main/connection')
+  const c = new Connection({ id: 'local', name: 'Este PC', transport: {}, log: { info() {}, warn() {} } })
+  c.canonical = true
+  c.attach = async sid => ({ liveId: sid })
+  let rev = 7
+  c.transport.fetchJson = async p => ({ status: 200, json: { exists: true, runtime_revision: rev, runtime_generation: 3 } })
+  const calls = []
+  let conflictOnce = true
+  c.rpc = async (method, params) => {
+    calls.push([method, params.operation, params.payload, params.expected_revision, params.expected_generation])
+    if (params.operation === 'model' && conflictOnce) { conflictOnce = false; rev = 8; const e = new Error('revision_conflict'); throw e }
+    if (params.operation === 'model' && params.payload.model === 'caro' && !params.payload.confirm) { return { status: 'confirmation_required', confirm: 'abc123', confirm_message: 'Cuesta mucho', target_model: 'caro', target_provider: 'nube' } }
+    return { ok: true }
+  }
+  const ui = []
+  c.on('ui', e => ui.push(e))
+  assert.deepEqual(await c.setChatOptions('s1', { model: 'qwen', provider: 'local' }), { applied: 'now', model: 'qwen', effort: null })
+  assert.deepEqual(calls.slice(0, 2).map(x => x.slice(0, 4)), [['session.mutate', 'model', { model: 'qwen', provider: 'local' }, 7], ['session.mutate', 'model', { model: 'qwen', provider: 'local' }, 8]], 'tras un choque de revisión, se repite una vez con la nueva')
+  assert.equal(calls[1][4], 3)
+  assert.equal(ui.find(e => e.kind === 'info').model, 'qwen')
+  const r = await c.setChatOptions('s1', { model: 'caro', provider: 'nube' })
+  assert.deepEqual(r, { needsConfirm: true, confirm: 'abc123', message: 'Cuesta mucho', model: 'caro', provider: 'nube' })
+  assert.equal((await c.setChatOptions('s1', { model: 'caro', provider: 'nube', confirm: 'abc123' })).applied, 'now')
+  await c.setChatOptions('s1', { reasoning: 'max' })
+  await c.setChatOptions('s1', { reasoning: '' })
+  await c.setChatOptions('s1', { model: null })
+  assert.deepEqual(calls.slice(-3).map(x => [x[1], x[2]]), [['reasoning', { effort: 'max' }], ['reasoning', { effort: null }], ['model', { model: 'reset' }]])
+  c.rpc = async () => { const e = new Error('session busy: turn_active'); throw e }
+  await assert.rejects(c.setChatOptions('s1', { reasoning: 'low' }), /cámbialo cuando termine/)
 })

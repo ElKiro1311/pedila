@@ -145,6 +145,9 @@ class LocalTransport {
   }
 
   async endpoint(force = false) {
+    // Mientras Hermes se actualiza no se arranca nada suyo: su Python bloquearía archivos que la
+    // actualización tiene que cambiar.
+    if (this.paused) { throw new Error('Hermes se está actualizando') }
     if (this.ep && !force) { return this.ep }
     if (!this.available()) {
       const e = new Error('No encuentro Hermes en este PC (falta %LOCALAPPDATA%\\hermes\\bin\\hermes.exe)')
@@ -181,6 +184,21 @@ class LocalTransport {
   async ticket(purpose) {
     const ep = await this.endpoint()
     return this.bridge.mint(ep, purpose)
+  }
+
+  /** Para actualizar Hermes: cierra su Python de los tickets y no deja arrancar nada hasta resume(). */
+  pause() {
+    this.paused = true
+    this.dispose()
+    this.bridge = null
+    this.ep = null
+  }
+
+  /** Tras la actualización: el siguiente endpoint() vuelve a preguntar a Hermes dónde está y con qué Python. */
+  resume() {
+    this.paused = false
+    this.bridge = null
+    this.ep = null
   }
 
   async wsTarget() {

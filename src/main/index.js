@@ -1,7 +1,7 @@
 'use strict'
 // Pedila: proceso principal. Ventana con su propio protocolo app://, bandeja, avisos de
 // Windows y dos conexiones con Hermes («Este PC» y «Servidor»).
-const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, protocol, net, nativeTheme, shell, nativeImage, session, screen, globalShortcut, dialog } = require('electron')
+const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, protocol, net, nativeTheme, shell, nativeImage, session, screen, globalShortcut, dialog, powerMonitor } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const { pathToFileURL } = require('node:url')
@@ -120,12 +120,12 @@ function main() {
       c.on('ui', evt => onConnEvent(evt))
     }
     // Versiones de Hermes: avisa de las nuevas y actualiza el del PC cuando lleva 10 min sin usarse.
-    hermesUpdates = new HermesUpdates({ conns, settings, log, hermesExe })
+    hermesUpdates = new HermesUpdates({ conns, settings, log, hermesExe, userBusy: () => userBusyReason() })
     hermesUpdates.on('change', view => { send({ kind: 'hermes-updates', view }); refreshTray() })
 
     registerIpc(remote)
     applyShortcut()
-    applyLoginItem()
+    syncLoginItem()
     setTimeout(() => autoCheckUpdate(), 20000)
     setInterval(() => autoCheckUpdate(), 6 * 60 * 60 * 1000)
     // Pedila se instala sola su versión nueva cuando no la usas (lo mira cada minuto).
@@ -311,13 +311,29 @@ function main() {
       { type: 'separator' },
       ...mine.map(c => ({ label: `${c.name}: ${label(c)}`, enabled: false })),
       { type: 'separator' },
-      { label: 'Iniciar con Windows', type: 'checkbox', checked: settings.data.window.openAtLogin, click: item => setOpenAtLogin(item.checked) },
+      { label: 'Iniciar con Windows', type: 'checkbox', checked: loginItemOn(), click: item => setOpenAtLogin(item.checked) },
       { type: 'separator' },
       { label: 'Salir', click: () => { quitting = true; app.quit() } }
     ]))
   }
 
-  /** Que Windows abra Pedila al iniciar sesión (en la bandeja), según el ajuste. Solo la instalada. */
+  /**
+   * ¿Abrirá Windows Pedila al iniciar sesión? Lo real: también cuenta si la desactivaste en el
+   * Administrador de tareas → Aplicaciones de arranque.
+   */
+  function loginItemOn() {
+    if (!app.isPackaged) { return settings.data.window.openAtLogin }
+    try { return Boolean(app.getLoginItemSettings({ args: ['--oculto'] }).executableWillLaunchAtLogin) } catch { return settings.data.window.openAtLogin }
+  }
+
+  /** Al arrancar, el ajuste sigue a Windows, sin tocar Windows (lo que cambies allí se respeta). */
+  function syncLoginItem() {
+    if (!app.isPackaged) { return }
+    const on = loginItemOn()
+    if (on !== settings.data.window.openAtLogin) { settings.patch({ window: { openAtLogin: on } }) }
+  }
+
+  /** Que Windows abra Pedila al iniciar sesión (en la bandeja). Solo cuando lo cambias tú. Solo la instalada. */
   function applyLoginItem() {
     if (!app.isPackaged) { return }
     try { app.setLoginItemSettings({ openAtLogin: settings.data.window.openAtLogin, args: ['--oculto'] }) } catch (e) { log.warn('[ventana] inicio con Windows:', e.message) }
@@ -443,10 +459,25 @@ function main() {
   }
 
   let installing = null
+  let downloaded = null // { version, sha256, file }: el instalador ya bajado y comprobado
+  let autoFail = null // { version, sha256, at }: la versión cuya instalación automática falló
+  const AUTO_RETRY_MS = 6 * 60 * 60 * 1000
+
   /**
-   * Instala la versión nueva de Pedila y la vuelve a abrir. Pedida a mano, vuelve a la vista; sola
-   * (auto), vuelve como estaba: en la bandeja si estaba escondida o minimizada, y si estaba a la
-   * vista, a la vista pero sin quitarte el foco.
+   * Cómo vuelve Pedila tras instalarse. A mano, a la vista. Sola, como estaba: a la vista sin quitarte
+   * el foco si la tenías delante (con el foco), y si no, en la bandeja (así no tapa, por ejemplo, un
+   * juego que está delante).
+   */
+  function relaunchArgs(auto) {
+    if (!auto) { return [] }
+    const front = Boolean(win && !win.isDestroyed() && win.isVisible() && !win.isMinimized() && win.isFocused())
+    return [front ? '--sin-foco' : '--oculto']
+  }
+
+  /**
+   * Instala la versión nueva de Pedila y la vuelve a abrir. Sola (auto): primero la baja y la
+   * comprueba, y solo después, si sigues sin usar Pedila, la cierra (si no, la guarda bajada para la
+   * próxima vuelta).
    */
   function installPedila({ auto = false } = {}) {
     if (installing) { return installing }
@@ -454,9 +485,16 @@ function main() {
       const u = settings.data.updates
       const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion(), REPO)
       if (!info || !info.available) { throw new Error('no hay versión nueva') }
-      const visible = Boolean(win && !win.isDestroyed() && win.isVisible() && !win.isMinimized())
-      const args = auto ? [visible ? '--sin-foco' : '--oculto'] : []
-      await extras.installUpdate(info, log, { exe: app.isPackaged ? process.execPath : '', args })
+      let file = downloaded && downloaded.version === info.version && downloaded.sha256 === info.sha256 && extras.verifiedFile(downloaded.file, info.sha256) ? downloaded.file : ''
+      if (!file) {
+        file = await extras.downloadUpdate(info, log)
+        downloaded = { version: info.version, sha256: info.sha256, file }
+      }
+      if (auto) {
+        const why = pedilaBusy()
+        if (why) { log.info(`[actualizar] ${info.version} bajada; espero para instalarla (${why})`); return false }
+      }
+      extras.launchInstaller(file, log, { exe: app.isPackaged ? process.execPath : '', args: relaunchArgs(auto) })
       setTimeout(() => { quitting = true; app.quit() }, 600)
       return true
     })()
@@ -465,13 +503,24 @@ function main() {
   }
 
   /**
-   * Por qué no se puede reiniciar Pedila ahora ('' = se puede): hay que llevar 10 min sin tocarla,
-   * sin nada escrito sin enviar y sin Hermes trabajando (si Pedila se cerrara con un chat suyo en
-   * marcha, Hermes cortaría sus tareas a los 5 min sin nadie mirando).
+   * Por qué no tocar nada ahora por tu parte ('' = nada): tocaste Pedila en los últimos 10 min, hay
+   * algo escrito sin enviar, o has usado el PC (teclado, ratón) en esos 10 min.
+   */
+  function userBusyReason(now = Date.now()) {
+    if (now - lastInput < IDLE_MS) { return 'usas Pedila' }
+    if (uiDraft) { return 'tienes algo escrito sin enviar' }
+    try { if (powerMonitor.getSystemIdleTime() * 1000 < IDLE_MS) { return 'usas el PC' } } catch {}
+    return ''
+  }
+
+  /**
+   * Por qué no se puede reiniciar Pedila ahora ('' = se puede): tú (userBusyReason) y Hermes sin
+   * trabajar (si Pedila se cerrara con un chat suyo en marcha, Hermes cortaría sus tareas a los 5 min
+   * sin nadie mirando).
    */
   function pedilaBusy(now = Date.now()) {
-    if (now - lastInput < IDLE_MS) { return 'la usaste hace poco' }
-    if (uiDraft) { return 'tienes algo escrito sin enviar' }
+    const you = userBusyReason(now)
+    if (you) { return you }
     if (hermesUpdates && hermesUpdates.applyingAny()) { return 'se está actualizando Hermes' }
     for (const c of Object.values(conns)) {
       if (c.prompts.size) { return 'Hermes espera tu respuesta' }
@@ -482,10 +531,18 @@ function main() {
   }
 
   async function autoInstallIfIdle() {
-    if (!app.isPackaged || installing || !pendingUpdate || !pendingUpdate.available || !settings.data.updates.autoInstall) { return }
+    const p = pendingUpdate
+    if (!app.isPackaged || installing || !p || !p.available || !settings.data.updates.autoInstall) { return }
+    // Una versión que ya falló (huella que no cuadra, descarga cortada…) no se reintenta en 6 h.
+    if (autoFail && autoFail.version === p.version && autoFail.sha256 === p.sha256 && Date.now() - autoFail.at < AUTO_RETRY_MS) { return }
     if (pedilaBusy()) { return }
-    log.info(`[actualizar] ${pendingUpdate.version}: Pedila lleva 10 min sin usarse; la instalo sola`)
-    await installPedila({ auto: true })
+    log.info(`[actualizar] ${p.version}: Pedila lleva 10 min sin usarse; la instalo sola`)
+    try {
+      await installPedila({ auto: true })
+    } catch (e) {
+      autoFail = { version: p.version, sha256: p.sha256, at: Date.now() }
+      throw e
+    }
   }
 
   // ── IPC ────────────────────────────────────────────────────────────────────────────────────
@@ -582,6 +639,8 @@ function main() {
       if (o.model !== undefined) { if (o.model !== null && (typeof o.model !== 'string' || !o.model || o.model.length > 200 || /[\s"]/.test(o.model))) { throw new Error('modelo no válido') } clean.model = o.model }
       if (typeof o.provider === 'string' && o.provider && o.provider.length <= 200 && !/[\s"]/.test(o.provider)) { clean.provider = o.provider }
       if (o.reasoning !== undefined) { if (!['', null, 'low', 'medium', 'high', 'xhigh', 'max'].includes(o.reasoning)) { throw new Error('razonamiento no válido') } clean.reasoning = o.reasoning }
+      // La confirmación que pidió Hermes para ese modelo (su código, tal cual).
+      if (typeof o.confirm === 'string' && /^[0-9a-f]{16,128}$/i.test(o.confirm)) { clean.confirm = o.confirm }
       return c.setChatOptions(sid, clean)
     })
     // Cuotas de las APIs de pago (complemento «pedila» dentro de Hermes) y las APIs que tiene puestas.
@@ -654,7 +713,8 @@ function main() {
         settings.patch(patch)
         nativeTheme.themeSource = settings.data.look.theme
         if (patch.look && win && !win.isDestroyed()) { try { win.setTitleBarOverlay(overlay()); win.setBackgroundColor(windowBg()) } catch {} }
-        if (patch.window) { applyLoginItem(); refreshTray() }
+        // Plegar el panel o cambiar anchos también es «window»: a Windows solo se le toca si cambias el inicio.
+        if (patch.window && patch.window.openAtLogin !== undefined) { applyLoginItem(); refreshTray() }
         if (JSON.stringify(settings.data.server.urls) !== before) { remote.invalidate(); conns.server.forgetModelStats(); conns.server.retryNow() }
         if (patch.shortcut) { applyShortcut() }
       }

@@ -3,21 +3,29 @@
 // actualizarse solo (instalación git, la del instalador oficial), instalarla cuando lleve 10 minutos
 // sin usarse. Un Hermes en Docker (un servidor) lo actualiza su propio servidor: aquí solo se avisa.
 //
-// «Sin usarse» = /api/status sin turnos en marcha (active_agents 0, gateway_busy falso) en todas las
-// miradas de los últimos 10 min y ningún chat con actividad en esos 10 min (last_active, que mientras
-// un chat trabaja Hermes renueva cada minuto).
+// «Sin usarse», en todas las miradas de los últimos 10 min:
+//   - /api/status sin turnos en marcha (active_agents 0, gateway_busy falso);
+//   - session.active_list sin chats trabajando y subagent.roster sin subagentes ni procesos en segundo
+//     plano (active_agents no los cuenta, y `hermes update` para el gateway: los mataría);
+//   - ningún chat con actividad (last_active, que Hermes renueva cada minuto mientras trabaja);
+//   - y tú sin usar Pedila ni el PC (userBusy, desde index.js: así no se corta lo que estás escribiendo).
+// Todo se vuelve a comprobar justo antes de actualizar.
 const { EventEmitter } = require('node:events')
 const { spawn, execFile } = require('node:child_process')
 const { newer } = require('./extras')
 
 const POLL_MS = 60 * 1000 // cada minuto: ¿Hermes trabaja?
 const CHECK_MS = 6 * 60 * 60 * 1000 // cada 6 h: ¿hay versión nueva?
+const CHECK_RETRY_MS = 15 * 60 * 1000 // si la comprobación de este PC falló, se repite a los 15 min
 const IDLE_MS = 10 * 60 * 1000 // «sin usarse»
 const RETRY_MS = 6 * 60 * 60 * 1000 // tras un fallo, esa versión no se reintenta en 6 h
+const GITHUB_FAIL_MS = 60 * 60 * 1000 // tras un fallo de GitHub, 1 h sin preguntarle (6 h con 403/429)
 const UPDATE_TIMEOUT_MS = 30 * 60 * 1000
 const LATEST_URL = 'https://api.github.com/repos/NousResearch/hermes-agent/releases/latest'
 
 const clean = v => String(v || '').trim().replace(/^v/i, '')
+// «0.23.0+12.gabc1234» (una compilación por delante de su etiqueta) es la misma 0.23.0 para comparar.
+const base = v => clean(v).split('+')[0]
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g
 
 /**
@@ -34,15 +42,17 @@ function infoFrom(check, version, latest) {
   }
   const v = clean((j && j.current_version) || version)
   const l = clean(latest)
-  return { version: v, latest: l, available: Boolean(v && l && newer(l, v)), canApply: false, method: String((j && j.install_method) || '') }
+  return { version: v, latest: l, available: Boolean(v && l && newer(base(l), base(v))), canApply: false, method: String((j && j.install_method) || '') }
 }
 
 /**
- * ¿Se instala ya? `s` = el estado de esa conexión. Devuelve 'instalar' o por qué no:
- * 'al-dia' | 'servidor' (no se puede desde aquí) | 'manual' (automático apagado) | 'instalando' |
- * 'fallo-reciente' | 'observando' (aún no lleva 10 min mirando) | 'en-uso'. Pura.
+ * ¿Se instala ya? `s` = el estado de esa conexión; `userBusy` = por qué no (lo que dice index.js de ti:
+ * '' si no usas Pedila ni el PC). Devuelve 'instalar' o por qué no: 'al-dia' | 'servidor' (no se
+ * puede desde aquí) | 'manual' (automático apagado) | 'instalando' | 'fallo-reciente' | 'en-uso' |
+ * 'sin-saber' (no se pudo comprobar todo: subagentes, chats…) | 'tu-uso' | 'observando' (aún no
+ * lleva 10 min mirando). Pura.
  */
-function decide(s, { now, auto }) {
+function decide(s, { now, auto, userBusy = '' }) {
   const i = s.info
   if (!i || !i.available) { return 'al-dia' }
   if (!i.canApply) { return 'servidor' }
@@ -52,6 +62,8 @@ function decide(s, { now, auto }) {
   if (f && !f.ok && f.to === i.latest && now - f.at < RETRY_MS) { return 'fallo-reciente' }
   if (s.busy || (s.lastBusyAt && now - s.lastBusyAt < IDLE_MS)) { return 'en-uso' }
   if (s.lastActive && now - s.lastActive < IDLE_MS) { return 'en-uso' }
+  if (s.blind) { return 'sin-saber' }
+  if (userBusy) { return 'tu-uso' }
   if (!s.watchingSince || now - s.watchingSince < IDLE_MS) { return 'observando' }
   return 'instalar'
 }
@@ -64,6 +76,12 @@ function newestActivity(sessions) {
     if (Number.isFinite(v) && v > 0) { max = Math.max(max, v < 1e12 ? v * 1000 : v) }
   }
   return max
+}
+
+/** ¿Hay subagentes o procesos en segundo plano según subagent.roster? null = respuesta rara (no se sabe). Pura. */
+function rosterBusy(r) {
+  if (!r || !Array.isArray(r.sessions)) { return null }
+  return r.sessions.some(x => x && (Number(x.subagents) > 0 || Number(x.background) > 0))
 }
 
 /** Lanza `file args` sin ventana; guarda el final de lo que escribe. → { code, tail } */
@@ -84,25 +102,29 @@ function runCapture(file, args, timeoutMs) {
 }
 
 class HermesUpdates extends EventEmitter {
-  /** conns: { local, server } · settings · log · hermesExe(): ruta de hermes.exe de este PC */
-  constructor({ conns, settings, log, hermesExe, fetchImpl = (...a) => fetch(...a), now = () => Date.now(), run = runCapture }) {
+  /**
+   * conns: { local, server } · settings · log · hermesExe(): ruta de hermes.exe de este PC ·
+   * userBusy(): por qué no tocar nada ahora por tu parte ('' = no usas Pedila ni el PC).
+   */
+  constructor({ conns, settings, log, hermesExe, userBusy = () => '', fetchImpl = (...a) => fetch(...a), now = () => Date.now(), run = runCapture }) {
     super()
     this.conns = conns
     this.settings = settings
     this.log = log
     this.hermesExe = hermesExe
+    this.userBusy = userBusy
     this.fetch = fetchImpl
     this.now = now
     this.run = run
     this.st = {}
-    this.latest = { at: 0, version: '' }
+    this.latest = { at: 0, version: '', failAt: 0, failMs: 0 }
     this.timer = null
     this.ticking = false
   }
 
   state(id) {
     if (!this.st[id]) {
-      this.st[id] = { version: '', info: null, checkedAt: 0, watchingSince: 0, lastBusyAt: 0, lastActive: 0, busy: false, applying: null, lastResult: null, why: '' }
+      this.st[id] = { version: '', info: null, checkedAt: 0, checkTtl: CHECK_MS, watchingSince: 0, lastBusyAt: 0, lastActive: 0, busy: false, blind: false, applying: null, lastResult: null, why: '', said: '' }
     }
     return this.st[id]
   }
@@ -168,33 +190,57 @@ class HermesUpdates extends EventEmitter {
     return c.state === 'ready' || (c.id === 'server' && c.state === 'login')
   }
 
-  async tickOne(c, force = false) {
-    const s = this.state(c.id)
-    if (s.applying) { return }
-    if (!this.reachable(c)) { s.watchingSince = 0; return }
-    const now = this.now()
+  /**
+   * Una mirada a ese Hermes: ¿trabaja (turnos, chats, subagentes, procesos de fondo)? ¿cuándo tuvo
+   * actividad? → { ok, busy, version, lastActive }. ok=false si no se pudo saber.
+   */
+  async look(c) {
     let status = null
     try {
       const r = await c.transport.publicJson('/api/status', { timeoutMs: 15000 })
       if (r.status === 200 && r.json && typeof r.json === 'object') { status = r.json }
     } catch {}
-    if (!status) { s.watchingSince = 0; return }
-    if (!s.watchingSince) { s.watchingSince = now }
-    s.busy = Number(status.active_agents) > 0 || status.gateway_busy === true
-    if (s.busy) { s.lastBusyAt = now }
-    if (status.version) { s.version = clean(status.version) }
+    if (!status) { return { ok: false } }
+    let busy = Number(status.active_agents) > 0 || status.gateway_busy === true
+    let lastActive = 0
+    // Sin conexión lista solo se sabe lo de /api/status (chats, subagentes y procesos, no).
+    let known = c.state === 'ready'
     if (c.state === 'ready') {
       try {
-        const r = await c.transport.fetchJson('/api/sessions?limit=50&offset=0&min_messages=0&archived=include', { timeoutMs: 20000 })
-        if (r.status === 200 && r.json) { s.lastActive = newestActivity(r.json.sessions) }
-      } catch {}
+        // order=recent: por la última actividad (si no, Hermes ordena por fecha de creación).
+        const r = await c.transport.fetchJson('/api/sessions?limit=5&offset=0&min_messages=0&archived=include&order=recent', { timeoutMs: 20000 })
+        if (r.status === 200 && r.json) { lastActive = newestActivity(r.json.sessions) } else { known = false }
+      } catch { known = false }
+      try { if ((await c.activeList()).length) { busy = true } } catch { known = false }
+      try {
+        const rb = rosterBusy(await c.rpc('subagent.roster', {}, 8000))
+        if (rb === null) { known = false } else if (rb) { busy = true }
+      } catch { known = false }
     }
-    if (force || !s.info || now - s.checkedAt > CHECK_MS || (s.version && s.info.version && s.info.version !== s.version)) {
+    return { ok: true, known, busy, version: clean(status.version), lastActive }
+  }
+
+  async tickOne(c, force = false) {
+    const s = this.state(c.id)
+    if (s.applying) { return }
+    if (!this.reachable(c)) { s.watchingSince = 0; return }
+    const now = this.now()
+    const l = await this.look(c)
+    if (!l.ok) { s.watchingSince = 0; return }
+    if (!s.watchingSince) { s.watchingSince = now }
+    s.busy = l.busy
+    // Lo que no se pudo saber (subagentes, chats…) frena la actualización de Hermes (mejor esperar
+    // que cortar algo), pero no la de Pedila: reiniciar Pedila no corta nada de Hermes.
+    s.blind = !l.known
+    if (s.busy) { s.lastBusyAt = now }
+    if (l.lastActive) { s.lastActive = l.lastActive }
+    if (l.version) { s.version = l.version }
+    if (force || !s.info || now - s.checkedAt > s.checkTtl || (s.version && s.info.version && base(s.info.version) !== base(s.version))) {
       await this.check(c, force)
     }
-    s.why = decide(s, { now, auto: this.settings.data.hermes.autoUpdate })
+    s.why = decide(s, { now, auto: this.settings.data.hermes.autoUpdate, userBusy: c.id === 'local' ? this.userBusy() : '' })
     if (s.why === 'instalar' && c.id === 'local') {
-      await this.apply(c, 'lleva 10 min sin usarse')
+      await this.apply(c, 'lleva 10 min sin usarse', { recheck: true })
       return
     }
     this.changed()
@@ -209,35 +255,73 @@ class HermesUpdates extends EventEmitter {
         if (r.status === 200 && r.json && typeof r.json === 'object') { j = r.json }
       } catch {}
     }
+    // El de este PC conectado y sin respuesta: lo de antes se queda y se vuelve a preguntar pronto
+    // (con una respuesta cualquiera se daría por «no se puede actualizar desde aquí» durante 6 h).
+    if (!j && c.id === 'local' && c.state === 'ready') {
+      s.checkedAt = this.now()
+      s.checkTtl = CHECK_RETRY_MS
+      if (s.info) { return }
+    }
     const own = j && j.install_method === 'git' && j.can_apply === true
     let latest = this.latest.version
     if (!own) { latest = await this.latestStable(force).catch(e => { this.log.warn('[hermes] no pude leer la última versión publicada:', e.message); return this.latest.version }) }
     s.info = infoFrom(j, s.version, latest)
     s.checkedAt = this.now()
-    if (s.info.available) { this.log.info(`[hermes ${c.id}] hay versión nueva: ${s.info.version} → ${s.info.latest || 'lo último'}${s.info.canApply ? '' : ' (la actualiza su servidor)'}`) }
+    s.checkTtl = j || c.id !== 'local' ? CHECK_MS : CHECK_RETRY_MS
+    // El aviso, una vez por versión nueva.
+    if (s.info.available && s.said !== s.info.latest) {
+      s.said = s.info.latest
+      this.log.info(`[hermes ${c.id}] hay versión nueva: ${s.info.version} → ${s.info.latest || 'lo último'}${s.info.canApply ? '' : ' (la actualiza su servidor)'}`)
+    }
   }
 
-  /** La última versión estable de Hermes publicada en GitHub (se recuerda 6 h). */
+  /** La última versión estable de Hermes publicada en GitHub (se recuerda 6 h; tras un fallo, se espera). */
   async latestStable(force = false) {
     const now = this.now()
-    if (!force && this.latest.version && now - this.latest.at < CHECK_MS) { return this.latest.version }
-    const res = await this.fetch(LATEST_URL, { headers: { 'User-Agent': 'pedila', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15000) })
-    if (!res.ok) { throw new Error(`GitHub respondió ${res.status}`) }
-    const j = await res.json()
-    const v = clean(j && j.tag_name)
-    if (!/^\d+\.\d+/.test(v)) { throw new Error(`versión rara en GitHub: ${String(j && j.tag_name).slice(0, 40)}`) }
-    this.latest = { at: now, version: v }
-    return v
+    const L = this.latest
+    if (!force && L.version && now - L.at < CHECK_MS) { return L.version }
+    if (L.failAt && now - L.failAt < L.failMs) { return L.version }
+    try {
+      const res = await this.fetch(LATEST_URL, { headers: { 'User-Agent': 'pedila', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15000) })
+      if (!res.ok) {
+        const e = new Error(`GitHub respondió ${res.status}`)
+        e.status = res.status
+        throw e
+      }
+      const j = await res.json()
+      const v = clean(j && j.tag_name)
+      if (!/^\d+\.\d+/.test(v)) { throw new Error(`versión rara en GitHub: ${String(j && j.tag_name).slice(0, 40)}`) }
+      this.latest = { at: now, version: v, failAt: 0, failMs: 0 }
+      return v
+    } catch (e) {
+      // El límite de GitHub sin clave es de 60 por hora y por IP (lo comparte la propia Pedila): sin insistir.
+      this.latest = { ...L, failAt: now, failMs: e.status === 403 || e.status === 429 ? CHECK_MS : GITHUB_FAIL_MS }
+      throw e
+    }
   }
 
   /**
    * Actualiza el Hermes de este PC con su propia orden (`hermes update`, la misma que lanza el botón
-   * de Hermes). Antes se cierra la conexión de Pedila y su Python de los tickets: en Windows, un
-   * proceso abierto con el Python de Hermes puede bloquear archivos que la actualización cambia.
+   * de Hermes). Antes se cierra la conexión de Pedila y se pausa su transporte: en Windows, el Python
+   * de Hermes que Pedila usa para los tickets bloquearía archivos que la actualización cambia.
+   * Con `recheck`, justo antes se vuelve a mirar que nadie lo use.
    */
-  async apply(c, reason) {
+  async apply(c, reason, { recheck = false } = {}) {
     const s = this.state(c.id)
     if (s.applying || c.id !== 'local' || !s.info || !s.info.canApply || !s.info.available) { return false }
+    if (recheck) {
+      const l = c.state === 'ready' ? await this.look(c) : { ok: false }
+      const you = this.userBusy()
+      const hermes = !l.ok || !l.known || l.busy || Boolean(l.lastActive && this.now() - l.lastActive < IDLE_MS)
+      if (hermes || you) {
+        if (l.ok && l.busy) { s.lastBusyAt = this.now() }
+        if (l.lastActive) { s.lastActive = Math.max(s.lastActive, l.lastActive) }
+        s.why = hermes ? 'en-uso' : 'tu-uso'
+        this.log.info(`[hermes local] no actualizo todavía: ${hermes ? 'Hermes tiene algo en marcha o no pude comprobarlo' : 'estás usando Pedila o el PC'}`)
+        this.changed()
+        return false
+      }
+    }
     const from = s.version || s.info.version
     const to = s.info.latest
     s.applying = { at: this.now(), from, to, reason }
@@ -246,12 +330,15 @@ class HermesUpdates extends EventEmitter {
     this.changed()
     const wasOn = !c.stopped
     c.stop()
+    if (c.transport.pause) { c.transport.pause() }
     c.setState('updating', to ? `${from} → ${to}` : '')
     let out
     try {
       out = await this.run(this.hermesExe(), ['update'], UPDATE_TIMEOUT_MS)
     } catch (e) {
       out = { code: -1, tail: e.message }
+    } finally {
+      if (c.transport.resume) { c.transport.resume() }
     }
     const ok = out.code === 0
     const tail = String(out.tail || '').trim().split(/\r?\n/).slice(-12).join('\n')
@@ -290,4 +377,4 @@ class HermesUpdates extends EventEmitter {
   }
 }
 
-module.exports = { HermesUpdates, infoFrom, decide, newestActivity, IDLE_MS }
+module.exports = { HermesUpdates, infoFrom, decide, newestActivity, rosterBusy, IDLE_MS }

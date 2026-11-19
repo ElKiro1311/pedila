@@ -80,19 +80,17 @@ async function checkUpdate(url, current, repo) {
 /**
  * El .cmd que instala la versión nueva y vuelve a abrir Pedila: el instalador en silencio (cmd espera
  * a que acabe) y después la app con `args` (['--oculto'] = sigue en la bandeja; ['--sin-foco'] = se
- * ve, pero sin quitar el foco a lo que estés usando). En un .cmd, «%» se escribe «%%». Pura.
+ * ve, pero sin quitar el foco). Las rutas NO van dentro: cmd lee el .cmd con la página de códigos
+ * del sistema y rompería una ruta con tildes o «ñ» (C:\Users\José\…). Llegan en las variables de
+ * entorno PEDILA_SETUP y PEDILA_EXE, que cmd recibe tal cual. Pura.
  */
-function relaunchScript(setup, exe, args = []) {
-  const q = s => `"${String(s).replace(/"/g, '').replace(/%/g, '%%')}"`
+function relaunchScript(args = []) {
   const extra = args.filter(a => /^--[a-z-]+$/.test(a))
-  return ['@echo off', `${q(setup)} /S`, `start "" ${q(exe)}${extra.length ? ' ' + extra.join(' ') : ''}`, ''].join('\r\n')
+  return ['@echo off', '"%PEDILA_SETUP%" /S', `start "" "%PEDILA_EXE%"${extra.length ? ' ' + extra.join(' ') : ''}`, ''].join('\r\n')
 }
 
-/**
- * Baja el instalador, comprueba su SHA-256 y lo lanza en silencio; al terminar vuelve a abrir la app
- * (`exe`, con `args`). Sin `exe` (en desarrollo) solo instala.
- */
-async function installUpdate(info, log, { exe = '', args = [] } = {}) {
+/** Baja el instalador de la versión nueva y comprueba su SHA-256. → ruta del instalador comprobado. */
+async function downloadUpdate(info, log) {
   const res = await fetch(info.download, { headers: { 'User-Agent': 'pedila-updater' }, signal: AbortSignal.timeout(15 * 60000) })
   if (!res.ok) { throw new Error(`no pude bajar el instalador (${res.status})`) }
   const buf = Buffer.from(await res.arrayBuffer())
@@ -100,18 +98,38 @@ async function installUpdate(info, log, { exe = '', args = [] } = {}) {
   if (sha !== info.sha256) { throw new Error('el instalador descargado no coincide con su huella (SHA-256)') }
   const file = path.join(os.tmpdir(), `Pedila-Setup-${info.version}.exe`)
   fs.writeFileSync(file, buf)
-  log.info(`[actualizar] ${info.version} descargada y comprobada; lanzo el instalador${args.length ? ` (al volver: ${args.join(' ')})` : ''}`)
+  log.info(`[actualizar] ${info.version} descargada y comprobada`)
+  return file
+}
+
+/** ¿Sigue ahí el instalador ya comprobado y no lo ha cambiado nadie? */
+function verifiedFile(file, sha256) {
+  try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') === sha256 } catch { return false }
+}
+
+/**
+ * Lanza en silencio el instalador ya comprobado y, al acabar, vuelve a abrir la app (`exe`, con
+ * `args`). Sin `exe` (en desarrollo) solo instala.
+ */
+function launchInstaller(file, log, { exe = '', args = [] } = {}) {
+  log.info(`[actualizar] lanzo el instalador${args.length ? ` (al volver: ${args.join(' ')})` : ''}`)
   let child
   if (exe) {
     const script = path.join(os.tmpdir(), 'pedila-actualizar.cmd')
-    fs.writeFileSync(script, relaunchScript(file, exe, args))
+    fs.writeFileSync(script, relaunchScript(args))
     // /s y las comillas dobles: así cmd acepta una ruta con espacios.
-    child = spawn('cmd.exe', ['/d', '/s', '/c', `""${script}""`], { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true })
+    child = spawn('cmd.exe', ['/d', '/s', '/c', `""${script}""`], { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true, env: { ...process.env, PEDILA_SETUP: file, PEDILA_EXE: exe } })
   } else {
     child = spawn(file, ['/S'], { detached: true, stdio: 'ignore', windowsHide: true })
   }
   child.unref()
   return { ok: true }
+}
+
+/** Baja, comprueba y lanza (el botón «Actualizar y reiniciar»). */
+async function installUpdate(info, log, opts = {}) {
+  const file = await downloadUpdate(info, log)
+  return launchInstaller(file, log, opts)
 }
 
 /** Resumen de uso a partir de las filas de chats (todo local). */
@@ -211,4 +229,4 @@ function modelUsageFrom(j) {
   return [...out.values()].sort(byTokens).slice(0, 200)
 }
 
-module.exports = { checkUpdate, installUpdate, relaunchScript, usageStats, modelUsageFrom, newer, INSTALADOR }
+module.exports = { checkUpdate, installUpdate, downloadUpdate, launchInstaller, verifiedFile, relaunchScript, usageStats, modelUsageFrom, newer, INSTALADOR }

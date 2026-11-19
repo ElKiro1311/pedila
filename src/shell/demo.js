@@ -13,6 +13,8 @@ let settings = {
   notify: { enabled: true, done: true, needs: true, failed: true, minDurationSec: 10, sound: true },
   pet: { visible: true, size: 'normal', slug: 'pedila' },
   window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false },
+  updates: { url: '', auto: true, autoInstall: true },
+  hermes: { autoUpdate: true },
   serverSignedIn: false
 }
 const sessions = {

@@ -835,10 +835,15 @@ async function onSendClick() {
   if (!text && busy(ch) && !S.attach.length) { return stopTurn(ch) }
   if (!text && S.attach.length) { text = 'Mira la imagen.' }
   if (!text) { return }
+  const conn = S.current.conn
+  // Mientras Hermes se actualiza el mensaje no llegaría: se queda en el cuadro.
+  if (S.conns[conn] && S.conns[conn].state === 'updating') {
+    showToastLine('Hermes se está actualizando: tu mensaje sigue aquí; envíalo cuando vuelva a conectarse.')
+    return
+  }
   closeSnippets()
   const images = S.attach.splice(0)
   renderAttach()
-  const conn = S.current.conn
   let sid = S.current.sid
   $('#input').value = ''
   autoGrow()
@@ -871,7 +876,8 @@ async function onSendClick() {
   if (!busy(c)) { c.turnAt = Date.now() }
   if (c.live && c.live.done) { c.transcript.push(liveToTurn(c.live)); c.live = null }
   // Tus imágenes se ven en tu mensaje (miniaturas que se abren en grande).
-  c.transcript.push({ role: 'user', text, ...(images.length ? { images: images.map(i => ({ url: i.url, name: i.name })) } : {}) })
+  const mine = { role: 'user', text, ...(images.length ? { images: images.map(i => ({ url: i.url, name: i.name })) } : {}) }
+  c.transcript.push(mine)
   if (!c.live) { c.live = { blocks: [], reasoning: '', status: 'Enviando', done: false, startedAt: Date.now() } }
   c.running = true
   setTopbar()
@@ -888,7 +894,17 @@ async function onSendClick() {
     if (c.live && c.live.status === 'Enviando') { c.live.status = 'Pensando' }
     scheduleLive()
   } catch (e) {
-    if (c.live) { c.live.error = e.needLogin ? 'Falta iniciar sesión en el servidor.' : `No se pudo enviar: ${e.message}`; c.live.done = true }
+    // No llegó: lo escrito (y sus imágenes) vuelve al cuadro, salvo que ya hayas escrito otra cosa.
+    const back = !$('#input').value.trim() && !S.attach.length
+    if (back) {
+      const i = c.transcript.lastIndexOf(mine)
+      if (i >= 0) { c.transcript.splice(i, 1) }
+      $('#input').value = text
+      S.attach.push(...images)
+      renderAttach()
+      autoGrow()
+    }
+    if (c.live) { c.live.error = e.needLogin ? 'Falta iniciar sesión en el servidor.' : `No se pudo enviar: ${e.message}${back ? ' (tu mensaje sigue en el cuadro)' : ''}`; c.live.done = true }
     c.running = false
     c.turnAt = 0
     if (e.needLogin) { openLogin() }
@@ -1009,7 +1025,16 @@ async function openModelMenu() {
     if (sid) {
       const ch = chat(conn, sid)
       try {
-        const r = await call(api.chatOptions, conn, sid, { model: choice ? choice.model : null, ...(choice && choice.provider ? { provider: choice.provider } : {}) })
+        const opts = { model: choice ? choice.model : null, ...(choice && choice.provider ? { provider: choice.provider } : {}) }
+        let r = await call(api.chatOptions, conn, sid, opts)
+        // Hermes pide confirmar algunos modelos (coste, privacidad, contexto grande): su aviso, y si dices
+        // que sí, el mismo cambio con su código.
+        if (r && r.needsConfirm) {
+          const yes = await askBox({ title: `¿Cambiar a ${r.model || (choice ? choice.model : 'ese modelo')}?`, text: r.message || 'Hermes pide confirmación para este modelo.', ok: 'Cambiar' })
+          if (!yes) { return }
+          r = await call(api.chatOptions, conn, sid, { ...opts, confirm: r.confirm })
+          if (r && r.needsConfirm) { showNote('Hermes volvió a pedir confirmación: prueba otra vez.', true); return }
+        }
         if (r && r.model) { ch.model = r.model } else if (choice) { ch.model = choice.model }
         updateModelPill()
         setTopbar()
@@ -2475,12 +2500,16 @@ function hermesUpdText(c) {
   const u = S.hermesUpd && S.hermesUpd[c]
   if (!u || !u.version) { return null }
   const to = u.latest ? ` ${u.latest}` : ''
+  const auto = ((S.settings && S.settings.hermes) || {}).autoUpdate !== false
   if (u.applying) { return { text: `Actualizando Hermes ${u.applying.from} → ${u.applying.to || 'lo último'}…`, warn: true } }
   const r = u.lastResult
-  if (u.available && r && !r.ok) { return { text: `Hermes ${u.version} · no se pudo actualizar (${r.error}); se reintentará en unas horas`, warn: true } }
-  if (u.available && !u.canApply) { return { text: `Hermes ${u.version} · hay versión nueva${to}: se actualiza desde su servidor`, warn: false } }
-  if (u.available && !S.settings.hermes.autoUpdate) { return { text: `Hermes ${u.version} · hay versión nueva${to}`, warn: true } }
-  if (u.available) { return { text: `Hermes ${u.version} · hay versión nueva${to}: se instalará sola cuando Hermes lleve 10 min sin usarse`, warn: false } }
+  if (u.available && r && !r.ok) { return { text: `Hermes ${u.version} · no se pudo actualizar (${r.error})${auto ? '; se reintentará en unas horas' : ''}`, warn: true } }
+  if (u.available && !u.canApply && c !== 'local') { return { text: `Hermes ${u.version} · hay versión nueva${to}: se actualiza desde su servidor`, warn: false } }
+  // El de este PC sin método conocido = no pude preguntarle (se repite a los 15 min).
+  if (u.available && !u.canApply && !u.method) { return { text: `Hermes ${u.version} · hay versión nueva${to} (aún no sé si puede instalarse sola; lo vuelvo a mirar en unos minutos)`, warn: false } }
+  if (u.available && !u.canApply) { return { text: `Hermes ${u.version} · hay versión nueva${to}: actualízalo con su instalador o con Hermes Desktop`, warn: true } }
+  if (u.available && !auto) { return { text: `Hermes ${u.version} · hay versión nueva${to}`, warn: true } }
+  if (u.available) { return { text: `Hermes ${u.version} · hay versión nueva${to}: se instalará sola tras 10 min sin usar Hermes ni el PC`, warn: false } }
   if (r && r.ok && Date.now() - r.at < 24 * 3600e3) { return { text: `Hermes ${u.version} · actualizado ${ago(r.at)}`, warn: false } }
   return { text: `Hermes ${u.version} · al día`, warn: false }
 }

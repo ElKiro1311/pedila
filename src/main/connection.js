@@ -1034,8 +1034,25 @@ class Connection extends EventEmitter {
    * (`/model <modelo> --provider <p> --session` y `/reasoning <nivel>`) por slash.exec. Hermes las
    * rechaza mientras el chat está respondiendo.
    */
-  async setChatOptions(sid, { model, provider, reasoning } = {}) {
+  async setChatOptions(sid, { model, provider, reasoning, confirm } = {}) {
     const rec = await this.attach(sid)
+    // Protocolo nuevo: `session.mutate` (operation 'model' / 'reasoning'), lo mismo que el selector de
+    // Hermes Desktop; ahí `slash.exec /model` está rechazado. Un modelo que Hermes quiere que confirmes
+    // (coste, privacidad, contexto grande) vuelve como { needsConfirm, confirm, message } y se repite
+    // con ese `confirm`.
+    if (this.canonical) {
+      if (model !== undefined) {
+        const payload = model === null ? { model: 'reset' } : { model, ...(provider ? { provider } : {}) }
+        if (confirm) { payload.confirm = confirm }
+        const r = await this.policyMutate(sid, rec, 'model', payload)
+        if (r && r.status === 'confirmation_required') {
+          return { needsConfirm: true, confirm: str(r.confirm), message: str(r.confirm_message), model: str(r.target_model), provider: str(r.target_provider) }
+        }
+        if (model) { this.ui({ kind: 'info', sid, model, provider: provider || '' }) }
+      }
+      if (reasoning !== undefined) { await this.policyMutate(sid, rec, 'reasoning', { effort: reasoning || null }) }
+      return { applied: 'now', model: model || null, effort: reasoning || null }
+    }
     const run = async command => {
       let r
       try {
@@ -1052,6 +1069,33 @@ class Connection extends EventEmitter {
     if (reasoning !== undefined && reasoning) { await run(`/reasoning ${reasoning}`) }
     if (model) { this.ui({ kind: 'info', sid, model, provider: provider || '' }) }
     return { applied: 'now', model: model || null, effort: reasoning || null }
+  }
+
+  /**
+   * Un cambio de la configuración de un chat por `session.mutate`, con las vallas de Hermes (la
+   * revisión y la generación de ahora, de /mutation-snapshot). Si otro cambio se coló entre medias,
+   * se repite una vez con las nuevas.
+   */
+  async policyMutate(sid, rec, operation, payload) {
+    for (let attempt = 0; ; attempt++) {
+      const snap = await this.transport.fetchJson(`/api/sessions/${encodeURIComponent(sid)}/mutation-snapshot`)
+      if (snap.status !== 200 || !snap.json || snap.json.exists === false) { throw new Error('No encuentro ese chat en Hermes') }
+      try {
+        return await this.rpc('session.mutate', {
+          session_id: rec.liveId,
+          request_id: crypto.randomUUID(),
+          expected_revision: snap.json.runtime_revision,
+          expected_generation: snap.json.runtime_generation,
+          operation,
+          payload
+        }, 90000)
+      } catch (e) {
+        const why = `${e.message || ''} ${JSON.stringify(e.data || {})}`
+        if (attempt === 0 && /revision_conflict|stale_generation/i.test(why)) { continue }
+        if (/busy|lease|turn_active|in_progress/i.test(why)) { throw new Error('Hermes está respondiendo en este chat: cámbialo cuando termine.') }
+        throw e
+      }
+    }
   }
 
   chatOptions() { return { model: null, effort: null } }
