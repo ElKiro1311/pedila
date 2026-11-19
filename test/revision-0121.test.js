@@ -1,66 +1,9 @@
 'use strict'
-// Los arreglos de la revisión de la 0.12: imágenes que se piden aparte, compactación, fallos de
-// Hermes, resultados MCP/recortados, «parado», turno en cola y cambios con contexto.
+// Los arreglos de la revisión de la 0.12 que tocan a Hermes: compactación, fallos de Hermes,
+// resultados MCP/recortados y cambios con contexto.
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const os = require('node:os')
-const path = require('node:path')
-
-const SID = '33333333-2222-4333-8444-555555555555'
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pedila-rev-'))
-process.env.CLAUDE_CONFIG_DIR = tmp
-const { ClaudeConnection } = require('../src/main/claude')
 const { hermesToolOutput, hermesFailed, splitCompaction, normalizeTranscript } = require('../src/main/connection')
-
-const IMG = 'iVBORw0KGgo='
-const lines = [
-  { type: 'user', cwd: 'C:\\p', sessionId: SID, uuid: 'u-1', message: { role: 'user', content: [{ type: 'text', text: 'mira esto' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: IMG } }] } },
-  { type: 'assistant', sessionId: SID, message: { model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: 'tu1', name: 'Read', input: { file_path: 'C:\\p\\a.png' } }] } },
-  { type: 'user', sessionId: SID, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: IMG } }] }] } },
-  { type: 'user', sessionId: SID, isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: 'user', content: 'This session is being continued from a previous conversation…' } },
-  { type: 'user', sessionId: SID, message: { role: 'user', content: 'sigue' } }
-]
-const dir = path.join(tmp, 'projects', 'C--p')
-fs.mkdirSync(dir, { recursive: true })
-fs.writeFileSync(path.join(dir, SID + '.jsonl'), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
-const conn = () => new ClaudeConnection({ log: { info() {}, warn() {} }, settings: { data: { terminals: { claudeArgs: '' } } }, metaFile: path.join(tmp, 'meta.json'), trash: async () => {} })
-
-test('claude: las imágenes no viajan con la conversación, se piden al verlas', async () => {
-  const c = conn()
-  await c.listSessions()
-  const t = await c.transcript(SID)
-  assert.ok(!JSON.stringify(t).includes(IMG), 'la conversación no lleva los bytes de las imágenes')
-  const u = t.find(x => x.role === 'user' && x.imageCount)
-  assert.equal(u.imageCount, 1)
-  assert.equal(await c.media(`${u.imageRef}|0`), `data:image/png;base64,${IMG}`)
-  const tool = t.find(x => x.role === 'assistant').blocks[0]
-  assert.equal(tool.imageCount, 1)
-  assert.equal(await c.media(`${tool.imageRef}|0`), `data:image/png;base64,${IMG}`)
-  await assert.rejects(c.media('../../etc/passwd'), /no válida/)
-  await assert.rejects(c.media(`${u.imageRef}|5`), /no encuentro/)
-  // Tras reiniciar (sin índice), la imagen se sigue encontrando.
-  assert.equal(await conn().media(`${tool.imageRef}|0`), `data:image/png;base64,${IMG}`)
-  // El resumen de compactación de Claude es una nota, no un mensaje tuyo.
-  assert.deepEqual(t.map(x => x.role), ['user', 'assistant', 'note', 'user'])
-})
-
-test('claude: parar sale como «parado» y con un turno en cola no se da por terminado', () => {
-  const c = conn()
-  const ev = []
-  c.on('ui', e => ev.push(e))
-  const s = { sid: SID, buf: '', blocks: new Map(), busy: true, turnAt: Date.now(), allow: new Set(), alive: true, tasks: new Map(), controls: new Map(), proc: { stdin: { write() {} } } }
-  c.procs.set(SID, s)
-  c.interrupt(SID)
-  c.onMsg(s, { type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'aborted_streaming', usage: {} })
-  assert.equal(ev.find(e => e.kind === 'complete').outcome, 'interrupted')
-  ev.length = 0
-  s.busy = true
-  c.onMsg(s, { type: 'result', subtype: 'success', result: 'uno', queued_turn_count: 1, usage: {} })
-  assert.equal(s.busy, true)
-  assert.equal(ev.find(e => e.kind === 'complete').more, true)
-  assert.ok(!ev.some(e => e.kind === 'running' && e.running === false))
-})
 
 test('hermes: fallos como los decide Hermes', () => {
   assert.equal(hermesFailed('web_extract', '', { results: [{ url: 'a', error: null }], failed: 0 }), false)
@@ -105,5 +48,3 @@ test('herramientas: un Edit cuenta solo lo que cambia', async () => {
   // En un diff de Hermes, el contexto empieza por espacio y no cuenta.
   assert.deepEqual(diffStats(' - sin cambio\n-borrada\n+nueva\n +contexto'), { add: 1, del: 1 })
 })
-
-test.after(() => { fs.rmSync(tmp, { recursive: true, force: true }) })

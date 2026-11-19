@@ -134,22 +134,12 @@ export const demoApi = {
   media: () => ok('assets/icon.png'),
   usage: () => ok({ chats: 3, messages: 22, input: 5120000, output: 98000, today: { chats: 2, messages: 8, input: 1062000, output: 28000 }, week: { chats: 9, messages: 40, input: 4210000, output: 105000 }, last: { at: now - 3 * 60e3, id: 'd1', title: 'Receta de lentejas para 4' }, days: Array.from({ length: 30 }, (_, i) => ({ date: `día ${i + 1}`, chats: i % 4, messages: i % 4 * 3, input: i % 4 * 9000, output: i % 4 * 700 })), models: [{ model: 'qwen3-32b', input: 2900000, output: 410000, tasks: [{ task: 'compression', tokens: 820000 }, { task: 'title_generation', tokens: 4100 }] }, { model: 'gemma-3-27b', input: 1150000, output: 64000, tasks: [] }, { model: '/models/Qwen3-VL-8B-Instruct-Q4_K_M.gguf', input: 66000, output: 34000, tasks: [{ task: 'vision', tokens: 100000 }] }, { model: 'qwen3-8b', input: 3000, output: 400, tasks: [] }], modelsFrom: 'hermes' }),
   exportChat: () => ok({ saved: false }),
-  showFile: () => ok(true),
   // En la demostración «Buscar actualizaciones» encuentra una versión de muestra (no instala nada).
   updateCheck: () => ok({ available: true, version: '0.99.0-beta', notes: 'Versión de muestra del modo demostración.' }),
   updateInstall: () => new Promise(r => setTimeout(() => r({ ok: true, value: false }), 600)),
   openLogs: () => ok(true),
   testNotify: () => ok(true),
-  // Terminales: en la demostración se ven los programas y una sesión de fuera, pero no se abre nada.
-  termInfo: () => ok({ tools: [{ kind: 'claude', label: 'Claude Code', available: true }, { kind: 'hermes', label: 'Hermes', available: true }, { kind: 'agy', label: 'Antigravity', available: false }, { kind: 'shell', label: 'PowerShell', available: true }], dirs: ['C:\\Users\\demo\\proyectos\\web'], home: 'C:\\Users\\demo', restore: [], list: [] }),
-  termOpen: () => Promise.resolve({ ok: false, error: 'En la demostración no se abren terminales.' }),
-  termClose: () => ok(true),
-  termTitle: () => ok(true),
-  termPickDir: () => ok(null),
-  termForgetDir: () => ok([]),
-  termAgents: () => ok([{ pid: 1, cwd: 'C:\\Users\\demo\\proyectos\\web', kind: 'interactive', sessionId: '00000000-0000-4000-8000-000000000001', name: 'web-3f', status: 'busy', startedAt: now - 600e3, term: null }]),
-  termRestore: () => ok([]),
-  termInput: () => {},
-  termResize: () => {},
+  // Cambiar el modelo o el esfuerzo de un chat empezado: en la demostración se acepta sin más.
+  chatOptions: (conn, sid, o) => ok(o ? { applied: 'now', model: o.model || null, effort: o.reasoning || null } : { model: null, effort: null }),
   onEvent: cb => { listeners.add(cb); return () => listeners.delete(cb) }
 }

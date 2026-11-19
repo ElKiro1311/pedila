@@ -20,20 +20,17 @@ const SIDE_WIDTH = [240, 520]
 const PANEL_WIDTH = [240, 680]
 
 // Lo que se puede ordenar u ocultar (la pantalla usa los mismos nombres).
-const LAYOUT_CONNS = ['local', 'server', 'claude']
-const LAYOUT_MODES = ['chats', 'terms']
-const LAYOUT_CARDS = ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones', 'consolas']
-const LAYOUT_SHOW = ['attach', 'dir', 'model', 'reason', 'readonly', 'hint', 'suggestions', 'search', 'version', 'usageButton']
+const LAYOUT_CONNS = ['local', 'server']
+const LAYOUT_CARDS = ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones']
+const LAYOUT_SHOW = ['attach', 'model', 'reason', 'readonly', 'hint', 'suggestions', 'search', 'version', 'usageButton']
 
 function defaultLayout() {
   return {
     conns: LAYOUT_CONNS.slice(),
     connsHidden: [],
-    modes: LAYOUT_MODES.slice(),
-    modesHidden: [],
     cards: LAYOUT_CARDS.slice(),
-    cardsChats: ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones'],
-    cardsTerms: ['consolas', 'cuotas', 'conexiones'],
+    // Las tarjetas que se ven (el orden lo da `cards`).
+    cardsChats: LAYOUT_CARDS.slice(),
     swap: false,
     show: Object.fromEntries(LAYOUT_SHOW.map(k => [k, true]))
   }
@@ -52,16 +49,12 @@ function sanitizeLayout(raw) {
   const l = {
     conns: idList(raw.conns, LAYOUT_CONNS, true),
     connsHidden: idList(raw.connsHidden, LAYOUT_CONNS, false),
-    modes: idList(raw.modes, LAYOUT_MODES, true),
-    modesHidden: idList(raw.modesHidden, LAYOUT_MODES, false),
     cards: idList(raw.cards, LAYOUT_CARDS, true),
     cardsChats: Array.isArray(raw.cardsChats) ? idList(raw.cardsChats, LAYOUT_CARDS, false) : d.cardsChats,
-    cardsTerms: Array.isArray(raw.cardsTerms) ? idList(raw.cardsTerms, LAYOUT_CARDS, false) : d.cardsTerms,
     swap: bool(raw.swap, false),
     show: {}
   }
-  // Siempre queda al menos un modo y una conexión a la vista.
-  if (l.modesHidden.length >= LAYOUT_MODES.length) { l.modesHidden = [] }
+  // Siempre queda al menos una conexión a la vista.
   if (l.connsHidden.length >= LAYOUT_CONNS.length) { l.connsHidden = [] }
   const show = isObj(raw.show) ? raw.show : {}
   for (const k of LAYOUT_SHOW) { l.show[k] = bool(show[k], true) }
@@ -76,7 +69,7 @@ function defaults() {
     server: { urls: [], enabled: true },
     local: { enabled: true },
     lastConnection: 'local',
-    models: { local: null, server: null, claude: null },
+    models: { local: null, server: null },
     notify: { enabled: true, done: true, needs: true, failed: true, minDurationSec: 10, sound: true, chime: true, badge: true },
     // Nivel de razonamiento de los chats nuevos: '' = el que tenga Hermes.
     chat: { reasoning: '' },
@@ -93,22 +86,12 @@ function defaults() {
     // sidePanel: el panel derecho con el uso y los parámetros. sideWidth / panelWidth: el ancho de la
     // lista de chats y del panel en píxeles, ajustado arrastrando su raya (null = el de siempre).
     window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false, sidePanel: true, sideWidth: null, panelWidth: null },
-    // Terminales dentro de Pedila: el modo que se ve (chats de Hermes o terminales), las carpetas
-    // usadas hace poco y las terminales que quedaron abiertas al salir (para ofrecer reabrirlas).
-    // claudeArgs: opciones que se añaden siempre al abrir Claude Code (por ejemplo «--effort max»).
-    // adoptOutside: al abrir Pedila, traer a pestañas las sesiones de Claude de otras ventanas.
-    // autoRestore: al abrir Pedila, reabrir solas las consolas de la última vez.
-    terminals: { mode: 'chats', dirs: [], restore: [], claudeArgs: '', adoptOutside: true, autoRestore: true },
-    // Diseño: orden y visibilidad de las pestañas, los modos, las tarjetas del panel (en cada modo)
-    // y los botones; swap = lista de chats a la derecha y panel a la izquierda.
+    // Diseño: orden y visibilidad de las pestañas, las tarjetas del panel y los botones;
+    // swap = lista de chats a la derecha y panel a la izquierda.
     layout: defaultLayout(),
     secrets: { server: null }
   }
 }
-
-const TERM_KINDS = ['claude', 'hermes', 'agy', 'shell']
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const okDir = v => typeof v === 'string' && v.length > 1 && v.length <= 400 && !/[\0\r\n]/.test(v)
 
 const isObj = v => v && typeof v === 'object' && !Array.isArray(v)
 const pick = (v, list, d) => (list.includes(v) ? v : d)
@@ -138,9 +121,9 @@ function sanitize(raw) {
   s.server.urls = urls.length ? [...new Set(urls)] : d.server.urls
   s.server.enabled = bool(server.enabled, true)
   s.local.enabled = bool(isObj(raw.local) ? raw.local.enabled : undefined, true)
-  s.lastConnection = pick(raw.lastConnection, ['local', 'server', 'claude'], 'local')
+  s.lastConnection = pick(raw.lastConnection, ['local', 'server'], 'local')
   const models = isObj(raw.models) ? raw.models : {}
-  for (const c of ['local', 'server', 'claude']) {
+  for (const c of ['local', 'server']) {
     const m = models[c]
     s.models[c] = isObj(m) && typeof m.model === 'string' && m.model && m.model.length <= 200 && typeof m.provider === 'string' && m.provider.length <= 100
       ? { model: m.model, provider: m.provider, local: Boolean(m.local) } : null
@@ -148,7 +131,8 @@ function sanitize(raw) {
   const n = isObj(raw.notify) ? raw.notify : {}
   for (const k of ['enabled', 'done', 'needs', 'failed', 'sound', 'chime', 'badge']) { s.notify[k] = bool(n[k], d.notify[k]) }
   const chat = isObj(raw.chat) ? raw.chat : {}
-  s.chat.reasoning = pick(chat.reasoning, ['', 'low', 'medium', 'high'], '')
+  // Los mismos niveles que ofrece el botón 🧠 (Hermes los admite todos).
+  s.chat.reasoning = pick(chat.reasoning, ['', 'low', 'medium', 'high', 'xhigh', 'max'], '')
   if (Array.isArray(raw.snippets)) {
     s.snippets = raw.snippets.filter(x => isObj(x) && typeof x.name === 'string' && typeof x.text === 'string' && x.name.trim() && x.text.trim())
       .slice(0, 60).map(x => ({ name: x.name.trim().slice(0, 40), text: x.text.slice(0, 4000) }))
@@ -172,20 +156,6 @@ function sanitize(raw) {
   s.window.sidePanel = bool(w.sidePanel, true)
   s.window.sideWidth = clampInt(w.sideWidth, SIDE_WIDTH[0], SIDE_WIDTH[1], null)
   s.window.panelWidth = clampInt(w.panelWidth, PANEL_WIDTH[0], PANEL_WIDTH[1], null)
-  const te = isObj(raw.terminals) ? raw.terminals : {}
-  s.terminals.mode = pick(te.mode, ['chats', 'terms'], 'chats')
-  s.terminals.adoptOutside = bool(te.adoptOutside, true)
-  s.terminals.autoRestore = bool(te.autoRestore, true)
-  s.terminals.claudeArgs = typeof te.claudeArgs === 'string' && te.claudeArgs.length <= 400 && !/[\0\r\n]/.test(te.claudeArgs) ? te.claudeArgs.trim() : ''
-  s.terminals.dirs = Array.isArray(te.dirs) ? [...new Set(te.dirs.filter(okDir))].slice(0, 10) : []
-  s.terminals.restore = Array.isArray(te.restore)
-    ? te.restore.filter(x => isObj(x) && TERM_KINDS.includes(x.kind) && okDir(x.cwd)).slice(0, 24).map(x => ({
-      kind: x.kind,
-      cwd: x.cwd,
-      sessionId: x.kind === 'claude' && typeof x.sessionId === 'string' && SESSION_ID.test(x.sessionId) ? x.sessionId : null,
-      title: typeof x.title === 'string' ? x.title.slice(0, 80) : ''
-    }))
-    : []
   s.layout = sanitizeLayout(raw.layout)
   const sec = isObj(raw.secrets) ? raw.secrets : {}
   s.secrets.server = typeof sec.server === 'string' && sec.server.length < 20000 ? sec.server : null
@@ -222,7 +192,7 @@ class Settings {
   patch(partial) {
     if (!isObj(partial)) { return this.data }
     const next = JSON.parse(JSON.stringify(this.data))
-    for (const key of ['look', 'server', 'notify', 'pet', 'window', 'models', 'chat', 'shortcut', 'updates', 'terminals', 'layout']) {
+    for (const key of ['look', 'server', 'notify', 'pet', 'window', 'models', 'chat', 'shortcut', 'updates', 'layout']) {
       if (isObj(partial[key])) { next[key] = { ...next[key], ...partial[key] } }
     }
     if (partial.lastConnection !== undefined) { next.lastConnection = partial.lastConnection }

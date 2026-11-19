@@ -14,8 +14,6 @@ const { Connection } = require('./connection')
 const notify = require('./notify')
 const { Pets } = require('./pets')
 const extras = require('./extras')
-const { Terms, splitArgs } = require('./terms')
-const { ClaudeConnection } = require('./claude')
 
 const APP_ID = 'org.pedila.app'
 const TOAST_CLSID = '{6B1E3C2A-9F4D-4E7B-A1C5-3D8F2B6E9A41}'
@@ -71,11 +69,6 @@ function main() {
   const conns = {}
   const titles = new Map() // `${conn}:${sid}` → título conocido (para los avisos)
   const startHidden = process.argv.includes('--oculto')
-  let terms = null
-  let pendingRestore = [] // terminales de la última vez que todavía no se han reabierto ni descartado
-  let quitAsked = false // ya se confirmó salir con terminales abiertas
-  let sessionEnding = false // Windows se apaga: no se pregunta nada
-  let sessionEndT = null
   const demo = !app.isPackaged && process.env.PEDILA_DEMO === '1'
 
   app.on('second-instance', () => showWindow())
@@ -114,23 +107,9 @@ function main() {
     await remote.init()
     conns.local = new Connection({ id: 'local', name: 'Este PC', transport: new LocalTransport({ log }), log })
     conns.server = new Connection({ id: 'server', name: 'Servidor', transport: remote, log })
-    // Claude Code como chat: Pedila abre tu `claude` directamente (Hermes no interviene).
-    conns.claude = new ClaudeConnection({ log, settings, metaFile: path.join(app.getPath('userData'), 'claude-chats.json'), trash: f => shell.trashItem(f) })
     for (const c of Object.values(conns)) {
       c.on('ui', evt => onConnEvent(evt))
     }
-
-    terms = new Terms({ log })
-    pendingRestore = settings.data.terminals.restore.slice()
-    terms.on('ui', evt => send(evt))
-    terms.on('changed', () => { send({ kind: 'terms', list: terms.list() }); saveTerminals() })
-    terms.on('done', (t, ms) => {
-      const focusedOnChat = Boolean(win && win.isVisible() && win.isFocused() && viewing.conn === 'term' && viewing.sid === t.id)
-      if (settings.data.notify.badge && !focusedOnChat && win && !win.isFocused()) { setBadge(true) }
-      if (notify.decide('done', { notify: settings.data.notify, focusedOnChat, ms })) {
-        alertUser('Claude terminó · Terminales', `${t.title || 'Claude Code'} — ${t.cwd}`, () => { showWindow(); send({ kind: 'focus-term', id: t.id }) })
-      }
-    })
 
     registerIpc(remote)
     applyShortcut()
@@ -143,68 +122,13 @@ function main() {
     if (!demo) {
       if (settings.data.local.enabled) { conns.local.start() }
       if (settings.data.server.enabled) { conns.server.start() }
-      conns.claude.start()
-      // Las consolas de la última vez y las sesiones de Claude de otras ventanas, sin preguntar.
-      setTimeout(() => { autoStartTerminals().catch(e => log.warn('[terminales] al arrancar:', e.message)) }, 2500)
     }
   })
 
-  /**
-   * Al abrir Pedila: reabre las consolas de la última vez (las de Claude con su conversación) y trae
-   * a pestañas las sesiones de Claude abiertas en otras ventanas (cerrando aquel Claude; las que
-   * trabajan esperan a terminar). Las dos cosas se pueden apagar en Ajustes → Claude y consolas.
-   */
-  async function autoStartTerminals() {
-    const t = settings.data.terminals
-    const extraArgs = splitArgs(t.claudeArgs)
-    if (t.autoRestore && pendingRestore.length) {
-      const list = pendingRestore
-      pendingRestore = []
-      for (const r of list) {
-        try {
-          const info = terms.open({ kind: r.kind, cwd: r.cwd, resume: r.kind === 'claude' ? r.sessionId : null, extraArgs: r.kind === 'claude' ? extraArgs : undefined, cols: 120, rows: 32 })
-          send({ kind: 'term-opened', info })
-        } catch (e) { log.warn('[terminales] no pude reabrir', r.kind, r.cwd, e.message) }
-      }
-      saveTerminals(true)
-    }
-    if (!t.adoptOutside) { return }
-    // Los chats que siguieron vivos con su anfitrión se reenganchan antes (no son «de otra ventana»).
-    await conns.claude.reconnecting
-    await terms.refreshAgents(true)
-    for (const a of terms.agents) {
-      // Solo ventanas de Claude Code de verdad: lo que lleva un programa (chats de Pedila, VS Code,
-      // el SDK…) o no se sabe qué es, no se toca.
-      if (a.kind !== 'interactive' || !a.sessionId || a.managed !== false) { continue }
-      // La que ya está abierta en Pedila como chat no se duplica.
-      if (conns.claude.procs.has(a.sessionId)) { continue }
-      if (terms.list().some(x => x.alive && x.sessionId === a.sessionId)) { continue }
-      terms.adopt(a.sessionId, extraArgs).catch(e => log.warn('[terminales] no pude traer', a.sessionId.slice(0, 8), e.message))
-    }
-  }
-
   app.on('will-quit', () => { try { globalShortcut.unregisterAll() } catch {} })
 
-  app.on('before-quit', e => {
-    // Con terminales abiertas se pregunta antes: al salir se cierran (las de Claude se pueden
-    // retomar después; Pedila ofrecerá reabrirlas).
-    const stop = whatWouldStop()
-    if (stop && !quitAsked && !sessionEnding) {
-      e.preventDefault()
-      if (win && !win.isDestroyed()) { showWindow() }
-      const opts = { type: 'question', buttons: ['Salir', 'Cancelar'], defaultId: 1, cancelId: 1, title: 'Pedila', message: stop.text, detail: stop.detail }
-      const ask = win && !win.isDestroyed() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)
-      ask.then(r => {
-        if (r.response === 0) { quitAsked = true; app.quit() } else { quitting = false }
-      })
-      return
-    }
+  app.on('before-quit', () => {
     quitting = true
-    if (terms) {
-      saveTerminals(true)
-      terms.closing = true
-      terms.killAll()
-    }
     for (const c of Object.values(conns)) { try { c.stop() } catch {} }
   })
 
@@ -308,16 +232,6 @@ function main() {
       }
     })
     win.on('focus', () => { try { win.flashFrame(false); setBadge(false) } catch {} })
-    // Windows se apaga o reinicia: se guarda ya la lista de «reabrir» y se congela, para que las
-    // consolas que Windows vaya cerrando no la vacíen. Si al final no se apaga, todo vuelve a la normalidad.
-    const endingSession = () => {
-      if (!sessionEnding && terms) { saveTerminals(true); terms.closing = true }
-      sessionEnding = true
-      clearTimeout(sessionEndT)
-      sessionEndT = setTimeout(() => { sessionEnding = false; if (terms) { terms.closing = false } }, 90000)
-    }
-    win.on('query-session-end', endingSession)
-    win.on('session-end', endingSession)
     win.on('closed', () => { win = null })
     nativeTheme.on('updated', () => {
       if (win && !win.isDestroyed()) {
@@ -370,30 +284,27 @@ function main() {
     if (evt.kind === 'conn') { refreshTray() }
     if (evt.kind === 'title' && evt.sid) { titles.set(`${evt.conn}:${evt.sid}`, evt.title) }
     const c = conns[evt.conn]
-    // Quién habla en los avisos: Claude en sus chats, Hermes en los demás.
-    const who = evt.conn === 'claude' ? 'Claude' : 'Hermes'
     const focusedOnChat = Boolean(win && win.isVisible() && win.isFocused() && viewing.conn === evt.conn && viewing.sid === evt.sid)
     const chatTitle = titles.get(`${evt.conn}:${evt.sid}`) || (viewing.conn === evt.conn && viewing.sid === evt.sid ? viewing.title : '')
     const where = c ? c.name : ''
     const open = () => { showWindow(); send({ kind: 'focus-chat', conn: evt.conn, sid: evt.sid }) }
-    if (evt.kind === 'complete' && !evt.more && settings.data.notify.badge && !focusedOnChat && win && !win.isFocused()) { setBadge(true) }
-    if (evt.kind === 'complete' && !evt.more) {
+    if (evt.kind === 'complete' && settings.data.notify.badge && !focusedOnChat && win && !win.isFocused()) { setBadge(true) }
+    if (evt.kind === 'complete') {
       const failed = evt.outcome && !['completed', 'complete', ''].includes(evt.outcome)
       const kind = failed ? 'failed' : 'done'
       if (notify.decide(kind, { notify: settings.data.notify, focusedOnChat, ms: evt.ms })) {
-        alertUser(failed ? `${who} no terminó · ${where}` : `${who} terminó · ${where}`,
+        alertUser(failed ? `Hermes no terminó · ${where}` : `Hermes terminó · ${where}`,
           (chatTitle ? `${chatTitle}: ` : '') + (evt.text || (failed ? `Resultado: ${evt.outcome}` : 'Respuesta lista')).replace(/\s+/g, ' '), open)
       }
     } else if (evt.kind === 'prompt') {
-      // again: la misma petición enseñada otra vez al abrir el chat (ya avisó cuando llegó).
-      if (!evt.again && notify.decide('needs', { notify: settings.data.notify, focusedOnChat })) {
+      if (notify.decide('needs', { notify: settings.data.notify, focusedOnChat })) {
         const approval = evt.promptKind === 'approval'
         const what = approval ? (evt.command || evt.description || 'Quiere tu permiso') : (evt.questions && evt.questions[0] ? evt.questions[0].question : 'Espera tu respuesta')
-        alertUser(approval ? `${who} te necesita · ${where}` : `${who} te pregunta · ${where}`, (chatTitle ? `${chatTitle}: ` : '') + what, open)
+        alertUser(approval ? `Hermes te necesita · ${where}` : `Hermes te pregunta · ${where}`, (chatTitle ? `${chatTitle}: ` : '') + what, open)
       }
     } else if (evt.kind === 'error') {
       if (notify.decide('failed', { notify: settings.data.notify, focusedOnChat })) {
-        alertUser(`${who} tuvo un problema · ${where}`, evt.message, open)
+        alertUser(`Hermes tuvo un problema · ${where}`, evt.message, open)
       }
     }
   }
@@ -478,38 +389,8 @@ function main() {
     }
   }
 
-  /** Lo que se cortaría al salir de Pedila, para preguntar antes: { text, detail } o null. */
-  function whatWouldStop() {
-    const n = terms ? terms.alive() : 0
-    const busy = conns.claude && typeof conns.claude.fragileBusyCount === 'function' ? conns.claude.fragileBusyCount() : 0
-    if (!n && !busy) { return null }
-    const bits = []
-    if (n) { bits.push(n === 1 ? '1 consola abierta' : `${n} consolas abiertas`) }
-    if (busy) { bits.push(busy === 1 ? 'Claude trabajando en 1 chat' : `Claude trabajando en ${busy} chats`) }
-    return {
-      text: 'Hay ' + bits.join(' y ') + '.',
-      detail: [n ? `Las consolas se cierran (si algo estaba trabajando, se corta); la próxima vez ${settings.data.terminals.autoRestore ? 'se reabren solas' : 'Pedila te ofrecerá reabrirlas'}, las de Claude Code con su conversación.` : '', busy ? 'Lo que Claude está haciendo en sus chats se corta; la conversación queda guardada y la puedes seguir después.' : ''].filter(Boolean).join(' ')
-    }
-  }
-
-  // Lo que se reabrirá la próxima vez: las terminales vivas más las de la última vez que aún no se
-  // han reabierto ni descartado. Al salir se guarda al momento (antes de cerrarlas).
-  let termSaveT = null
-  function saveTerminals(now = false) {
-    if (!terms || terms.closing) { return }
-    clearTimeout(termSaveT)
-    const doSave = () => {
-      try { settings.patch({ terminals: { restore: [...terms.snapshot(), ...pendingRestore].slice(0, 24) } }) } catch (e) { log.warn('[terminales] no pude guardar la lista:', e.message) }
-    }
-    if (now) { doSave() } else { termSaveT = setTimeout(doSave, 1500) }
-  }
-
   // ── IPC ────────────────────────────────────────────────────────────────────────────────────
   function registerIpc(remote) {
-    // Teclas y tamaño de las terminales: mensajes sin respuesta (uno por tecla), del mismo origen.
-    const fromShell = e => { const u = e.senderFrame && e.senderFrame.url; return Boolean(u && u.startsWith('app://shell/')) }
-    ipcMain.on('hp:term-input', (e, id, data) => { if (fromShell(e) && typeof id === 'string') { terms.write(id, data) } })
-    ipcMain.on('hp:term-resize', (e, id, cols, rows) => { if (fromShell(e) && typeof id === 'string') { terms.resize(id, cols, rows) } })
     const handle = (ch, fn) => ipcMain.handle(ch, async (e, ...args) => {
       const url = e.senderFrame && e.senderFrame.url
       if (!url || !url.startsWith('app://shell/')) { throw new Error('origen no permitido') }
@@ -550,7 +431,7 @@ function main() {
     })
     handle('hp:new', (id, opts) => {
       const o = opts && typeof opts === 'object' ? opts : {}
-      return connOf(id).newChat({ cwd: typeof o.cwd === 'string' ? o.cwd.slice(0, 400) : undefined, model: typeof o.model === 'string' ? o.model.slice(0, 200) : undefined, provider: typeof o.provider === 'string' ? o.provider.slice(0, 200) : undefined, reasoning: ['low', 'medium', 'high', 'xhigh', 'max'].includes(o.reasoning) ? o.reasoning : undefined })
+      return connOf(id).newChat({ model: typeof o.model === 'string' ? o.model.slice(0, 200) : undefined, provider: typeof o.provider === 'string' ? o.provider.slice(0, 200) : undefined, reasoning: ['low', 'medium', 'high', 'xhigh', 'max'].includes(o.reasoning) ? o.reasoning : undefined })
     })
     handle('hp:send', async (id, sid, text, attachments) => {
       if (typeof text !== 'string' || !text.trim() || text.length > 200000) { throw new Error('mensaje vacío o demasiado largo') }
@@ -576,10 +457,6 @@ function main() {
       if (op === 'pin') { return c.setPinned(sid, Boolean(value)) }
       if (op === 'archive') { return c.setArchived(sid, Boolean(value)) }
       if (op === 'delete') { return c.remove(sid) }
-      // Seguir esta conversación de Claude en una consola: suelta su proceso y abre la pestaña.
-      if (op === 'console' && c.id === 'claude') {
-        return c.release(sid).then(r => terms.open({ kind: 'claude', cwd: r.cwd, resume: r.sid, extraArgs: splitArgs(settings.data.terminals.claudeArgs) }))
-      }
       throw new Error('operación desconocida')
     })
     handle('hp:attach-image', (id, sid, b64, name) => {
@@ -601,12 +478,11 @@ function main() {
       const c = connOf(id)
       sidOf(sid)
       const o = opts && typeof opts === 'object' ? opts : null
-      if (!o || (o.model === undefined && o.reasoning === undefined && o.ultracode === undefined)) { return c.chatOptions(sid) }
+      if (!o || (o.model === undefined && o.reasoning === undefined)) { return c.chatOptions(sid) }
       const clean = {}
       if (o.model !== undefined) { if (o.model !== null && (typeof o.model !== 'string' || !o.model || o.model.length > 200 || /[\s"]/.test(o.model))) { throw new Error('modelo no válido') } clean.model = o.model }
       if (typeof o.provider === 'string' && o.provider && o.provider.length <= 200 && !/[\s"]/.test(o.provider)) { clean.provider = o.provider }
       if (o.reasoning !== undefined) { if (!['', null, 'low', 'medium', 'high', 'xhigh', 'max'].includes(o.reasoning)) { throw new Error('razonamiento no válido') } clean.reasoning = o.reasoning }
-      if (o.ultracode !== undefined) { if (o.ultracode !== null && typeof o.ultracode !== 'boolean') { throw new Error('Ultracode no válido') } clean.ultracode = o.ultracode }
       return c.setChatOptions(sid, clean)
     })
     // Cuotas de las APIs de pago (complemento «pedila» dentro de Hermes) y las APIs que tiene puestas.
@@ -646,45 +522,6 @@ function main() {
       fs.writeFileSync(r.filePath, markdown, 'utf8')
       return { saved: true, file: r.filePath }
     })
-    // ── Terminales ──
-    const termIdOf = s => { if (typeof s !== 'string' || !/^t\d{1,6}$/.test(s)) { throw new Error('terminal no válida') } return s }
-    handle('hp:term-info', () => ({ tools: terms.tools(), dirs: settings.data.terminals.dirs, home: app.getPath('home'), restore: settings.data.terminals.autoRestore ? [] : pendingRestore, list: terms.list(true) }))
-    handle('hp:term-open', opts => {
-      const o = opts && typeof opts === 'object' ? opts : {}
-      const t = terms.open({ kind: String(o.kind || ''), cwd: typeof o.cwd === 'string' ? o.cwd.slice(0, 400) : '', resume: typeof o.resume === 'string' ? o.resume : null, cont: o.cont === true, cols: o.cols, rows: o.rows, extraArgs: splitArgs(settings.data.terminals.claudeArgs) })
-      const dirs = [t.cwd, ...settings.data.terminals.dirs.filter(d => d.toLowerCase() !== t.cwd.toLowerCase())].slice(0, 10)
-      settings.patch({ terminals: { dirs } })
-      return t
-    })
-    handle('hp:term-close', id => terms.close(termIdOf(id)))
-    handle('hp:term-title', (id, title, byUser) => { terms.setTitle(termIdOf(id), title, byUser === true); saveTerminals(); return true })
-    handle('hp:term-pick-dir', async start => {
-      const r = await dialog.showOpenDialog(win, { title: 'Carpeta donde abrir la terminal', defaultPath: typeof start === 'string' && start ? start : app.getPath('home'), properties: ['openDirectory'] })
-      return r.canceled || !r.filePaths[0] ? null : r.filePaths[0]
-    })
-    handle('hp:term-forget-dir', dir => {
-      settings.patch({ terminals: { dirs: settings.data.terminals.dirs.filter(d => d !== dir) } })
-      return settings.data.terminals.dirs
-    })
-    handle('hp:term-agents', async (watch, reason) => {
-      terms.setWatching(watch === true, reason === 'chats' ? 'chats' : 'consolas')
-      await terms.refreshAgents(true)
-      return terms.agentsView()
-    })
-    // 'take': la pantalla las reabre; 'dismiss': se olvidan. En los dos casos dejan de ofrecerse.
-    handle('hp:term-adopt', async sessionId => {
-      if (typeof sessionId !== 'string' || !/^[0-9a-f-]{36}$/i.test(sessionId)) { throw new Error('sesión no válida') }
-      // Abierta ya en Pedila como chat: no se duplica; la pantalla lleva a ese chat.
-      if (conns.claude.procs.has(sessionId)) { return { chat: true } }
-      return terms.adopt(sessionId, splitArgs(settings.data.terminals.claudeArgs))
-    })
-    handle('hp:term-restore', action => {
-      const list = pendingRestore
-      pendingRestore = []
-      saveTerminals(true)
-      return action === 'take' ? list : []
-    })
-    handle('hp:show-file', file => { if (typeof file === 'string') { shell.showItemInFolder(file) } return true })
     handle('hp:update-check', () => autoCheckUpdate(true))
     let installing = null
     handle('hp:update-install', () => {
@@ -693,14 +530,7 @@ function main() {
         const u = settings.data.updates
         const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion(), REPO)
         if (!info || !info.available) { throw new Error('no hay versión nueva') }
-        const stop = whatWouldStop()
-        if (stop) {
-          const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Actualizar ahora', 'Ahora no'], defaultId: 0, cancelId: 1, title: 'Pedila', message: stop.text, detail: 'Al actualizar, Pedila se reinicia. ' + stop.detail })
-          if (r.response !== 0) { return false }
-        }
         await extras.installUpdate(info, log)
-        // Ya se preguntó (o no había nada que cortar): la salida no vuelve a preguntar.
-        quitAsked = true
         setTimeout(() => { quitting = true; app.quit() }, 600)
         return true
       })()
