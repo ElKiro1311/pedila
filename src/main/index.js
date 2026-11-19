@@ -554,16 +554,22 @@ function main() {
       return connOf(id).media(file.trim())
     })
     handle('hp:subagents', (id, sid) => connOf(id).subagents(sidOf(sid)))
+    let screenErrors = 0
+    handle('hp:log-error', text => {
+      if (typeof text === 'string' && screenErrors < 200) { screenErrors++; log.warn('[pantalla]', text.slice(0, 600)) }
+      return true
+    })
     // Cambiar el modelo o el razonamiento de un chat ya empezado (sin opciones: lo elegido hasta ahora).
     handle('hp:chat-options', (id, sid, opts) => {
       const c = connOf(id)
       sidOf(sid)
       const o = opts && typeof opts === 'object' ? opts : null
-      if (!o || (o.model === undefined && o.reasoning === undefined)) { return c.chatOptions(sid) }
+      if (!o || (o.model === undefined && o.reasoning === undefined && o.ultracode === undefined)) { return c.chatOptions(sid) }
       const clean = {}
       if (o.model !== undefined) { if (o.model !== null && (typeof o.model !== 'string' || !o.model || o.model.length > 200 || /[\s"]/.test(o.model))) { throw new Error('modelo no válido') } clean.model = o.model }
       if (typeof o.provider === 'string' && o.provider && o.provider.length <= 200 && !/[\s"]/.test(o.provider)) { clean.provider = o.provider }
       if (o.reasoning !== undefined) { if (!['', null, 'low', 'medium', 'high', 'xhigh', 'max'].includes(o.reasoning)) { throw new Error('razonamiento no válido') } clean.reasoning = o.reasoning }
+      if (o.ultracode !== undefined) { if (o.ultracode !== null && typeof o.ultracode !== 'boolean') { throw new Error('Ultracode no válido') } clean.ultracode = o.ultracode }
       return c.setChatOptions(sid, clean)
     })
     // Cuotas de las APIs de pago (complemento «pedila» dentro de Hermes) y las APIs que tiene puestas.

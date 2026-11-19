@@ -560,7 +560,7 @@ class Connection extends EventEmitter {
           if (rec) { rec.running = p.running }
           this.ui({ kind: 'running', sid, running: p.running })
         }
-        if (p.model) { this.ui({ kind: 'info', sid, model: str(p.model), provider: str(p.provider), contextMax: p.context_length || null }) }
+        if (p.model || p.reasoning_effort) { this.ui({ kind: 'info', sid, model: str(p.model), provider: str(p.provider), contextMax: p.context_length || null, effort: str(p.reasoning_effort) }) }
         break
       case 'message.start':
         this.turnStart.set(sid, Date.now())

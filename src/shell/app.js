@@ -475,6 +475,7 @@ async function openChat(conn, sid) {
     ch.loadError = e.message
   }
   if (S.current.sid === sid) { renderChat(true) }
+  if (conn === 'claude') { ch.optsLoaded = false; loadChatOptions(ch) }
   const row = S.sessions[conn].find(r => r.id === sid)
   if (row && row.model && !ch.model) { ch.model = row.model; setTopbar(); updateModelPill() }
   // Si el chat está cargado en el gateway (quizá respondiendo desde Hermes Desktop), me engancho
@@ -1290,6 +1291,7 @@ function onEvent(evt) {
       if (evt.model) { ch.model = evt.model }
       if (evt.provider) { ch.provider = evt.provider }
       if (evt.contextMax) { ch.contextMax = evt.contextMax }
+      if (evt.effort) { ch.effortNow = evt.effort; if (isCur) { updateExtrasPills() } }
       break
     case 'usage':
       ch.usage = { used: evt.used, max: evt.max, out: evt.out, outStart: ch.usage && ch.usage.outStart !== undefined && ch.live && !ch.live.done ? ch.usage.outStart : (ch.usage && ch.usage.out) || 0 }
@@ -1737,6 +1739,7 @@ async function start() {
   await loadSessions(S.active)
   for (const other of visibleConns()) { if (other !== S.active) { loadSessions(other) } }
   watchClaudeList()
+  try { S.claudeDefaults = await call(api.chatOptions, 'claude', '-') } catch { S.claudeDefaults = null }
   S.claudeDir = (S.settings.terminals && S.settings.terminals.dirs && S.settings.terminals.dirs[0]) || ''
   updateComposer()
   updateExtrasPills()
@@ -1910,7 +1913,8 @@ async function openArchived() {
 
 // ── Escribir: imágenes, solo consultar, razonamiento, frases ─────────────────────────────────
 const READ_ONLY_NOTE = '[Modo solo consulta: puedes leer, buscar e investigar, pero NO cambies, borres, instales ni ejecutes nada que modifique archivos, programas o el sistema. Si hiciera falta un cambio, explícame cuál y pregúntame antes.]'
-const REASONING = [['', 'el de Hermes'], ['low', 'rápido'], ['medium', 'normal'], ['high', 'a fondo'], ['xhigh', 'muy a fondo'], ['max', 'al máximo']]
+const REASONING = [['', 'el de Hermes'], ['low', 'rápido (low)'], ['medium', 'normal (medium)'], ['high', 'a fondo (high)'], ['xhigh', 'muy a fondo (xhigh)'], ['max', 'al máximo (max)']]
+const effortName = v => (REASONING.find(r => r[0] === v) || [v, v])[1]
 
 function updateExtrasPills() {
   const ro = $('#readonly-pill')
@@ -1920,9 +1924,9 @@ function updateExtrasPills() {
   const rp = $('#reason-pill')
   const ch = currentChat()
   rp.disabled = false
-  const cur = ch ? ch.reasoningSet : S.reasoning
-  const label = cur ? (REASONING.find(r => r[0] === cur) || REASONING[0])[1] : ch && cur === undefined ? 'el del chat' : `el de ${who === 'Claude' ? 'tu Claude' : 'Hermes'}`
-  rp.textContent = `🧠 ${label}`
+  const eff = currentEffort()
+  const label = eff.value ? effortName(eff.value) + (eff.own ? '' : ` · el de ${who === 'Claude' ? 'tu Claude' : 'Hermes'}`) : ch ? 'el del chat' : `el de ${who === 'Claude' ? 'tu Claude' : 'Hermes'}`
+  rp.textContent = `🧠 ${label}${S.current.conn === 'claude' && eff.ultracode ? ' ⚡' : ''}`
   rp.title = ch ? `Cuánto piensa ${who} en este chat (pulsa para cambiarlo)` : `Cuánto piensa ${who} en el chat nuevo (pulsa para cambiar)`
   schedulePanel()
 }
@@ -2068,6 +2072,7 @@ function panelChatCard() {
       el('span', { class: 'muted', text: max ? `${kfmt(u.used || 0)} de ${kfmt(max)} tokens` : 'Aún sin datos' }))),
     spKv([
       ['Modelo', ch.model || '—'],
+      (() => { const e = currentEffort(); return e.value ? ['Esfuerzo', effortName(e.value) + (ch.conn === 'claude' && e.ultracode ? ' · Ultracode' : '')] : null })(),
       ch.provider ? ['Proveedor', ch.provider] : null,
       ['Mensajes', String(row.messages || turns.length || 0)],
       ['Tokens leídos', kfmt(row.inputTokens || 0)],
@@ -2086,7 +2091,7 @@ function panelNowCard() {
       ['Chats en marcha', String(now.live.length + now.remote.length)],
       ['Solo consultar', S.readOnly ? 'sí' : 'no'],
       // El razonamiento y el modelo se eligen al empezar un chat; con uno abierto, el modelo sale en «Este chat».
-      ['Razonamiento (chat nuevo)', (REASONING.find(r => r[0] === S.reasoning) || REASONING[0])[1]],
+      (() => { const e = currentEffort(); return [currentChat() ? 'Esfuerzo (este chat)' : 'Esfuerzo (chat nuevo)', e.value ? effortName(e.value) : `el de ${WHO(S.current.conn) === 'Claude' ? 'tu Claude' : 'Hermes'}`] })(),
       !currentChat() ? ['Modelo (chat nuevo)', model || '—'] : null
     ]))
 }
@@ -2855,11 +2860,14 @@ function wireExtras() {
     const r = e.currentTarget.getBoundingClientRect()
     const ch = currentChat()
     const who = WHO(S.current.conn)
-    const cur = ch ? ch.reasoningSet : S.reasoning
+    const eff = currentEffort()
     // Con un chat de Hermes ya empezado no hay «el predeterminado» (Hermes no tiene cómo volver a él).
     const options = REASONING.filter(([v]) => !(ch && v === '' && S.current.conn !== 'claude'))
-    const items = options.map(([v, name]) => [`${v === cur ? '✓ ' : ''}${v ? name : `el de ${who === 'Claude' ? 'tu Claude' : 'Hermes'}`}`, () => setReasoning(v)])
-    showPopup(items, r.left, r.top - Math.min(items.length * 34 + 16, 360))
+    const mark = v => (eff.own ? v === eff.value : v === '') ? '✓ ' : ''
+    const items = options.map(([v, name]) => [`${mark(v)}${v ? name : `el de ${who === 'Claude' ? 'tu Claude' : 'Hermes'}${eff.base ? ' (' + eff.base + ')' : ''}`}`, () => setReasoning(v)])
+    // Ultracode va con el esfuerzo en Claude Code (/effort ultracode).
+    if (S.current.conn === 'claude') { items.push([`${eff.ultracode ? '✓ ' : ''}⚡ Ultracode`, () => setUltracode(!eff.ultracode)]) }
+    showPopup(items, r.left, r.top - Math.min(items.length * 34 + 16, 400))
   })
   $('#attach-btn').addEventListener('click', () => $('#file-input').click())
   $('#file-input').addEventListener('change', e => { addImages([...e.target.files]); e.target.value = '' })
@@ -3032,7 +3040,7 @@ const CARDS = {
 }
 const MODE_NAMES = { chats: '💬 Chats', terms: '▣ Consolas' }
 const SHOW_NAMES = {
-  attach: '📎 Adjuntar imágenes', dir: '📁 Carpeta (chats de Claude)', model: 'Modelo', reason: '🧠 Razonamiento',
+  attach: '📎 Adjuntar imágenes', dir: '📁 Carpeta (chats de Claude)', model: 'Modelo', reason: '🧠 Esfuerzo',
   readonly: '🔒 Solo consultar', hint: 'Texto de ayuda «Enter para enviar»', suggestions: 'Sugerencias en el chat nuevo',
   search: 'Buscador de chats', version: 'Número de versión abajo', usageButton: 'Botón 📊 Tu uso'
 }
@@ -3215,6 +3223,32 @@ function onClaudeAgents(list) {
 }
 
 // ── Modelo y razonamiento de un chat ya empezado ─────────────────────────────────────────────
+/**
+ * El esfuerzo que se ve en el botón: { value, own, base, ultracode }. own = elegido aquí para este
+ * chat (o para el chat nuevo); si no, value es con el que trabaja (el de la última respuesta, o el
+ * de «Opciones de Claude») y base el predeterminado.
+ */
+function currentEffort() {
+  const ch = currentChat()
+  const isClaude = S.current.conn === 'claude'
+  if (!ch) {
+    const base = isClaude ? (S.claudeDefaults && S.claudeDefaults.effective) || '' : ''
+    return { value: S.reasoning || base, own: Boolean(S.reasoning), base, ultracode: isClaude && S.claudeDefaults ? S.claudeDefaults.ultracode : false }
+  }
+  if (ch.reasoningSet) { return { value: ch.reasoningSet, own: true, base: ch.effortBase || '', ultracode: Boolean(ch.ultracode) } }
+  return { value: ch.effortNow || '', own: false, base: ch.effortBase || ch.effortNow || '', ultracode: Boolean(ch.ultracode) }
+}
+
+async function setUltracode(on) {
+  const ch = currentChat()
+  try {
+    const r = await call(api.chatOptions, 'claude', ch ? ch.sid : '-', { ultracode: on })
+    if (ch) { ch.ultracode = on } else if (S.claudeDefaults) { S.claudeDefaults.ultracode = on }
+    updateExtrasPills()
+    showNote(`Ultracode ${on ? 'activado' : 'desactivado'}${ch ? ' en este chat' : ''}${r && r.applied === 'next' ? ' (desde tu próximo mensaje)' : ''}.`)
+  } catch (e) { showNote(`No pude cambiar Ultracode: ${e.message}`, true) }
+}
+
 async function setReasoning(v) {
   const ch = currentChat()
   if (!ch) {
@@ -3226,10 +3260,11 @@ async function setReasoning(v) {
   try {
     const r = await call(api.chatOptions, ch.conn, ch.sid, { reasoning: v })
     ch.reasoningSet = v
+    if (!v) { ch.effortNow = ch.effortBase || '' }
     updateExtrasPills()
-    const name = v ? (REASONING.find(x => x[0] === v) || REASONING[0])[1] : 'el predeterminado'
-    showNote(`Razonamiento de este chat: ${name}${r && r.applied === 'next' ? ' (desde tu próximo mensaje)' : ''}.`)
-  } catch (e) { showNote(`No pude cambiar el razonamiento: ${e.message}`, true) }
+    const name = v ? effortName(v) : 'el predeterminado'
+    showNote(`Esfuerzo de este chat: ${name}${r && r.applied === 'next' ? ' (desde tu próximo mensaje)' : ''}.`)
+  } catch (e) { showNote(`No pude cambiar el esfuerzo: ${e.message}`, true) }
 }
 
 /** Lo elegido antes para un chat de Claude (modelo y esfuerzo), para los botones. */
@@ -3239,6 +3274,9 @@ async function loadChatOptions(ch) {
   try {
     const o = await call(api.chatOptions, ch.conn, ch.sid)
     if (o && o.effort) { ch.reasoningSet = o.effort }
+    if (o && o.effective) { ch.effortNow = o.effective }
+    ch.effortBase = (S.claudeDefaults && S.claudeDefaults.effective) || ''
+    if (o) { ch.ultracode = Boolean(o.ultracode) }
     if (o && o.model && !ch.model) { ch.model = o.model }
     if (currentChat() === ch) { updateExtrasPills(); updateModelPill() }
   } catch {}
@@ -3253,3 +3291,7 @@ function showNote(text, bad = false) {
   clearTimeout(toastT)
   toastT = setTimeout(() => { h.textContent = 'Enter para enviar · Mayús+Enter, salto de línea'; h.classList.remove('error'); h.hidden = !shown('hint') }, 6000)
 }
+
+// Un error de la pantalla queda en el registro de Pedila (si no, un botón que falla no deja rastro).
+addEventListener('error', e => { try { api.logError && api.logError(`${e.message} (${String(e.filename || '').split('/').pop()}:${e.lineno})`) } catch {} })
+addEventListener('unhandledrejection', e => { try { api.logError && api.logError('promesa: ' + ((e.reason && (e.reason.stack || e.reason.message)) || e.reason)) } catch {} })

@@ -166,6 +166,7 @@ class ClaudeConnection extends EventEmitter {
     this.prompts = new Map()
     this.images = new Map() // id → { mime, data }
     this.imageIndex = new Map() // sid → { file, refs: ref → { start, end } } (dónde están sus imágenes)
+    this.lastEffort = new Map() // sid → el esfuerzo con que respondió Claude por última vez (de la conversación)
     this.limits = null // lo último que dijo Claude de tu cuota
     this.meta = this.loadMeta()
     this.socket = null // (no tiene: así hp:usage no pregunta por chats en marcha)
@@ -221,6 +222,7 @@ class ClaudeConnection extends EventEmitter {
         const o = {}
         if (MODELS.some(m => m.id === v.model)) { o.model = v.model }
         if (EFFORTS.includes(v.effort)) { o.effort = v.effort }
+        if (typeof v.ultracode === 'boolean') { o.ultracode = v.ultracode }
         if (Object.keys(o).length) { opts[k] = o }
       }
       return { pinned: Array.isArray(j.pinned) ? j.pinned.filter(x => SID.test(x)) : [], archived: Array.isArray(j.archived) ? j.archived.filter(x => SID.test(x)) : [], opts }
@@ -355,6 +357,7 @@ class ClaudeConnection extends EventEmitter {
     // Las imágenes no viajan con la conversación (una larga puede llevar cientos de capturas): se
     // apunta en qué línea del archivo está cada una y la pantalla la pide al enseñarla (media()).
     const refs = new Map()
+    let lastEffort = null
     const countImages = c => (Array.isArray(c) ? c.filter(b => b && b.type === 'image' && b.source && b.source.type === 'base64').length : 0)
     let pos = 0
     while (pos < buf.length) {
@@ -402,11 +405,13 @@ class ClaudeConnection extends EventEmitter {
         if (!turn) { turn = { role: 'assistant', blocks: [], reasoning: '', ts: d.timestamp || null }; out.push(turn) }
         for (const b of Array.isArray(d.message.content) ? d.message.content : []) {
           if (b.type === 'text' && str(b.text).trim()) {
+            if (EFFORTS.includes(d.effort)) { lastEffort = d.effort }
             if (/^No response requested\.?$/.test(b.text.trim())) { continue }
             turn.blocks.push({ type: 'text', text: b.text })
           } else if (b.type === 'thinking' && str(b.thinking)) {
             turn.reasoning += (turn.reasoning ? '\n\n' : '') + b.thinking
           } else if (b.type === 'tool_use') {
+            if (EFFORTS.includes(d.effort)) { lastEffort = d.effort }
             const t = { type: 'tool', id: b.id, name: b.name, args: argsSummary(b.input), input: boundInput(b.input, 0, SAVED_FIELD), done: false }
             tools.set(b.id, t)
             turn.blocks.push(t)
@@ -417,6 +422,7 @@ class ClaudeConnection extends EventEmitter {
     }
     for (const t of tools.values()) { t.done = true }
     if (todos) { this.ui({ kind: 'todos', sid, history: true, revision: 0, ...todos }) }
+    if (lastEffort) { this.lastEffort.set(sid, lastEffort) }
     // Dónde están sus imágenes (de los últimos chats abiertos).
     this.imageIndex.delete(sid)
     this.imageIndex.set(sid, { file: f, refs })
@@ -463,6 +469,7 @@ class ClaudeConnection extends EventEmitter {
     args.push(file ? '--resume' : '--session-id', sid)
     if (p && p.model) { args.push('--model', p.model) }
     if (p && p.effort) { args.push('--effort', p.effort) }
+    if (p && typeof p.ultracode === 'boolean' && !/\.(cmd|bat)$/i.test(this.exe)) { args.push('--settings', JSON.stringify({ ultracode: p.ultracode })) }
     // Sin «saltarse los permisos», Claude pregunta por aquí y Pedila enseña la tarjeta de permiso.
     if (!skipPerms) { args.push('--permission-prompt-tool', 'stdio') }
     let exe = this.exe
@@ -704,8 +711,9 @@ class ClaudeConnection extends EventEmitter {
    * (set_model y apply_flag_settings, como el SDK); si no, al abrirlo la próxima vez (--model/--effort).
    * Se recuerda para ese chat.
    */
-  async setChatOptions(sid, { model, reasoning } = {}) {
+  async setChatOptions(sid, { model, reasoning, ultracode } = {}) {
     const o = { ...((this.meta.opts && this.meta.opts[sid]) || {}) }
+    if (ultracode !== undefined) { if (ultracode === null) { delete o.ultracode } else if (typeof ultracode === 'boolean') { o.ultracode = ultracode } else { throw new Error('Ultracode no válido') } }
     if (model !== undefined) { if (model === null) { delete o.model } else if (MODELS.some(m => m.id === model)) { o.model = model } else { throw new Error('modelo no válido') } }
     if (reasoning !== undefined) { if (reasoning === null || reasoning === '') { delete o.effort } else if (EFFORTS.includes(reasoning)) { o.effort = reasoning } else { throw new Error('esfuerzo no válido') } }
     const pend = this.pending.get(sid)
@@ -713,26 +721,52 @@ class ClaudeConnection extends EventEmitter {
       // Chat nuevo aún sin mensajes: se arrancará ya con esto.
       if (model !== undefined) { pend.model = o.model || null }
       if (reasoning !== undefined) { pend.effort = o.effort || null }
+      if (ultracode !== undefined) { pend.ultracode = typeof o.ultracode === 'boolean' ? o.ultracode : undefined }
       return { applied: 'next', model: o.model || null, effort: o.effort || null }
     }
     if (!this.meta.opts) { this.meta.opts = {} }
     if (Object.keys(o).length) { this.meta.opts[sid] = o } else { delete this.meta.opts[sid] }
     this.saveMeta()
+    // Lo que se ve en el botón: el elegido; al volver al predeterminado, el último conocido ya no vale.
+    if (reasoning !== undefined) { if (o.effort) { this.lastEffort.set(sid, o.effort) } else { this.lastEffort.delete(sid) } }
     const s = this.procs.get(sid)
     let shown = null
     if (s && s.alive) {
       if (model !== undefined) { const r = await this.control(s, { subtype: 'set_model', model: o.model || undefined }); shown = str(r.model) || o.model || null }
       if (reasoning !== undefined) { await this.control(s, { subtype: 'apply_flag_settings', settings: { effortLevel: o.effort || null } }) }
+      if (ultracode !== undefined) { await this.control(s, { subtype: 'apply_flag_settings', settings: { ultracode: typeof o.ultracode === 'boolean' ? o.ultracode : this.defaultUltracode() } }) }
+      this.log.info(`[claude] chat ${sid.slice(0, 8)}: ${[model !== undefined ? 'modelo ' + (o.model || 'predeterminado') : '', reasoning !== undefined ? 'esfuerzo ' + (o.effort || 'predeterminado') : '', ultracode !== undefined ? 'ultracode ' + o.ultracode : ''].filter(Boolean).join(', ')} (en caliente)`)
       if (shown) { this.ui({ kind: 'info', sid, model: shown, provider: 'Claude Code' }) }
       return { applied: 'now', model: shown || o.model || null, effort: o.effort || null }
     }
+    this.log.info(`[claude] chat ${sid.slice(0, 8)}: cambio guardado para cuando se abra`)
     return { applied: 'next', model: o.model || null, effort: o.effort || null }
   }
 
-  /** Lo elegido para un chat (para los botones de modelo y esfuerzo). */
+  /** El esfuerzo que trae «Opciones de Claude» (p. ej. «--effort max»), o null. */
+  argsEffort() {
+    const a = splitArgs(this.settings.data.terminals.claudeArgs)
+    const i = a.indexOf('--effort')
+    return i >= 0 && EFFORTS.includes(a[i + 1]) ? a[i + 1] : null
+  }
+
+  /** Si Ultracode está activado en los ajustes de Claude Code (solo esa clave de ~/.claude/settings.json). */
+  defaultUltracode() {
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(configDir(), 'settings.json'), 'utf8'))
+      return j.ultracode === true
+    } catch { return false }
+  }
+
+  /**
+   * Lo de un chat para los botones: lo elegido (model, effort, ultracode) y el esfuerzo con que
+   * trabaja de verdad (effective: lo elegido, o el de la última respuesta, o el de las opciones).
+   * Con sid «-», lo de un chat nuevo.
+   */
   chatOptions(sid) {
     const o = (this.meta.opts && this.meta.opts[sid]) || this.pending.get(sid) || {}
-    return { model: o.model || null, effort: o.effort || null }
+    const effective = o.effort || (sid !== '-' && this.lastEffort.get(sid)) || this.argsEffort() || null
+    return { model: o.model || null, effort: o.effort || null, effective, ultracode: typeof o.ultracode === 'boolean' ? o.ultracode : this.defaultUltracode() }
   }
 
   refreshTitle(sid) {

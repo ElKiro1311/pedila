@@ -198,13 +198,33 @@ test('claude: cambiar el modelo y el esfuerzo de un chat empezado (en caliente y
   assert.deepEqual(sent, [{ subtype: 'set_model', model: 'sonnet' }, { subtype: 'apply_flag_settings', settings: { effortLevel: 'max' } }])
   assert.equal(r.applied, 'now')
   assert.equal(r.model, 'claude-sonnet-5-5')
-  assert.deepEqual(c.chatOptions(SID), { model: 'sonnet', effort: 'max' })
+  assert.deepEqual(c.chatOptions(SID), { model: 'sonnet', effort: 'max', effective: 'max', ultracode: false })
   await assert.rejects(c.setChatOptions(SID, { model: 'gpt-9' }), /no válido/)
   // Sin proceso abierto: se guarda y se aplica al abrirlo.
   c.procs.clear()
   assert.equal((await c.setChatOptions(SID, { reasoning: 'low' })).applied, 'next')
-  assert.deepEqual(conn().chatOptions(SID), { model: 'sonnet', effort: 'low' })
+  assert.deepEqual(conn().chatOptions(SID), { model: 'sonnet', effort: 'low', effective: 'low', ultracode: false })
   // Volver al predeterminado.
   await c.setChatOptions(SID, { model: null, reasoning: null })
-  assert.deepEqual(c.chatOptions(SID), { model: null, effort: null })
+  assert.deepEqual(c.chatOptions(SID), { model: null, effort: null, effective: null, ultracode: false })
+  // El esfuerzo con que trabaja: el de «Opciones de Claude» (--effort) si no hay otro…
+  const c2 = new ClaudeConnection({ log: { info() {}, warn() {} }, settings: { data: { terminals: { claudeArgs: '--effort max --dangerously-skip-permissions' } } }, metaFile: path.join(tmp, 'meta.json'), trash: async () => {} })
+  assert.equal(c2.chatOptions(SID).effective, 'max')
+  assert.equal(c2.chatOptions('-').effective, 'max')
+  // …o el de la última respuesta guardada.
+  c2.lastEffort.set(SID, 'high')
+  assert.equal(c2.chatOptions(SID).effective, 'high')
+  // Ultracode en caliente, y recordado para ese chat.
+  const sent2 = []
+  const s2 = { sid: SID, buf: '', blocks: new Map(), busy: false, allow: new Set(), alive: true, tasks: new Map(), controls: new Map(), proc: { stdin: { write: x => {
+    const m = JSON.parse(x)
+    sent2.push(m.request)
+    setTimeout(() => c2.onMsg(s2, { type: 'control_response', response: { subtype: 'success', request_id: m.request_id } }), 5)
+  } } } }
+  c2.procs.set(SID, s2)
+  await c2.setChatOptions(SID, { ultracode: true })
+  assert.deepEqual(sent2, [{ subtype: 'apply_flag_settings', settings: { ultracode: true } }])
+  assert.equal(c2.chatOptions(SID).ultracode, true)
+  await assert.rejects(c2.setChatOptions(SID, { ultracode: 'sí' }), /no válido/)
+  await c2.setChatOptions(SID, { ultracode: null })
 })
