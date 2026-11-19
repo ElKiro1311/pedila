@@ -41,6 +41,8 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - Pedila solo hace de intermediario: abre **tu** `claude` (tu cuenta, tus opciones) en modo de mensajes JSON y le pasa lo que escribes tal cual. Claude usa sus propias herramientas. Hermes no interviene.
   - La lista son tus conversaciones de Claude Code (`~/.claude/projects`), también las empezadas en una consola, y se pueden seguir desde aquí.
   - Cada chat nuevo trabaja en la carpeta que eliges (📁), con el modelo y el razonamiento que elijas.
+  - **Modelo y esfuerzo:** se pueden cambiar también con el chat empezado (Claude los cambia en caliente; Hermes con sus órdenes `/model` y `/reasoning`), con niveles hasta «al máximo».
+  - **Tareas en segundo plano:** lo que Claude lanza aparte (órdenes, agentes, flujos de trabajo) sale en la tarjeta «Tareas» del panel, con lo que va haciendo y cuándo termina.
   - **Tu plan de Claude:** el panel enseña el % usado de tu cuota y cuándo se reinicia, tal como lo manda Claude Code con cada respuesta.
   - **Seguir en una consola:** desde el menú ⋯ del chat, abre la misma conversación con `claude --resume` en una pestaña de consola, para lo que solo existe allí (menús de `/model`, `/resume`…).
   - Fijar y archivar se guardan en Pedila. Borrar manda la conversación a la papelera de Windows.

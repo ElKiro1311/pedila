@@ -159,3 +159,52 @@ test('claude: lo que escribes a mitad de turno no deja el chat «trabajando» pa
   c.onMsg(s, { type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } })
   assert.equal(s.busy, false)
 })
+
+test('claude: las tareas en segundo plano salen como subagentes del panel', async () => {
+  const c = conn()
+  const ev = []
+  c.on('ui', e => { if (e.kind === 'subagent') { ev.push(`${e.phase}:${e.id}:${e.status || ''}:${e.goal}`) } })
+  const s = { sid: SID, buf: '', blocks: new Map(), busy: true, turnAt: Date.now(), allow: new Set(), alive: true, tasks: new Map(), controls: new Map(), proc: { stdin: { write() {} } } }
+  c.procs.set(SID, s)
+  c.onMsg(s, { type: 'system', subtype: 'task_started', task_id: 'b1', task_type: 'local_bash', description: 'Lanzar ping', tool_use_id: 'tu9' })
+  c.onMsg(s, { type: 'system', subtype: 'task_started', task_id: 'w1', task_type: 'local_workflow', description: 'Revisar Pedila' })
+  assert.deepEqual(await c.subagents(SID), [{ id: 'b1', status: 'running', tool: '', tools: null }, { id: 'w1', status: 'running', tool: '', tools: null }])
+  // Lo que hace un agente (parent_tool_use_id) se cuenta en su tarea, sin dibujarse en el chat.
+  c.onMsg(s, { type: 'assistant', parent_tool_use_id: 'tu9', message: { content: [{ type: 'tool_use', id: 'x', name: 'Read', input: {} }] } })
+  c.onMsg(s, { type: 'system', subtype: 'task_updated', task_id: 'b1', patch: { status: 'completed' } })
+  c.onMsg(s, { type: 'system', subtype: 'task_notification', task_id: 'b1', status: 'completed' })
+  c.onMsg(s, { type: 'system', subtype: 'task_notification', task_id: 'w1', status: 'failed' })
+  assert.deepEqual(ev, [
+    'start:b1::Orden en segundo plano: Lanzar ping',
+    'start:w1::Flujo de trabajo: Revisar Pedila',
+    'tool:b1::Orden en segundo plano: Lanzar ping',
+    'complete:b1:completed:Orden en segundo plano: Lanzar ping',
+    'complete:w1:failed:Flujo de trabajo: Revisar Pedila'
+  ])
+  assert.deepEqual(await c.subagents(SID), [])
+})
+
+test('claude: cambiar el modelo y el esfuerzo de un chat empezado (en caliente y para la próxima vez)', async () => {
+  const c = conn()
+  const sent = []
+  const s = { sid: SID, buf: '', blocks: new Map(), busy: false, allow: new Set(), alive: true, tasks: new Map(), controls: new Map(), proc: { stdin: { write: x => {
+    const m = JSON.parse(x)
+    sent.push(m.request)
+    // claude contesta cada control con «success» (set_model trae el modelo elegido)
+    setTimeout(() => c.onMsg(s, { type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: m.request.subtype === 'set_model' ? { model: 'claude-sonnet-5-5' } : {} } }), 5)
+  } } } }
+  c.procs.set(SID, s)
+  const r = await c.setChatOptions(SID, { model: 'sonnet', reasoning: 'max' })
+  assert.deepEqual(sent, [{ subtype: 'set_model', model: 'sonnet' }, { subtype: 'apply_flag_settings', settings: { effortLevel: 'max' } }])
+  assert.equal(r.applied, 'now')
+  assert.equal(r.model, 'claude-sonnet-5-5')
+  assert.deepEqual(c.chatOptions(SID), { model: 'sonnet', effort: 'max' })
+  await assert.rejects(c.setChatOptions(SID, { model: 'gpt-9' }), /no válido/)
+  // Sin proceso abierto: se guarda y se aplica al abrirlo.
+  c.procs.clear()
+  assert.equal((await c.setChatOptions(SID, { reasoning: 'low' })).applied, 'next')
+  assert.deepEqual(conn().chatOptions(SID), { model: 'sonnet', effort: 'low' })
+  // Volver al predeterminado.
+  await c.setChatOptions(SID, { model: null, reasoning: null })
+  assert.deepEqual(c.chatOptions(SID), { model: null, effort: null })
+})

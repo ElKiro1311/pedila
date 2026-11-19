@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('hp', {
   attachImage: (conn, sid, b64, name) => call('hp:attach-image', conn, sid, b64, name),
   usage: conn => call('hp:usage', conn),
   subagents: (conn, sid) => call('hp:subagents', conn, sid),
+  chatOptions: (conn, sid, opts) => call('hp:chat-options', conn, sid, opts || null),
   quotas: (conn, fresh) => call('hp:quotas', conn, Boolean(fresh)),
   quotasInstall: (conn, force) => call('hp:quotas-install', conn, Boolean(force)),
   media: (conn, file) => call('hp:media', conn, file),

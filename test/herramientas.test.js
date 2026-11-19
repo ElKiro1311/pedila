@@ -58,7 +58,7 @@ test('herramientas: resumen de un grupo, como «Ran 2 commands, read badges.png,
   assert.equal(groupSummary([{ name: 'Bash', input: { command: 'x', description: 'Arrancar la copia de prueba' }, done: false }]).text, 'Arrancar la copia de prueba')
   assert.equal(groupSummary([{ name: 'Read', input: { file_path: 'a/b.txt' }, done: false }]).text, 'Leyendo b.txt')
   assert.equal(groupSummary([{ name: 'Read', input: { file_path: 'a.txt' }, done: true }, { name: 'Read', input: { file_path: 'b.txt' }, done: true }]).text, 'Leyó 2 archivos')
-  assert.equal(groupSummary([{ name: 'mcp__a__uno', done: true }, { name: 'mcp__a__dos', done: true }, { name: 'mcp__a__tres', done: true }]).text, 'Usó uno (a) y dos (a) y 1 más')
+  assert.equal(groupSummary([{ name: 'mcp__a__uno', done: true }, { name: 'mcp__a__dos', done: true }, { name: 'mcp__a__tres', done: true }]).text, 'Usó uno (a), dos (a) y 1 más')
   assert.equal(groupSummary([{ name: 'Bash', input: { command: 'a' }, done: false }, { name: 'Bash', input: { command: 'b' }, done: true }]).running, 1)
 })
 

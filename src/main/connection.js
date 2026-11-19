@@ -185,14 +185,14 @@ const MAX_FIELD = 6000 // cada texto que se le pasó a una herramienta
 const MAX_OUTPUT = 8000 // lo que devolvió
 
 /** Copia acotada de lo que se le pasó a una herramienta (textos largos recortados, sin ciclos). */
-function boundInput(v, depth = 0) {
-  if (typeof v === 'string') { return v.length > MAX_FIELD ? v.slice(0, MAX_FIELD) + '\n… (recortado)' : v }
+function boundInput(v, depth = 0, max = MAX_FIELD) {
+  if (typeof v === 'string') { return v.length > max ? v.slice(0, max) + '\n… (recortado)' : v }
   if (v === null || typeof v === 'number' || typeof v === 'boolean') { return v }
   if (depth > 4) { return '…' }
-  if (Array.isArray(v)) { return v.slice(0, 60).map(x => boundInput(x, depth + 1)) }
+  if (Array.isArray(v)) { return v.slice(0, 60).map(x => boundInput(x, depth + 1, max)) }
   if (typeof v === 'object') {
     const out = {}
-    for (const k of Object.keys(v).slice(0, 40)) { out[k] = boundInput(v[k], depth + 1) }
+    for (const k of Object.keys(v).slice(0, 40)) { out[k] = boundInput(v[k], depth + 1, max) }
     return out
   }
   return null
@@ -206,19 +206,52 @@ const capText = s => (s.length > MAX_OUTPUT ? s.slice(0, MAX_OUTPUT) + '\n… (r
  * Hermes guarda los resultados como JSON; el de la terminal trae output, exit_code y error.
  * El fallo se decide como en Hermes (agent/display.py _detect_tool_failure), solo por su forma.
  */
+// Las mismas reglas que Hermes (agent/display.py _detect_tool_failure y
+// agent/tool_result_classification.py): fallo por la forma del JSON o, si no es JSON, por el texto.
+const FAILURE_MARKER = /"(?:error|failed)"(?!\s*:\s*(?:null|false|0|""|\[\]|\{\})\s*(?:[,}\]]|$))/gi
+function hermesFailed(name, raw, data) {
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    // Un archivo escrito o un parche aplicado de verdad nunca es un fallo.
+    if (name === 'write_file' && !data.error && 'bytes_written' in data) { return false }
+    if (name === 'patch' && !data.error && data.success === true) { return false }
+    // Una negativa del arnés (llamada repetida) no es un fallo.
+    if (data.guardrail_refusal === true) { return false }
+    if (data.user_summary) { return true }
+    if (name === 'terminal') { const ec = data.exit_code; return !(ec === undefined || ec === null || ec === 0) }
+    const err = data.error || data.message
+    if (err && (data.success === false || 'error' in data)) { return true }
+    if (['failed', 'error'].includes(String(data.status || '').toLowerCase())) { return true }
+    const items = data.results
+    if (Array.isArray(items) && items.length && items.every(i => i && typeof i === 'object' && !Array.isArray(i)) && items.every(i => i.error)) { return true }
+    return false
+  }
+  if (!raw) { return false }
+  if (raw.startsWith('Error')) { return true }
+  const head = raw.slice(0, 600)
+  FAILURE_MARKER.lastIndex = 0
+  let m
+  while ((m = FAILURE_MARKER.exec(head))) { if (m.index < 500) { return true } }
+  return false
+}
+
+/** De un JSON cortado por Hermes ({"output": "<json recortado>", "truncated": true}), el texto de dentro. */
+function innerText(s) {
+  const m = /"(?:output|stdout|content|result|error)"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(s)
+  if (!m) { return s }
+  try { return JSON.parse('"' + m[1].replace(/\\$/, '') + '"') } catch { return m[1].replace(/\\n/g, '\n') }
+}
+
 function hermesToolOutput(name, result, isError) {
   const raw = typeof result === 'string' ? result : result === undefined || result === null ? '' : JSON.stringify(result)
   let data = null
   if (result && typeof result === 'object') { data = result } else if (/^\s*[{[]/.test(raw)) { try { data = JSON.parse(raw) } catch {} }
-  let error = isError === true
+  const error = typeof isError === 'boolean' ? isError : hermesFailed(name, raw, data)
   let text = raw
   if (data && typeof data === 'object' && !Array.isArray(data)) {
-    if (isError === undefined || isError === null) {
-      if (name === 'terminal') { error = data.exit_code !== undefined && data.exit_code !== null && data.exit_code !== 0 } else {
-        error = Boolean(data.user_summary) || data.success === false || Boolean((data.error || data.message) && (data.success === false || 'error' in data) && data.error)
-      }
-    }
-    if (typeof data.output === 'string' || typeof data.stdout === 'string') {
+    if (data.truncated === true && (typeof data.output === 'string' || typeof data.error === 'string')) {
+      // Recortado por Hermes: lo de dentro suele ser otro JSON; se saca su texto.
+      text = innerText(str(data.output || data.error)) + '\n… (Hermes lo recortó)'
+    } else if (typeof data.output === 'string' || typeof data.stdout === 'string') {
       const bits = [str(data.output || data.stdout)]
       if (str(data.stderr)) { bits.push(str(data.stderr)) }
       if (data.error) { bits.push('Error: ' + (typeof data.error === 'string' ? data.error : JSON.stringify(data.error))) }
@@ -230,6 +263,9 @@ function hermesToolOutput(name, result, isError) {
       text = data.error
     } else if (typeof data.content === 'string') {
       text = data.content
+    } else if (typeof data.result === 'string') {
+      // Herramientas MCP: {"result": texto}.
+      text = data.result
     } else {
       try { text = JSON.stringify(data, null, 2) } catch {}
     }
@@ -252,25 +288,50 @@ function contentImages(c) {
 // Filas de «usuario» que en realidad escribe Hermes (resúmenes de memoria, avisos de procesos o de
 // subagentes): se enseñan como una nota plegable, no como un mensaje tuyo.
 const NOTE_KINDS = { internal_notification: 'Aviso de Hermes', process_complete: 'Terminó un proceso', async_delegation_complete: 'Terminó un subagente', model_switch: 'Cambio de modelo' }
+// Marcas de agent/context_compressor.py: al compactar, Hermes junta el resumen con un mensaje tuyo
+// en la misma fila (delante, o con el mensaje de antes como «PRIOR CONTEXT»).
+const SUMMARY_END = '--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---'
+const PRIOR_HEAD = '[PRIOR CONTEXT — for reference only; not a new message]'
+const PRIOR_DELIM = '[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]'
+/** { summary, message } si la fila trae un resumen de compactación; null si no. */
+function splitCompaction(raw) {
+  const i = raw.indexOf(SUMMARY_END)
+  if (i >= 0) { return { summary: raw.slice(0, i).trim(), message: raw.slice(i + SUMMARY_END.length).trim() } }
+  const j = raw.indexOf(PRIOR_DELIM)
+  if (raw.startsWith(PRIOR_HEAD) && j >= 0) { return { summary: raw.slice(j + PRIOR_DELIM.length).trim(), message: raw.slice(PRIOR_HEAD.length, j).trim() } }
+  if (/^\[CONTEXT COMPACTION/.test(raw)) { return { summary: raw, message: '' } }
+  return null
+}
+const compactionNote = (r, text) => ({ role: 'note', kind: 'compaction', title: 'Hermes resumió la conversación anterior para que quepa', text, ts: r.timestamp || null })
 function noteOf(r, text) {
-  if (/^\[CONTEXT COMPACTION/.test(text)) { return { role: 'note', kind: 'compaction', title: 'Hermes resumió la conversación anterior para que quepa', text, ts: r.timestamp || null } }
   if (NOTE_KINDS[r.display_kind]) { return { role: 'note', kind: r.display_kind, title: NOTE_KINDS[r.display_kind], text, ts: r.timestamp || null } }
   return null
 }
 
 /** Filas guardadas de /api/sessions/{id}/messages → turnos para la interfaz. */
+const MAX_TRANSCRIPT_IMAGES = 8 * 1024 * 1024
 function normalizeTranscript(rows) {
   const out = []
   let turn = null
+  let imageBytes = 0
   const sorted = [...rows].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
   for (const r of sorted) {
     if (!r || r.active === false || r.display_kind === 'hidden') { continue }
     if (r.role === 'user') {
       turn = null
-      const text = contentText(r.content)
-      const note = text.trim() ? noteOf(r, text) : null
+      const raw = contentText(r.content)
+      const note = raw.trim() ? noteOf(r, raw) : null
       if (note) { out.push(note); continue }
-      const images = contentImages(r.content)
+      // Lo que se enseña es display_content si Hermes lo da (como Hermes Desktop): el mensaje tuyo
+      // sin los envoltorios (resumen de compactación, «OUT-OF-BAND USER MESSAGE»…).
+      const hasDisplay = r.display_content !== undefined && r.display_content !== null
+      const comp = splitCompaction(raw)
+      if (comp && comp.summary) { out.push(compactionNote(r, comp.summary)) }
+      const text = hasDisplay ? contentText(r.display_content) : comp ? comp.message : raw
+      // Imágenes: con un tope para toda la conversación (son base64 y viajan a la pantalla).
+      let images = contentImages(hasDisplay ? r.display_content : r.content)
+      const bytes = images.reduce((n, x) => n + x.url.length, 0)
+      if (imageBytes + bytes > MAX_TRANSCRIPT_IMAGES) { images = [] } else { imageBytes += bytes }
       const shown = images.length ? text.replace(/^\[imagen\]\n?/gm, '').trim() : text
       if (shown.trim() || images.length) { out.push({ role: 'user', text: shown, ts: r.timestamp || null, ...(images.length ? { images } : {}) }) }
     } else if (r.role === 'assistant') {
@@ -950,6 +1011,33 @@ class Connection extends EventEmitter {
     return this.socket.request('prompt.submit', params, 120000)
   }
 
+  /**
+   * Cambiar el modelo o el razonamiento de un chat ya empezado, con las órdenes del propio Hermes
+   * (`/model <modelo> --provider <p> --session` y `/reasoning <nivel>`) por slash.exec. Hermes las
+   * rechaza mientras el chat está respondiendo.
+   */
+  async setChatOptions(sid, { model, provider, reasoning } = {}) {
+    const rec = await this.attach(sid)
+    const run = async command => {
+      let r
+      try {
+        r = await this.rpc('slash.exec', { session_id: rec.liveId, command }, 60000)
+      } catch (e) {
+        if (/32601|method not found|unknown method|unsupported/i.test(e.message || '')) { throw new Error('Este Hermes no deja cambiarlo en un chat ya empezado (empieza uno nuevo).') }
+        if (/busy|in progress|running/i.test(e.message || '')) { throw new Error('Hermes está respondiendo en este chat: cámbialo cuando termine.') }
+        throw e
+      }
+      if (r && (r.type === 'error' || r.error)) { throw new Error(str(r.message || r.output || r.error) || 'Hermes no aceptó el cambio') }
+      return r
+    }
+    if (model !== undefined) { await run(model === null ? '/model reset --session' : `/model ${model}${provider ? ' --provider ' + provider : ''} --session`) }
+    if (reasoning !== undefined && reasoning) { await run(`/reasoning ${reasoning}`) }
+    if (model) { this.ui({ kind: 'info', sid, model, provider: provider || '' }) }
+    return { applied: 'now', model: model || null, effort: reasoning || null }
+  }
+
+  chatOptions() { return { model: null, effort: null } }
+
   async interrupt(sid) {
     const rec = this.live.get(sid)
     if (!rec || !this.socket) { return { ok: false } }
@@ -986,4 +1074,4 @@ class Connection extends EventEmitter {
   }
 }
 
-module.exports = { quotaData, paidKindOf, Connection, normalizeTranscript, sessionRow, argsSummary, boundInput, hermesToolOutput, contentImages, isLocalUrl, todoSnapshot, todoStateOf, isTodoCall }
+module.exports = { quotaData, paidKindOf, Connection, normalizeTranscript, sessionRow, argsSummary, boundInput, hermesToolOutput, hermesFailed, splitCompaction, contentImages, isLocalUrl, todoSnapshot, todoStateOf, isTodoCall }

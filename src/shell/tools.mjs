@@ -53,8 +53,17 @@ function diffOf(i) {
     const n = str(e.new_string ?? e.new_str ?? e.new)
     if (!o && !n) { continue }
     if (out.length) { out.push('…') }
-    for (const l of o ? o.split('\n') : []) { out.push('- ' + l); del++ }
-    for (const l of n ? n.split('\n') : []) { out.push('+ ' + l); add++ }
+    const ol = o ? o.split('\n') : []
+    const nl = n ? n.split('\n') : []
+    // Lo igual al principio y al final no cambia: va como contexto (como mucho 2 líneas a cada lado).
+    let a = 0
+    while (a < ol.length && a < nl.length && ol[a] === nl[a]) { a++ }
+    let z = 0
+    while (z < ol.length - a && z < nl.length - a && ol[ol.length - 1 - z] === nl[nl.length - 1 - z]) { z++ }
+    for (const l of ol.slice(Math.max(0, a - 2), a)) { out.push('  ' + l) }
+    for (const l of ol.slice(a, ol.length - z)) { out.push('- ' + l); del++ }
+    for (const l of nl.slice(a, nl.length - z)) { out.push('+ ' + l); add++ }
+    for (const l of ol.slice(ol.length - z, ol.length - z + 2)) { out.push('  ' + l) }
   }
   if (!out.length && str(i.patch || i.diff)) {
     const p = str(i.patch || i.diff)
@@ -69,7 +78,7 @@ export function diffStats(text) {
   let add = 0
   let del = 0
   for (const l of str(text).split('\n')) {
-    if (/^\s*\+(?!\+\+)/.test(l)) { add++ } else if (/^\s*-(?!--)/.test(l)) { del++ }
+    if (/^\+(?!\+\+ )/.test(l)) { add++ } else if (/^-(?!-- )/.test(l)) { del++ }
   }
   return { add, del }
 }
@@ -165,9 +174,9 @@ export function describeTool(b) {
 // Cómo se cuenta cada clase en el resumen (en pasado y mientras está en marcha).
 const PHRASE = {
   run: [n => (n === 1 ? 'ejecutó una orden' : `ejecutó ${n} órdenes`), n => (n === 1 ? 'ejecutando una orden' : `ejecutando ${n} órdenes`)],
-  read: [(n, s) => (n === 1 && s ? `leyó ${s}` : `leyó ${n} archivos`), (n, s) => (n === 1 && s ? `leyendo ${s}` : `leyendo ${n} archivos`)],
-  write: [(n, s) => (n === 1 && s ? `creó ${s}` : `creó ${n} archivos`), (n, s) => (n === 1 && s ? `creando ${s}` : `creando ${n} archivos`)],
-  edit: [(n, s) => (n === 1 && s ? `editó ${s}` : `editó ${n} archivos`), (n, s) => (n === 1 && s ? `editando ${s}` : `editando ${n} archivos`)],
+  read: [(n, s) => (n === 1 ? (s ? `leyó ${s}` : 'leyó un archivo') : `leyó ${n} archivos`), (n, s) => (n === 1 ? (s ? `leyendo ${s}` : 'leyendo un archivo') : `leyendo ${n} archivos`)],
+  write: [(n, s) => (n === 1 ? (s ? `creó ${s}` : 'creó un archivo') : `creó ${n} archivos`), (n, s) => (n === 1 ? (s ? `creando ${s}` : 'creando un archivo') : `creando ${n} archivos`)],
+  edit: [(n, s) => (n === 1 ? (s ? `editó ${s}` : 'editó un archivo') : `editó ${n} archivos`), (n, s) => (n === 1 ? (s ? `editando ${s}` : 'editando un archivo') : `editando ${n} archivos`)],
   search: [n => (n === 1 ? 'hizo una búsqueda' : `hizo ${n} búsquedas`), n => (n === 1 ? 'buscando' : `haciendo ${n} búsquedas`)],
   web: [n => (n === 1 ? 'buscó en internet' : `buscó en internet ${n} veces`), () => 'buscando en internet'],
   fetch: [n => (n === 1 ? 'abrió una página' : `abrió ${n} páginas`), n => (n === 1 ? 'abriendo una página' : `abriendo ${n} páginas`)],
@@ -205,12 +214,13 @@ export function groupSummary(tools) {
     if (!xs) { continue }
     if (k === 'other') {
       const names = [...new Set(xs.map(x => x.d.subject))]
-      parts.push(`usó ${names.slice(0, 2).join(' y ')}${names.length > 2 ? ` y ${names.length - 2} más` : ''}`)
+      parts.push(names.length > 2 ? `usó ${names.slice(0, 2).join(', ')} y ${names.length - 2} más` : `usó ${names.join(' y ')}`)
       continue
     }
     const subjects = [...new Set(xs.map(x => x.d.subject).filter(Boolean))]
     const busy = xs.some(x => !x.t.done)
-    const n = ['read', 'write', 'edit'].includes(k) ? Math.max(subjects.length, 1) : xs.length
+    // Archivos: los distintos que se ven; si alguno aún no trae su ruta, se cuentan las llamadas.
+    const n = ['read', 'write', 'edit'].includes(k) ? (xs.every(x => x.d.subject) ? subjects.length : xs.length) : xs.length
     parts.push(PHRASE[k][busy ? 1 : 0](n, subjects.length === 1 ? subjects[0] : ''))
   }
   return { text: cap(parts.join(', ')), add, del, failed, running }

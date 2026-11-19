@@ -152,11 +152,11 @@ function main() {
   app.on('before-quit', e => {
     // Con terminales abiertas se pregunta antes: al salir se cierran (las de Claude se pueden
     // retomar después; Pedila ofrecerá reabrirlas).
-    const n = terms ? terms.alive() : 0
-    if (n && !quitAsked && !sessionEnding) {
+    const stop = whatWouldStop()
+    if (stop && !quitAsked && !sessionEnding) {
       e.preventDefault()
       if (win && !win.isDestroyed()) { showWindow() }
-      const opts = { type: 'question', buttons: ['Salir', 'Cancelar'], defaultId: 1, cancelId: 1, title: 'Pedila', message: n === 1 ? 'Hay 1 terminal abierta.' : `Hay ${n} terminales abiertas.`, detail: 'Al salir se cierran. Si algo estaba trabajando, se corta. La próxima vez Pedila te ofrecerá reabrirlas (las de Claude Code con su conversación).' }
+      const opts = { type: 'question', buttons: ['Salir', 'Cancelar'], defaultId: 1, cancelId: 1, title: 'Pedila', message: stop.text, detail: stop.detail }
       const ask = win && !win.isDestroyed() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)
       ask.then(r => {
         if (r.response === 0) { quitAsked = true; app.quit() } else { quitting = false }
@@ -340,8 +340,8 @@ function main() {
     const chatTitle = titles.get(`${evt.conn}:${evt.sid}`) || (viewing.conn === evt.conn && viewing.sid === evt.sid ? viewing.title : '')
     const where = c ? c.name : ''
     const open = () => { showWindow(); send({ kind: 'focus-chat', conn: evt.conn, sid: evt.sid }) }
-    if (evt.kind === 'complete' && settings.data.notify.badge && !focusedOnChat && win && !win.isFocused()) { setBadge(true) }
-    if (evt.kind === 'complete') {
+    if (evt.kind === 'complete' && !evt.more && settings.data.notify.badge && !focusedOnChat && win && !win.isFocused()) { setBadge(true) }
+    if (evt.kind === 'complete' && !evt.more) {
       const failed = evt.outcome && !['completed', 'complete', ''].includes(evt.outcome)
       const kind = failed ? 'failed' : 'done'
       if (notify.decide(kind, { notify: settings.data.notify, focusedOnChat, ms: evt.ms })) {
@@ -441,6 +441,20 @@ function main() {
     }
   }
 
+  /** Lo que se cortaría al salir de Pedila, para preguntar antes: { text, detail } o null. */
+  function whatWouldStop() {
+    const n = terms ? terms.alive() : 0
+    const busy = conns.claude && typeof conns.claude.busyCount === 'function' ? conns.claude.busyCount() : 0
+    if (!n && !busy) { return null }
+    const bits = []
+    if (n) { bits.push(n === 1 ? '1 consola abierta' : `${n} consolas abiertas`) }
+    if (busy) { bits.push(busy === 1 ? 'Claude trabajando en 1 chat' : `Claude trabajando en ${busy} chats`) }
+    return {
+      text: 'Hay ' + bits.join(' y ') + '.',
+      detail: [n ? 'Las consolas se cierran (si algo estaba trabajando, se corta); la próxima vez Pedila te ofrecerá reabrirlas, las de Claude Code con su conversación.' : '', busy ? 'Lo que Claude está haciendo en sus chats se corta; la conversación queda guardada y la puedes seguir después.' : ''].filter(Boolean).join(' ')
+    }
+  }
+
   // Lo que se reabrirá la próxima vez: las terminales vivas más las de la última vez que aún no se
   // han reabierto ni descartado. Al salir se guarda al momento (antes de cerrarlas).
   let termSaveT = null
@@ -499,7 +513,7 @@ function main() {
     })
     handle('hp:new', (id, opts) => {
       const o = opts && typeof opts === 'object' ? opts : {}
-      return connOf(id).newChat({ cwd: typeof o.cwd === 'string' ? o.cwd.slice(0, 400) : undefined, model: typeof o.model === 'string' ? o.model.slice(0, 200) : undefined, provider: typeof o.provider === 'string' ? o.provider.slice(0, 200) : undefined, reasoning: ['low', 'medium', 'high'].includes(o.reasoning) ? o.reasoning : undefined })
+      return connOf(id).newChat({ cwd: typeof o.cwd === 'string' ? o.cwd.slice(0, 400) : undefined, model: typeof o.model === 'string' ? o.model.slice(0, 200) : undefined, provider: typeof o.provider === 'string' ? o.provider.slice(0, 200) : undefined, reasoning: ['low', 'medium', 'high', 'xhigh', 'max'].includes(o.reasoning) ? o.reasoning : undefined })
     })
     handle('hp:send', async (id, sid, text, attachments) => {
       if (typeof text !== 'string' || !text.trim() || text.length > 200000) { throw new Error('mensaje vacío o demasiado largo') }
@@ -540,6 +554,18 @@ function main() {
       return connOf(id).media(file.trim())
     })
     handle('hp:subagents', (id, sid) => connOf(id).subagents(sidOf(sid)))
+    // Cambiar el modelo o el razonamiento de un chat ya empezado (sin opciones: lo elegido hasta ahora).
+    handle('hp:chat-options', (id, sid, opts) => {
+      const c = connOf(id)
+      sidOf(sid)
+      const o = opts && typeof opts === 'object' ? opts : null
+      if (!o || (o.model === undefined && o.reasoning === undefined)) { return c.chatOptions(sid) }
+      const clean = {}
+      if (o.model !== undefined) { if (o.model !== null && (typeof o.model !== 'string' || !o.model || o.model.length > 200 || /[\s"]/.test(o.model))) { throw new Error('modelo no válido') } clean.model = o.model }
+      if (typeof o.provider === 'string' && o.provider && o.provider.length <= 200 && !/[\s"]/.test(o.provider)) { clean.provider = o.provider }
+      if (o.reasoning !== undefined) { if (!['', null, 'low', 'medium', 'high', 'xhigh', 'max'].includes(o.reasoning)) { throw new Error('razonamiento no válido') } clean.reasoning = o.reasoning }
+      return c.setChatOptions(sid, clean)
+    })
     // Cuotas de las APIs de pago (complemento «pedila» dentro de Hermes) y las APIs que tiene puestas.
     handle('hp:quotas', async (id, fresh) => {
       const c = connOf(id)
@@ -611,20 +637,26 @@ function main() {
     })
     handle('hp:show-file', file => { if (typeof file === 'string') { shell.showItemInFolder(file) } return true })
     handle('hp:update-check', () => autoCheckUpdate(true))
-    handle('hp:update-install', async () => {
-      const u = settings.data.updates
-      const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion(), REPO)
-      if (!info || !info.available) { throw new Error('no hay versión nueva') }
-      // Con consolas abiertas se pregunta: se cierran, se guarda la lista y al volver se ofrece reabrirlas.
-      const n = terms ? terms.alive() : 0
-      if (n) {
-        const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Actualizar ahora', 'Ahora no'], defaultId: 0, cancelId: 1, title: 'Pedila', message: n === 1 ? 'Hay 1 consola abierta.' : `Hay ${n} consolas abiertas.`, detail: 'Al actualizar se cierran (si algo estaba trabajando, se corta). Al volver a abrir Pedila te ofrecerá reabrirlas, las de Claude Code con su conversación.' })
-        if (r.response !== 0) { return false }
+    let installing = null
+    handle('hp:update-install', () => {
+      if (installing) { return installing }
+      installing = (async () => {
+        const u = settings.data.updates
+        const info = pendingUpdate || await extras.checkUpdate(u.url, app.getVersion(), REPO)
+        if (!info || !info.available) { throw new Error('no hay versión nueva') }
+        const stop = whatWouldStop()
+        if (stop) {
+          const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Actualizar ahora', 'Ahora no'], defaultId: 0, cancelId: 1, title: 'Pedila', message: stop.text, detail: 'Al actualizar, Pedila se reinicia. ' + stop.detail })
+          if (r.response !== 0) { return false }
+        }
+        await extras.installUpdate(info, log)
+        // Ya se preguntó (o no había nada que cortar): la salida no vuelve a preguntar.
         quitAsked = true
-      }
-      await extras.installUpdate(info, log)
-      setTimeout(() => { quitting = true; app.quit() }, 600)
-      return true
+        setTimeout(() => { quitting = true; app.quit() }, 600)
+        return true
+      })()
+      installing.finally(() => { installing = null }).catch(() => {})
+      return installing
     })
     handle('hp:login', async (user, pass) => {
       if (typeof user !== 'string' || typeof pass !== 'string' || !user || !pass || user.length > 200 || pass.length > 500) { throw new Error('Escribe usuario y contraseña') }

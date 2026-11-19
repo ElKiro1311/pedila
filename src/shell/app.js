@@ -94,7 +94,13 @@ function fillMedia(root, conn) {
     const show = url => {
       box.replaceChildren()
       box.classList.remove('loading')
-      if (!url) { box.classList.add('fail'); box.textContent = `🖼 No pude cargar la imagen ${name}`; return }
+      if (!url) {
+        // En el detalle de una herramienta, si no se puede enseñar, no se enseña (sin error).
+        if (box.dataset.quiet !== undefined) { box.remove(); return }
+        box.classList.add('fail')
+        box.textContent = `🖼 No pude cargar la imagen ${name}`
+        return
+      }
       const img = el('img', { src: url, alt: name, title: name })
       img.addEventListener('click', () => openImage(url, name))
       box.append(img)
@@ -453,6 +459,7 @@ async function openChat(conn, sid) {
   }
   S.current = { conn, sid }
   const ch = chat(conn, sid)
+  loadChatOptions(ch)
   setTopbar()
   renderList()
   call(api.viewing, conn, sid, ch.title).catch(() => {})
@@ -469,7 +476,7 @@ async function openChat(conn, sid) {
   }
   if (S.current.sid === sid) { renderChat(true) }
   const row = S.sessions[conn].find(r => r.id === sid)
-  if (row && row.model && !ch.model) { ch.model = row.model; setTopbar() }
+  if (row && row.model && !ch.model) { ch.model = row.model; setTopbar(); updateModelPill() }
   // Si el chat está cargado en el gateway (quizá respondiendo desde Hermes Desktop), me engancho
   // para recibir sus eventos en vivo y sus permisos pendientes.
   if ((row && row.active) || ch.running || (ch.live && !ch.live.done)) {
@@ -483,10 +490,11 @@ let liveRaf = 0
 // que ya no existe); se repinta al soltar.
 let liveHold = false
 let liveHeld = false
+let liveHeldFull = false
 function scheduleLive() {
   if (liveHold) { liveHeld = true; return }
   if (liveRaf) { return }
-  liveRaf = requestAnimationFrame(() => { liveRaf = 0; renderLiveOnly() })
+  liveRaf = requestAnimationFrame(() => { liveRaf = 0; if (liveHold) { liveHeld = true; return } renderLiveOnly() })
 }
 
 function nearBottom() {
@@ -500,6 +508,7 @@ function toBottom() {
 }
 
 function renderChat(scroll = true) {
+  if (liveHold) { liveHeldFull = true; return }
   const ch = currentChat()
   const msgs = $('#messages')
   msgs.replaceChildren()
@@ -522,8 +531,13 @@ function renderLiveOnly() {
   if (!ch) { return }
   const stick = nearBottom()
   const old = document.getElementById('live-turn')
-  if (!old || !ch.live) { renderChat(stick); return }
-  old.replaceWith(renderLiveTurn(ch))
+  if (!old || !ch.live || old._live !== ch.live) { renderChat(stick); return }
+  const scrolls = new Map([...old.querySelectorAll('.tbox[data-k]')].filter(x => x.scrollTop > 0).map(x => [x.dataset.k, x.scrollTop]))
+  const focusKey = old.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.k : null
+  const node = renderLiveTurn(ch)
+  old.replaceWith(node)
+  for (const x of node.querySelectorAll('.tbox[data-k]')) { if (scrolls.has(x.dataset.k)) { x.scrollTop = scrolls.get(x.dataset.k) } }
+  if (focusKey) { node.querySelector(`[data-k="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true }) }
   if (stick) { toBottom() }
 }
 
@@ -539,6 +553,7 @@ function renderBlocks(blocks) {
   const flush = () => { if (group.length) { out.push(renderToolGroup(group)); group = [] } }
   for (const b of blocks) {
     if (b.type === 'tool') { group.push(b); continue }
+    if (b.type === 'text' && !String(b.text || '').trim()) { continue }
     flush()
     if (b.type === 'text') {
       const d = el('div', { class: 'md' })
@@ -558,7 +573,11 @@ function renderBlocks(blocks) {
 // devolvió. Lo abierto se recuerda mientras dura la ventana (también al repintar en directo).
 const toolOpen = new Map()
 let toolSeq = 0
-const keyOf = b => { if (!b._k) { Object.defineProperty(b, '_k', { value: 'k' + (++toolSeq), enumerable: true, writable: true }) } return b._k }
+const keyOf = b => {
+  if (b.id) { return `${S.current.conn}|${S.current.sid}|${b.id}` }
+  if (!b._k) { Object.defineProperty(b, '_k', { value: 'k' + (++toolSeq), enumerable: true, writable: true }) }
+  return b._k
+}
 
 function renderToolGroup(tools) {
   const gk = 'g:' + keyOf(tools[0])
@@ -567,7 +586,7 @@ function renderToolGroup(tools) {
   const single = tools.length === 1
   const t0 = tools[0]
   const node = el('div', { class: 'tgroup' + (open ? ' open' : '') + (sum.failed ? ' fail' : '') + (single ? ' single' : '') })
-  const head = el('button', { class: 'tg-head', 'aria-expanded': String(open), title: open ? 'Pulsa para plegar' : 'Pulsa para ver qué hizo' },
+  const head = el('button', { class: 'tg-head', 'data-k': gk, 'aria-expanded': String(open), title: open ? 'Pulsa para plegar' : 'Pulsa para ver qué hizo' },
     el('span', { class: 'tg-chev', text: '›' }),
     sum.running ? el('span', { class: 'spin' }) : null,
     el('span', { class: 'tg-text', text: sum.text }),
@@ -576,7 +595,11 @@ function renderToolGroup(tools) {
     single && t0.done && t0.seconds ? el('span', { class: 'tg-time', text: `${t0.seconds.toFixed(1)} s` }) : null)
   head.addEventListener('click', () => {
     toolOpen.set(gk, !open)
-    node.replaceWith(renderToolGroup(tools))
+    if (single) { toolOpen.set('t:' + keyOf(t0), !open) }
+    const had = document.activeElement === head
+    const n = renderToolGroup(tools)
+    node.replaceWith(n)
+    if (had) { n.querySelector('.tg-head').focus() }
   })
   node.append(head)
   if (open) {
@@ -591,7 +614,7 @@ function renderToolItem(b) {
   const open = saved === undefined ? Boolean(b.error) : saved
   const d = describeTool(b)
   const node = el('div', { class: 'titem' + (open ? ' open' : '') + (b.error ? ' fail' : '') })
-  const head = el('button', { class: 'ti-head', 'aria-expanded': String(open) },
+  const head = el('button', { class: 'ti-head', 'data-k': tk, 'aria-expanded': String(open) },
     el('span', { class: 'tg-chev', text: '›' }),
     !b.done ? el('span', { class: 'spin' }) : null,
     el('span', { class: 'ti-title', text: d.title }),
@@ -600,7 +623,10 @@ function renderToolItem(b) {
     b.done && b.seconds ? el('span', { class: 'tg-time', text: `${b.seconds.toFixed(1)} s` }) : null)
   head.addEventListener('click', () => {
     toolOpen.set(tk, !open)
-    node.replaceWith(renderToolItem(b))
+    const had = document.activeElement === head
+    const n = renderToolItem(b)
+    node.replaceWith(n)
+    if (had) { n.querySelector('.ti-head').focus() }
   })
   node.append(head)
   if (open) { node.append(toolDetails(b)) }
@@ -611,38 +637,39 @@ function renderToolItem(b) {
 function toolDetails(b) {
   const d = describeTool(b)
   const parts = []
-  if (d.box && d.box.text) { parts.push(toolBox(d.box)) }
+  if (d.box && d.box.text) { parts.push(toolBox(d.box, keyOf(b) + ':in')) }
   if (!b.done) {
     parts.push(el('div', { class: 'tout-label' }, el('span', { class: 'spin' }), el('span', { text: b.message ? ` ${b.message}${b.percent ? ` (${b.percent} %)` : ''}` : ' En marcha…' })))
   } else {
     const out = typeof b.output === 'string' ? b.output : (b.summary || '')
     if (out.trim()) {
       parts.push(el('div', { class: 'tout-label' + (b.error ? ' fail' : ''), text: b.error ? 'Falló:' : 'Resultado:' }))
-      parts.push(el('pre', { class: 'tbox out' + (b.error ? ' err' : ''), text: out }))
-    } else if (b.error || !((Array.isArray(b.images) && b.images.length) || b.image)) {
+      parts.push(el('pre', { class: 'tbox out' + (b.error ? ' err' : ''), 'data-k': keyOf(b) + ':out', text: out }))
+    } else if (b.error || !((Array.isArray(b.images) && b.images.length) || b.image || b.imageCount)) {
       parts.push(el('div', { class: 'tout-label muted', text: b.error ? 'Falló sin decir por qué.' : 'Sin resultado que enseñar.' }))
     }
   }
   const thumbs = []
   for (const im of Array.isArray(b.images) ? b.images : []) { thumbs.push(thumbOf(im.url, im.name || 'imagen')) }
-  if (b.image) {
-    const box = el('div', { class: 'media-img', 'data-media': encodeURIComponent(b.image) })
-    thumbs.push(box)
-    setTimeout(() => fillMedia(box.parentNode || box, S.current.conn), 0)
+  // Hermes: la imagen por su ruta. Claude: las de la conversación guardada, que se piden al verlas.
+  if (b.image) { thumbs.push(el('div', { class: 'media-img', 'data-quiet': '', 'data-media': encodeURIComponent(b.image) })) }
+  for (let i = 0; i < (b.imageCount || 0); i++) { thumbs.push(el('div', { class: 'media-img', 'data-quiet': '', 'data-media': encodeURIComponent(`${b.imageRef}|${i}`) })) }
+  if (thumbs.length) {
+    const box = el('div', { class: 'thumbs' }, ...thumbs)
+    fillMedia(box, S.current.conn)
+    parts.push(box)
   }
-  if (thumbs.length) { parts.push(el('div', { class: 'thumbs' }, ...thumbs)) }
   return el('div', { class: 'tdetails' }, ...parts)
 }
 
 /** El recuadro de lo que se le pasó: «$ orden», código, cambios en verde y rojo, ruta o JSON. */
-function toolBox(box) {
-  const pre = el('pre', { class: 'tbox ' + box.lang })
+function toolBox(box, k) {
+  const pre = el('pre', { class: 'tbox ' + box.lang, 'data-k': k || '' })
   if (box.lang === 'cmd') {
     pre.append(el('span', { class: 'prompt', text: '$ ' }), document.createTextNode(box.text))
   } else if (box.lang === 'diff') {
     for (const line of box.text.split('\n')) {
-      const t = line.trimStart()
-      const cls = /^\+(?!\+\+)/.test(t) ? 'add' : /^-(?!--)/.test(t) ? 'del' : /^@@/.test(t) ? 'hunk' : ''
+      const cls = /^\+(?!\+\+ )/.test(line) ? 'add' : /^-(?!-- )/.test(line) ? 'del' : /^@@/.test(line) ? 'hunk' : ''
       pre.append(el('span', { class: 'dl ' + cls, text: line + '\n' }))
     }
   } else {
@@ -670,9 +697,15 @@ function renderReasoning(text, live) {
 function renderTurn(t) {
   if (t.role === 'user') {
     const images = Array.isArray(t.images) ? t.images : []
-    return el('div', { class: 'msg user' }, el('div', { class: 'bubble' + (images.length ? ' with-images' : '') },
-      images.length ? el('div', { class: 'thumbs' }, ...images.map(im => thumbOf(im.url, im.name || 'imagen'))) : null,
-      t.text ? el('div', { class: 'btext', text: t.text }) : null))
+    const n = images.length + (t.imageCount || 0)
+    let thumbs = null
+    if (n) {
+      thumbs = el('div', { class: 'thumbs' }, ...images.map(im => thumbOf(im.url, im.name || 'imagen')))
+      for (let i = 0; i < (t.imageCount || 0); i++) { thumbs.append(el('div', { class: 'media-img', 'data-media': encodeURIComponent(`${t.imageRef}|${i}`) })) }
+      fillMedia(thumbs, S.current.conn)
+    }
+    return el('div', { class: 'msg user' }, el('div', { class: 'bubble' + (n ? ' with-images' : '') },
+      thumbs, t.text ? el('div', { class: 'btext', text: t.text }) : null))
   }
   // Lo que Hermes escribe como si fuera tuyo (resúmenes de memoria, avisos): una nota plegable.
   if (t.role === 'note') {
@@ -704,6 +737,7 @@ function turnActions(t) {
 function renderLiveTurn(ch) {
   const L = ch.live
   const node = el('div', { class: 'msg assistant', id: 'live-turn' }, whoRow(), renderReasoning(L.reasoning, !L.done), renderBlocks(L.blocks))
+  node._live = L
   if (!L.done) {
     const status = L.status || (L.blocks.length ? 'Escribiendo' : 'Pensando')
     node.append(el('div', { class: 'status-line' }, el('span', { class: 'spin' }), el('span', { class: 'dots', text: status })))
@@ -912,8 +946,8 @@ function updateModelPill() {
   const ch = currentChat()
   if (ch) {
     p.textContent = ch.model ? `Modelo: ${ch.model}` : 'Modelo del chat'
-    p.disabled = true
-    p.title = 'Para cambiar de modelo, empieza un chat nuevo'
+    p.disabled = false
+    p.title = 'Cambiar el modelo de este chat (desde tu próximo mensaje)'
     return
   }
   const conn = S.current.conn
@@ -969,9 +1003,21 @@ async function openModelMenu() {
   const opts = S.models[conn]
   let showCloud = conn === 'claude' || Boolean(S.modelChoice[conn] && S.modelChoice[conn].local === false)
   let filter = ''
-  const pick = choice => {
-    S.modelChoice[conn] = choice
+  const pick = async choice => {
     menu.hidden = true
+    const sid = S.current.sid
+    if (sid) {
+      const ch = chat(conn, sid)
+      try {
+        const r = await call(api.chatOptions, conn, sid, { model: choice ? choice.model : null, ...(choice && choice.provider ? { provider: choice.provider } : {}) })
+        if (r && r.model) { ch.model = r.model } else if (choice) { ch.model = choice.model }
+        updateModelPill()
+        setTopbar()
+        showNote(`Modelo de este chat: ${choice ? choice.model : 'el predeterminado'}${r && r.applied === 'next' ? ' (desde tu próximo mensaje)' : ''}.`)
+      } catch (e) { showNote(`No pude cambiar el modelo: ${e.message}`, true) }
+      return
+    }
+    S.modelChoice[conn] = choice
     updateModelPill()
     call(api.settings, { models: { [conn]: choice ? { model: choice.model, provider: choice.provider, local: choice.local } : null } }).catch(() => {})
   }
@@ -1187,8 +1233,8 @@ function onEvent(evt) {
       if (!L.reasoning && evt.reasoning) { L.reasoning = evt.reasoning }
       for (const b of L.blocks) { if (b.type === 'tool') { b.done = true } }
       L.done = true
-      ch.running = false
-      ch.turnAt = 0
+      ch.running = Boolean(evt.more)
+      ch.turnAt = evt.more ? Date.now() : 0
       // La hora exacta en que terminó (el panel la junta con la última actividad que da Hermes).
       ch.doneAt = Date.now()
       P.done[evt.conn] = { at: ch.doneAt, sid: evt.sid }
@@ -1197,8 +1243,10 @@ function onEvent(evt) {
         const streamMs = L.firstAt ? Date.now() - L.firstAt : 0
         L.stats = { ms: evt.ms || (L.startedAt ? Date.now() - L.startedAt : null), tps: out && streamMs > 500 ? out / (streamMs / 1000) : null }
       }
-      if (S.settings.notify.chime && (!document.hasFocus() || !isCur)) { chime() }
-      if (evt.outcome && !['completed', 'complete'].includes(evt.outcome)) {
+      if (S.settings.notify.chime && !evt.more && (!document.hasFocus() || !isCur)) { chime() }
+      if (evt.more) {
+        L.note = 'Sigue con tu siguiente mensaje…'
+      } else if (evt.outcome && !['completed', 'complete'].includes(evt.outcome)) {
         const stopped = ['interrupted', 'cancelled', 'canceled'].includes(evt.outcome)
         L.note = stopped ? 'Parado.' : `Terminó así: ${evt.outcome}`
         pet.flash(stopped ? 'waving' : 'failed', 2)
@@ -1232,7 +1280,7 @@ function onEvent(evt) {
       if (evt.phase === 'progress' && evt.text) { sa.text = evt.text }
       if (evt.tools != null) { sa.tools = evt.tools }
       if (evt.phase === 'complete') {
-        sa.state = ['failed', 'error', 'timeout'].includes(evt.status) ? 'failed' : ['interrupted', 'cancelled', 'canceled'].includes(evt.status) ? 'stopped' : 'done'
+        sa.state = ['failed', 'error', 'timeout'].includes(evt.status) ? 'failed' : ['interrupted', 'cancelled', 'canceled', 'killed', 'stopped'].includes(evt.status) ? 'stopped' : 'done'
         sa.seconds = evt.seconds != null ? evt.seconds : (Date.now() - sa.since) / 1000
       }
       ch.subagents.set(evt.id, sa)
@@ -1862,7 +1910,7 @@ async function openArchived() {
 
 // ── Escribir: imágenes, solo consultar, razonamiento, frases ─────────────────────────────────
 const READ_ONLY_NOTE = '[Modo solo consulta: puedes leer, buscar e investigar, pero NO cambies, borres, instales ni ejecutes nada que modifique archivos, programas o el sistema. Si hiciera falta un cambio, explícame cuál y pregúntame antes.]'
-const REASONING = [['', 'el de Hermes'], ['low', 'rápido'], ['medium', 'normal'], ['high', 'a fondo']]
+const REASONING = [['', 'el de Hermes'], ['low', 'rápido'], ['medium', 'normal'], ['high', 'a fondo'], ['xhigh', 'muy a fondo'], ['max', 'al máximo']]
 
 function updateExtrasPills() {
   const ro = $('#readonly-pill')
@@ -1871,10 +1919,11 @@ function updateExtrasPills() {
   ro.title = S.readOnly ? `Solo consultar: ${who} no cambiará nada (pulsa para quitarlo)` : `Pulsa para que ${who} solo lea y consulte, sin cambiar nada`
   const rp = $('#reason-pill')
   const ch = currentChat()
-  rp.disabled = Boolean(ch)
-  const label = S.reasoning ? (REASONING.find(r => r[0] === S.reasoning) || REASONING[0])[1] : `el de ${who === 'Claude' ? 'tu Claude' : 'Hermes'}`
+  rp.disabled = false
+  const cur = ch ? ch.reasoningSet : S.reasoning
+  const label = cur ? (REASONING.find(r => r[0] === cur) || REASONING[0])[1] : ch && cur === undefined ? 'el del chat' : `el de ${who === 'Claude' ? 'tu Claude' : 'Hermes'}`
   rp.textContent = `🧠 ${label}`
-  rp.title = ch ? 'El razonamiento se elige al empezar un chat nuevo' : `Cuánto piensa ${who} en el chat nuevo (pulsa para cambiar)`
+  rp.title = ch ? `Cuánto piensa ${who} en este chat (pulsa para cambiarlo)` : `Cuánto piensa ${who} en el chat nuevo (pulsa para cambiar)`
   schedulePanel()
 }
 
@@ -2532,7 +2581,7 @@ function panelTasksCard() {
     const other = remoteBusy(S.active).map(a => listedRow(S.active, a.id)).find(Boolean)
     return el('section', { class: 'sp-card' }, head, other
       ? el('button', { class: 'sp-hint', 'data-focus': 'tasks-other', text: `Hermes está trabajando en «${other.title || 'un chat'}». Ábrelo para ver su plan y su progreso.`, onclick: () => openChat(S.active, other.id) })
-      : el('p', { class: 'sp-hint', text: 'Nada en marcha. Cuando Hermes trabaje en algo, aquí verás su plan, lo que está haciendo y cuánto lleva.' }))
+      : el('p', { class: 'sp-hint', text: `Nada en marcha. Cuando ${WHO(S.active)} trabaje en algo, aquí verás su plan, lo que está haciendo${S.active === 'claude' ? ', sus tareas en segundo plano' : ''} y cuánto lleva.` }))
   }
   const running = busy(ch)
   const parts = [head]
@@ -2569,7 +2618,7 @@ function panelTasksCard() {
   }
   const subs = [...ch.subagents.values()].sort((a, b) => (a.index || 0) - (b.index || 0))
   if (subs.length) {
-    parts.push(el('div', { class: 'sp-sub-h', text: `Subagentes · ${subs.filter(x => x.state === 'done').length}/${subs.length}` }))
+    parts.push(el('div', { class: 'sp-sub-h', text: `${ch.conn === 'claude' ? 'Tareas en segundo plano' : 'Subagentes'} · ${subs.filter(x => x.state === 'done').length}/${subs.length}` }))
     for (const sa of subs) {
       const what = sa.state === 'running' ? (sa.tool ? `usando ${sa.tool}` : sa.text || 'trabajando')
         : { queued: 'en cola', failed: 'falló', stopped: 'parado', gone: 'terminó' }[sa.state] || 'hecho'
@@ -2725,18 +2774,48 @@ async function openUsage(conn = S.active) {
 }
 
 // ── Actualizaciones ──────────────────────────────────────────────────────────────────────────
+// La versión nueva que hay (si la hay): la barra del chat y Ajustes → Acerca de enseñan el mismo botón.
+let pendingVersion = null
+let updating = false
+
+/** Los dos botones (la barra y el de Ajustes): los dos «Descargando…» mientras se instala. */
+function updateButtons() {
+  for (const b of document.querySelectorAll('#update-bar .btn-primary, #upd-install')) {
+    b.disabled = updating
+    b.textContent = updating ? 'Descargando…' : b.id === 'upd-install' ? `Actualizar a ${pendingVersion} y reiniciar` : 'Actualizar y reiniciar'
+  }
+}
+
+/** Descarga e instala la versión nueva (desde la barra o desde Ajustes). */
+async function installUpdate(onError) {
+  if (updating) { return }
+  updating = true
+  updateButtons()
+  try {
+    // «Ahora no» al aviso de las consolas abiertas: los botones vuelven a estar listos.
+    if (await call(api.updateInstall) === false) { updating = false; updateButtons() }
+  } catch (err) {
+    updating = false
+    updateButtons()
+    onError(`No pude actualizar: ${err.message}`)
+  }
+}
+
 function showUpdate(version, notes) {
+  pendingVersion = version
   const b = $('#update-bar')
   b.replaceChildren(el('div', { class: 'grow' }, el('strong', { text: `Hay una versión nueva de Pedila (${version}). ` }), el('span', { class: 'muted', text: notes || '' })),
-    el('button', { class: 'btn-primary', text: 'Actualizar y reiniciar', onclick: async e => {
-      e.target.disabled = true
-      e.target.textContent = 'Descargando…'
-      try {
-        // «Ahora no» al aviso de las consolas abiertas: el botón vuelve a estar listo.
-        if (await call(api.updateInstall) === false) { e.target.disabled = false; e.target.textContent = 'Actualizar y reiniciar' }
-      } catch (err) { e.target.disabled = false; e.target.textContent = 'Actualizar y reiniciar'; showToastLine(`No pude actualizar: ${err.message}`) }
-    } }))
+    el('button', { class: 'btn-primary', text: 'Actualizar y reiniciar', onclick: () => installUpdate(showToastLine) }))
   b.hidden = false
+  updateInstallButton()
+  updateButtons()
+}
+
+/** El botón de Ajustes → Acerca de: solo cuando hay una versión nueva. */
+function updateInstallButton() {
+  const btn = $('#upd-install')
+  btn.hidden = !pendingVersion
+  updateButtons()
 }
 
 function renderSnippetSettings() {
@@ -2771,11 +2850,16 @@ function wireExtras() {
   })
   $('#ctx-hide').addEventListener('click', () => { const ch = currentChat(); if (ch) { S.ctxHidden.add(key(ch.conn, ch.sid)) } setTopbar() })
   $('#readonly-pill').addEventListener('click', () => { S.readOnly = !S.readOnly; updateExtrasPills() })
-  $('#reason-pill').addEventListener('click', () => {
-    const i = REASONING.findIndex(r => r[0] === S.reasoning)
-    S.reasoning = REASONING[(i + 1) % REASONING.length][0]
-    updateExtrasPills()
-    call(api.settings, { chat: { reasoning: S.reasoning } }).catch(() => {})
+  $('#reason-pill').addEventListener('click', e => {
+    e.stopPropagation()
+    const r = e.currentTarget.getBoundingClientRect()
+    const ch = currentChat()
+    const who = WHO(S.current.conn)
+    const cur = ch ? ch.reasoningSet : S.reasoning
+    // Con un chat de Hermes ya empezado no hay «el predeterminado» (Hermes no tiene cómo volver a él).
+    const options = REASONING.filter(([v]) => !(ch && v === '' && S.current.conn !== 'claude'))
+    const items = options.map(([v, name]) => [`${v === cur ? '✓ ' : ''}${v ? name : `el de ${who === 'Claude' ? 'tu Claude' : 'Hermes'}`}`, () => setReasoning(v)])
+    showPopup(items, r.left, r.top - Math.min(items.length * 34 + 16, 360))
   })
   $('#attach-btn').addEventListener('click', () => $('#file-input').click())
   $('#file-input').addEventListener('change', e => { addImages([...e.target.files]); e.target.value = '' })
@@ -2819,7 +2903,10 @@ function wireExtras() {
   $('#messages').addEventListener('pointerdown', () => { liveHold = true })
   const release = () => {
     if (P.hold) { P.hold = false; if (P.held) { P.held = false; schedulePanel() } }
-    if (liveHold) { liveHold = false; if (liveHeld) { liveHeld = false; setTimeout(scheduleLive, 0) } }
+    if (liveHold) {
+      liveHold = false
+      if (liveHeldFull) { liveHeldFull = false; liveHeld = false; setTimeout(() => renderChat(nearBottom()), 0) } else if (liveHeld) { liveHeld = false; setTimeout(scheduleLive, 0) }
+    }
   }
   addEventListener('pointerup', release, true)
   addEventListener('pointercancel', release, true)
@@ -2842,8 +2929,11 @@ function wireExtras() {
     try {
       const r = await call(api.updateCheck)
       st.textContent = !r ? 'Falta la dirección de actualizaciones.' : r.available ? `Hay una versión nueva: ${r.version}.` : `Tienes la última (${S.version}).`
+      if (r && r.available) { showUpdate(r.version, r.notes) }
     } catch (e) { st.textContent = `No pude comprobarlo: ${e.message}` }
   })
+  // Actualizar desde aquí mismo, sin cerrar Ajustes para ir a la barra del chat.
+  $('#upd-install').addEventListener('click', () => installUpdate(text => { $('#upd-status').textContent = text }))
 }
 
 // ── Claude Code como chat ────────────────────────────────────────────────────────────────────
@@ -3122,4 +3212,44 @@ function onClaudeAgents(list) {
   claudeOpenSig = sig
   S.claudeOpen = m
   if (S.active === 'claude') { renderList() }
+}
+
+// ── Modelo y razonamiento de un chat ya empezado ─────────────────────────────────────────────
+async function setReasoning(v) {
+  const ch = currentChat()
+  if (!ch) {
+    S.reasoning = v
+    updateExtrasPills()
+    call(api.settings, { chat: { reasoning: v } }).catch(() => {})
+    return
+  }
+  try {
+    const r = await call(api.chatOptions, ch.conn, ch.sid, { reasoning: v })
+    ch.reasoningSet = v
+    updateExtrasPills()
+    const name = v ? (REASONING.find(x => x[0] === v) || REASONING[0])[1] : 'el predeterminado'
+    showNote(`Razonamiento de este chat: ${name}${r && r.applied === 'next' ? ' (desde tu próximo mensaje)' : ''}.`)
+  } catch (e) { showNote(`No pude cambiar el razonamiento: ${e.message}`, true) }
+}
+
+/** Lo elegido antes para un chat de Claude (modelo y esfuerzo), para los botones. */
+async function loadChatOptions(ch) {
+  if (ch.conn !== 'claude' || ch.optsLoaded) { return }
+  ch.optsLoaded = true
+  try {
+    const o = await call(api.chatOptions, ch.conn, ch.sid)
+    if (o && o.effort) { ch.reasoningSet = o.effort }
+    if (o && o.model && !ch.model) { ch.model = o.model }
+    if (currentChat() === ch) { updateExtrasPills(); updateModelPill() }
+  } catch {}
+}
+
+/** Un aviso corto encima del recuadro de escribir (el texto de ayuda vuelve a los 6 s). */
+function showNote(text, bad = false) {
+  const h = $('#composer-hint')
+  h.textContent = text
+  h.classList.toggle('error', bad)
+  h.hidden = false
+  clearTimeout(toastT)
+  toastT = setTimeout(() => { h.textContent = 'Enter para enviar · Mayús+Enter, salto de línea'; h.classList.remove('error'); h.hidden = !shown('hint') }, 6000)
 }

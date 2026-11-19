@@ -52,6 +52,9 @@ function resultText(content) {
 // Lo que devolvió una herramienta, para su detalle: el texto (acotado), si falló y sus imágenes
 // (un Read de una captura devuelve la imagen).
 const MAX_OUTPUT = 8000
+// En las conversaciones guardadas (una larga tiene miles de herramientas), algo menos por cada una.
+const SAVED_OUTPUT = 3000
+const SAVED_FIELD = 2500
 function toolResult(b) {
   const text = resultText(b.content)
   return {
@@ -162,6 +165,7 @@ class ClaudeConnection extends EventEmitter {
     this.pending = new Map() // sid → { cwd, model, effort } de un chat nuevo aún sin mensajes
     this.prompts = new Map()
     this.images = new Map() // id → { mime, data }
+    this.imageIndex = new Map() // sid → { file, refs: ref → { start, end } } (dónde están sus imágenes)
     this.limits = null // lo último que dijo Claude de tu cuota
     this.meta = this.loadMeta()
     this.socket = null // (no tiene: así hp:usage no pregunta por chats en marcha)
@@ -211,8 +215,16 @@ class ClaudeConnection extends EventEmitter {
   loadMeta() {
     try {
       const j = JSON.parse(fs.readFileSync(this.metaFile, 'utf8'))
-      return { pinned: Array.isArray(j.pinned) ? j.pinned.filter(x => SID.test(x)) : [], archived: Array.isArray(j.archived) ? j.archived.filter(x => SID.test(x)) : [] }
-    } catch { return { pinned: [], archived: [] } }
+      const opts = {}
+      for (const [k, v] of Object.entries(j.opts && typeof j.opts === 'object' ? j.opts : {})) {
+        if (!SID.test(k) || !v || typeof v !== 'object') { continue }
+        const o = {}
+        if (MODELS.some(m => m.id === v.model)) { o.model = v.model }
+        if (EFFORTS.includes(v.effort)) { o.effort = v.effort }
+        if (Object.keys(o).length) { opts[k] = o }
+      }
+      return { pinned: Array.isArray(j.pinned) ? j.pinned.filter(x => SID.test(x)) : [], archived: Array.isArray(j.archived) ? j.archived.filter(x => SID.test(x)) : [], opts }
+    } catch { return { pinned: [], archived: [], opts: {} } }
   }
 
   saveMeta() {
@@ -334,13 +346,25 @@ class ClaudeConnection extends EventEmitter {
   async transcript(sid) {
     const f = this.fileOf(sid)
     if (!f) { return [] }
-    let lines
-    try { lines = jsonLines(fs.readFileSync(f, 'utf8')) } catch { return [] }
+    let buf
+    try { buf = fs.readFileSync(f) } catch { return [] }
     const out = []
     let turn = null
     let todos = null
     const tools = new Map()
-    for (const d of lines) {
+    // Las imágenes no viajan con la conversación (una larga puede llevar cientos de capturas): se
+    // apunta en qué línea del archivo está cada una y la pantalla la pide al enseñarla (media()).
+    const refs = new Map()
+    const countImages = c => (Array.isArray(c) ? c.filter(b => b && b.type === 'image' && b.source && b.source.type === 'base64').length : 0)
+    let pos = 0
+    while (pos < buf.length) {
+      let nl = buf.indexOf(10, pos)
+      if (nl < 0) { nl = buf.length }
+      const start = pos
+      pos = nl + 1
+      if (nl - start < 2 || buf[start] !== 0x7b) { continue }
+      let d
+      try { d = JSON.parse(buf.toString('utf8', start, nl)) } catch { continue }
       if (d.isSidechain || !d.message) { continue }
       if (d.type === 'user') {
         const c = d.message.content
@@ -348,23 +372,32 @@ class ClaudeConnection extends EventEmitter {
           for (const b of c) {
             if (!b || b.type !== 'tool_result') { continue }
             const t = tools.get(b.tool_use_id)
-            if (t) {
-              const r = toolResult(b)
-              t.done = true
-              t.summary = cut(((b.is_error ? 'Error: ' : '') + r.output).replace(/\s+/g, ' ').trim(), 160)
-              t.output = r.output
-              t.error = r.error
-              if (r.images.length) { t.images = r.images }
-            }
+            if (!t) { continue }
+            const text = resultText(b.content)
+            t.done = true
+            t.output = text.length > SAVED_OUTPUT ? text.slice(0, SAVED_OUTPUT) + '\n… (recortado)' : text
+            t.error = Boolean(b.is_error)
+            t.summary = cut(((t.error ? 'Error: ' : '') + t.output).replace(/\s+/g, ' ').trim(), 160)
+            const n = Math.min(3, countImages(b.content))
+            if (n) { t.imageRef = `${sid}|t|${b.tool_use_id}`; t.imageCount = n; refs.set(t.imageRef, { start, end: nl }) }
           }
           continue
         }
         if (d.isMeta) { continue }
+        // El resumen que escribe Claude Code al compactar: una nota, no un mensaje tuyo.
+        if (d.isCompactSummary || d.isVisibleInTranscriptOnly) {
+          const text = typeof c === 'string' ? c : resultText(c)
+          if (text.trim()) { out.push({ role: 'note', kind: 'compaction', title: 'Claude resumió la conversación anterior para que quepa', text, ts: d.timestamp || null }) }
+          turn = null
+          continue
+        }
         const text = userText(c)
-        const images = contentImages(c)
-        if (!text && !images.length) { continue }
+        const n = Math.min(6, countImages(c))
+        if (!text && !n) { continue }
         turn = null
-        out.push({ role: 'user', text, ts: d.timestamp || null, ...(images.length ? { images } : {}) })
+        const row = { role: 'user', text, ts: d.timestamp || null }
+        if (n) { row.imageRef = `${sid}|u|${str(d.uuid) || start}`; row.imageCount = n; refs.set(row.imageRef, { start, end: nl }) }
+        out.push(row)
       } else if (d.type === 'assistant') {
         if (!turn) { turn = { role: 'assistant', blocks: [], reasoning: '', ts: d.timestamp || null }; out.push(turn) }
         for (const b of Array.isArray(d.message.content) ? d.message.content : []) {
@@ -374,7 +407,7 @@ class ClaudeConnection extends EventEmitter {
           } else if (b.type === 'thinking' && str(b.thinking)) {
             turn.reasoning += (turn.reasoning ? '\n\n' : '') + b.thinking
           } else if (b.type === 'tool_use') {
-            const t = { type: 'tool', id: b.id, name: b.name, args: argsSummary(b.input), input: boundInput(b.input), done: false }
+            const t = { type: 'tool', id: b.id, name: b.name, args: argsSummary(b.input), input: boundInput(b.input, 0, SAVED_FIELD), done: false }
             tools.set(b.id, t)
             turn.blocks.push(t)
             if (b.name === 'TodoWrite') { todos = todosOf(b.input) || todos }
@@ -384,6 +417,10 @@ class ClaudeConnection extends EventEmitter {
     }
     for (const t of tools.values()) { t.done = true }
     if (todos) { this.ui({ kind: 'todos', sid, history: true, revision: 0, ...todos }) }
+    // Dónde están sus imágenes (de los últimos chats abiertos).
+    this.imageIndex.delete(sid)
+    this.imageIndex.set(sid, { file: f, refs })
+    while (this.imageIndex.size > 12) { this.imageIndex.delete(this.imageIndex.keys().next().value) }
     return out.slice(-400)
   }
 
@@ -410,9 +447,9 @@ class ClaudeConnection extends EventEmitter {
     if (s && s.alive) { return s }
     if (!this.exe) { this.exe = which('claude') }
     if (!this.exe) { throw new Error('No encuentro Claude Code en este PC.') }
-    const p = this.pending.get(sid)
+    const p = this.pending.get(sid) || (this.meta.opts && this.meta.opts[sid] ? { ...this.meta.opts[sid], cwd: null } : null)
     const file = this.fileOf(sid)
-    const cwd = p ? p.cwd : this.cwdOf(sid)
+    const cwd = (p && p.cwd) || this.cwdOf(sid)
     if (!cwd) { throw new Error('No encuentro esa conversación de Claude.') }
     try { if (!fs.statSync(cwd).isDirectory()) { throw new Error() } } catch { throw new Error('La carpeta de esta conversación ya no existe: ' + cwd) }
     let extra = splitArgs(this.settings.data.terminals.claudeArgs)
@@ -435,7 +472,7 @@ class ClaudeConnection extends EventEmitter {
       argv = ['/d', '/s', '/c', [this.exe, ...args].map(a => (/[\s&()^|<>"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a)).join(' ')]
     }
     const proc = spawn(exe, argv, { cwd, env: cleanEnv(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
-    s = { sid, cwd, proc, alive: true, busy: false, buf: '', err: '', blocks: new Map(), turnAt: 0, lastUsed: Date.now(), allow: new Set(), queued: 0 }
+    s = { sid, cwd, proc, alive: true, busy: false, buf: '', err: '', blocks: new Map(), turnAt: 0, lastUsed: Date.now(), allow: new Set(), tasks: new Map(), controls: new Map() }
     this.procs.set(sid, s)
     this.pending.delete(sid)
     proc.stdout.setEncoding('utf8')
@@ -474,6 +511,7 @@ class ClaudeConnection extends EventEmitter {
   async interrupt(sid) {
     const s = this.procs.get(sid)
     if (!s || !s.alive) { return { ok: false } }
+    s.interrupted = true
     this.write(s, { type: 'control_request', request_id: crypto.randomUUID(), request: { subtype: 'interrupt' } })
     return { status: 'interrupting' }
   }
@@ -504,8 +542,20 @@ class ClaudeConnection extends EventEmitter {
 
   onMsg(s, m) {
     const sid = s.sid
-    // Lo de los subagentes (Task/Agent) va con parent_tool_use_id: aquí solo el hilo principal.
-    if (m.parent_tool_use_id) { return }
+    // Lo de los subagentes (Task/Agent) va con parent_tool_use_id: no se dibuja en el chat, pero
+    // las herramientas que usan se cuentan en su tarea del panel.
+    if (m.parent_tool_use_id) {
+      if (m.type === 'assistant' && m.message && Array.isArray(m.message.content)) {
+        const t = [...s.tasks.values()].find(x => x.toolUseId === m.parent_tool_use_id)
+        for (const b of m.message.content) {
+          if (!t || !b || b.type !== 'tool_use') { continue }
+          t.tools = (t.tools || 0) + 1
+          t.tool = str(b.name)
+          this.ui({ kind: 'subagent', sid, id: t.id, phase: 'tool', goal: t.goal, tool: t.tool, tools: t.tools })
+        }
+      }
+      return
+    }
     // Actividad con el chat «parado»: Claude empezó otro turno (un mensaje que esperaba en cola).
     const active = m.type === 'assistant' || m.type === 'stream_event' || (m.type === 'system' && m.subtype === 'status' && m.status === 'requesting')
     if (active && !s.busy && s.alive) {
@@ -521,6 +571,8 @@ class ClaudeConnection extends EventEmitter {
           this.ui({ kind: 'info', sid, model: s.model, provider: 'Claude Code' })
         } else if (m.subtype === 'compact_boundary') {
           this.ui({ kind: 'status', sid, text: 'Resumiendo la conversación para que quepa', statusKind: 'compacting' })
+        } else if (/^task_|^background_tasks_changed$/.test(str(m.subtype))) {
+          this.onTask(s, m)
         }
         return
       case 'stream_event': {
@@ -561,16 +613,26 @@ class ClaudeConnection extends EventEmitter {
       case 'control_request':
         if (m.request && m.request.subtype === 'can_use_tool') { this.onPermission(s, m) }
         return
+      case 'control_response': {
+        // La respuesta a un cambio de modelo o de esfuerzo que mandó Pedila.
+        const r = m.response || {}
+        const w = s.controls.get(r.request_id)
+        if (w) { s.controls.delete(r.request_id); clearTimeout(w.t); if (r.subtype === 'success') { w.ok(r.response || {}) } else { w.ko(new Error(str(r.error) || 'Claude no aceptó el cambio')) } }
+        return
+      }
       case 'result': {
         const u = m.usage || {}
         const mu = m.modelUsage && typeof m.modelUsage === 'object' ? Object.values(m.modelUsage)[0] : null
         const it = Array.isArray(u.iterations) && u.iterations.length ? u.iterations[u.iterations.length - 1] : u
         const used = (Number(it.input_tokens) || 0) + (Number(it.cache_read_input_tokens) || 0) + (Number(it.cache_creation_input_tokens) || 0) + (Number(it.output_tokens) || 0)
         if (used) { this.ui({ kind: 'usage', sid, used, max: mu && Number(mu.contextWindow) ? Number(mu.contextWindow) : null, out: Number(u.output_tokens) || null }) }
-        s.busy = false
+        const more = Number(m.queued_turn_count) > 0
+        s.busy = more
+        const stopped = s.interrupted || /^aborted/.test(str(m.terminal_reason))
+        s.interrupted = false
         const failed = m.is_error || (m.subtype && m.subtype !== 'success')
-        this.ui({ kind: 'complete', sid, text: str(m.result), status: failed ? 'error' : 'completed', outcome: failed ? (m.subtype === 'error_during_execution' && /interrupt/i.test(str(m.terminal_reason)) ? 'interrupted' : str(m.subtype) || 'error') : 'completed', ms: Number(m.duration_ms) || (s.turnAt ? Date.now() - s.turnAt : null), out: Number(u.output_tokens) || null })
-        if (!s.busy) { this.ui({ kind: 'running', sid, running: false }) }
+        this.ui({ kind: 'complete', sid, more, text: str(m.result), status: failed ? 'error' : 'completed', outcome: stopped ? 'interrupted' : failed ? (str(m.subtype) || 'error') : 'completed', ms: Number(m.duration_ms) || (s.turnAt ? Date.now() - s.turnAt : null), out: Number(u.output_tokens) || null })
+        if (more) { s.turnAt = Date.now() } else { this.ui({ kind: 'running', sid, running: false }) }
         s.lastUsed = Date.now()
         // El título que pone Claude llega al archivo poco después de la primera respuesta.
         setTimeout(() => this.refreshTitle(sid), 2500)
@@ -578,6 +640,99 @@ class ClaudeConnection extends EventEmitter {
         return
       }
     }
+  }
+
+  /**
+   * Avisos de tareas de Claude Code (task_started, task_updated, task_progress, task_notification,
+   * background_tasks_changed) → los subagentes que el panel ya sabe dibujar.
+   */
+  onTask(s, m) {
+    const sid = s.sid
+    const TYPE = { local_bash: 'Orden en segundo plano', local_agent: 'Agente', remote_agent: 'Agente en la nube', local_workflow: 'Flujo de trabajo', workflow: 'Flujo de trabajo', monitor: 'Vigilancia', in_process_teammate: 'Compañero' }
+    const goalOf = (type, desc) => [TYPE[type] || (type ? type.replace(/_/g, ' ') : ''), str(desc)].filter(Boolean).join(': ') || 'Tarea'
+    const start = (id, type, desc, toolUseId) => {
+      let t = s.tasks.get(id)
+      if (!t) { t = { id, type, goal: goalOf(type, desc), state: 'running', since: Date.now(), toolUseId: toolUseId || '', tools: 0 }; s.tasks.set(id, t) }
+      if (toolUseId) { t.toolUseId = toolUseId }
+      this.ui({ kind: 'subagent', sid, id, phase: 'start', goal: t.goal })
+      return t
+    }
+    const end = (id, status) => {
+      const t = s.tasks.get(id)
+      if (!t || t.state !== 'running') { return }
+      t.state = 'ended'
+      const st = /fail|error/.test(status) ? 'failed' : /kill|stop|cancel/.test(status) ? 'cancelled' : 'completed'
+      this.ui({ kind: 'subagent', sid, id, phase: 'complete', goal: t.goal, status: st, seconds: (Date.now() - t.since) / 1000 })
+    }
+    const id = str(m.task_id)
+    switch (m.subtype) {
+      case 'task_started':
+        if (id) { start(id, str(m.task_type), m.description, str(m.tool_use_id)) }
+        return
+      case 'task_progress': {
+        const t = id && s.tasks.get(id)
+        if (t) { this.ui({ kind: 'subagent', sid, id, phase: 'progress', goal: t.goal, text: str(m.description || m.summary || (m.last_tool_name ? 'usando ' + m.last_tool_name : '')) }) }
+        return
+      }
+      case 'task_updated': {
+        const st = str(m.patch && m.patch.status)
+        if (id && st && st !== 'running' && st !== 'pending') { end(id, st) }
+        return
+      }
+      case 'task_notification':
+        if (id) { end(id, str(m.status)) }
+        return
+      case 'background_tasks_changed':
+        for (const t of Array.isArray(m.tasks) ? m.tasks : []) {
+          if (t && t.task_id && !s.tasks.has(str(t.task_id))) { start(str(t.task_id), str(t.task_type), t.description) }
+        }
+    }
+  }
+
+  /** Manda un control a claude y espera su respuesta (cambiar el modelo, el esfuerzo…). */
+  control(s, request, ms = 15000) {
+    return new Promise((ok, ko) => {
+      const id = crypto.randomUUID()
+      const t = setTimeout(() => { s.controls.delete(id); ko(new Error('Claude no respondió al cambio a tiempo')) }, ms)
+      s.controls.set(id, { ok, ko, t })
+      try { this.write(s, { type: 'control_request', request_id: id, request }) } catch (e) { clearTimeout(t); s.controls.delete(id); ko(e) }
+    })
+  }
+
+  /**
+   * Cambiar el modelo o el esfuerzo de un chat ya empezado. Con su proceso abierto, en caliente
+   * (set_model y apply_flag_settings, como el SDK); si no, al abrirlo la próxima vez (--model/--effort).
+   * Se recuerda para ese chat.
+   */
+  async setChatOptions(sid, { model, reasoning } = {}) {
+    const o = { ...((this.meta.opts && this.meta.opts[sid]) || {}) }
+    if (model !== undefined) { if (model === null) { delete o.model } else if (MODELS.some(m => m.id === model)) { o.model = model } else { throw new Error('modelo no válido') } }
+    if (reasoning !== undefined) { if (reasoning === null || reasoning === '') { delete o.effort } else if (EFFORTS.includes(reasoning)) { o.effort = reasoning } else { throw new Error('esfuerzo no válido') } }
+    const pend = this.pending.get(sid)
+    if (pend) {
+      // Chat nuevo aún sin mensajes: se arrancará ya con esto.
+      if (model !== undefined) { pend.model = o.model || null }
+      if (reasoning !== undefined) { pend.effort = o.effort || null }
+      return { applied: 'next', model: o.model || null, effort: o.effort || null }
+    }
+    if (!this.meta.opts) { this.meta.opts = {} }
+    if (Object.keys(o).length) { this.meta.opts[sid] = o } else { delete this.meta.opts[sid] }
+    this.saveMeta()
+    const s = this.procs.get(sid)
+    let shown = null
+    if (s && s.alive) {
+      if (model !== undefined) { const r = await this.control(s, { subtype: 'set_model', model: o.model || undefined }); shown = str(r.model) || o.model || null }
+      if (reasoning !== undefined) { await this.control(s, { subtype: 'apply_flag_settings', settings: { effortLevel: o.effort || null } }) }
+      if (shown) { this.ui({ kind: 'info', sid, model: shown, provider: 'Claude Code' }) }
+      return { applied: 'now', model: shown || o.model || null, effort: o.effort || null }
+    }
+    return { applied: 'next', model: o.model || null, effort: o.effort || null }
+  }
+
+  /** Lo elegido para un chat (para los botones de modelo y esfuerzo). */
+  chatOptions(sid) {
+    const o = (this.meta.opts && this.meta.opts[sid]) || this.pending.get(sid) || {}
+    return { model: o.model || null, effort: o.effort || null }
   }
 
   refreshTitle(sid) {
@@ -623,6 +778,12 @@ class ClaudeConnection extends EventEmitter {
   onExit(s, code) {
     s.alive = false
     if (this.procs.get(s.sid) === s) { this.procs.delete(s.sid) }
+    // Sus tareas en segundo plano mueren con el proceso; los cambios pendientes ya no llegarán.
+    for (const t of s.tasks ? s.tasks.values() : []) {
+      if (t.state === 'running') { t.state = 'ended'; this.ui({ kind: 'subagent', sid: s.sid, id: t.id, phase: 'complete', goal: t.goal, status: 'cancelled', seconds: (Date.now() - t.since) / 1000 }) }
+    }
+    for (const w of s.controls ? s.controls.values() : []) { clearTimeout(w.t); w.ko(new Error('Claude se cerró antes de aplicar el cambio')) }
+    if (s.controls) { s.controls.clear() }
     for (const [k, pr] of this.prompts) { if (pr.sid === s.sid) { this.prompts.delete(k); this.ui({ kind: 'prompt-done', key: k, sid: s.sid }) } }
     if (s.busy) {
       const why = s.err.trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 300)
@@ -701,10 +862,36 @@ class ClaudeConnection extends EventEmitter {
   // Lo que el panel pide a los Hermes y aquí no aplica.
   async modelUsage() { return null }
   async activeList() { return null }
-  async subagents() { return [] }
+  /** Las tareas en marcha de un chat (la comprobación del panel no las da por terminadas). */
+  async subagents(sid) {
+    const s = this.procs.get(sid)
+    if (!s || !s.alive) { return [] }
+    return [...s.tasks.values()].filter(t => t.state === 'running').map(t => ({ id: t.id, status: 'running', tool: t.tool || '', tools: t.tools || null }))
+  }
   async quotas() { return { state: 'none', providers: [], limits: this.limits } }
   async installQuotaPlugin() { throw new Error('No aplica a Claude Code') }
-  async media() { throw new Error('No aplica a Claude Code') }
+  async media(ref) {
+    const m = /^([0-9a-f-]{36})\|([tu])\|([^|]{1,120})\|(\d)$/i.exec(String(ref || ''))
+    if (!m) { throw new Error('imagen no válida') }
+    const [, sid, kind, key, idx] = m
+    const base = `${sid}|${kind}|${key}`
+    let ix = this.imageIndex.get(sid)
+    if (!ix || !ix.refs.has(base)) { await this.transcript(sid); ix = this.imageIndex.get(sid) }
+    const r = ix && ix.refs.get(base)
+    if (!r) { throw new Error('no encuentro esa imagen') }
+    const fd = fs.openSync(ix.file, 'r')
+    let d
+    try {
+      const b = Buffer.alloc(r.end - r.start)
+      fs.readSync(fd, b, 0, b.length, r.start)
+      d = JSON.parse(b.toString('utf8'))
+    } finally { fs.closeSync(fd) }
+    const content = d && d.message ? d.message.content : null
+    const blocks = kind === 'u' ? content : (Array.isArray(content) ? (content.find(x => x && x.type === 'tool_result' && x.tool_use_id === key) || {}).content : null)
+    const im = contentImages(blocks)[Number(idx)]
+    if (!im) { throw new Error('no encuentro esa imagen') }
+    return im.url
+  }
 }
 
 module.exports = { ClaudeConnection, summarize, userText, todosOf }
