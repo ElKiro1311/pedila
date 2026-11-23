@@ -1,15 +1,16 @@
 'use strict'
-// «Servidor»: un Hermes en otra máquina (`hermes dashboard` protegido con usuario y contraseña).
-// Igual que Hermes Desktop con un gateway remoto de tipo cookie:
-//  - POST /auth/password-login {provider:'basic', username, password} deja las cookies
-//    hermes_session_at (12 h), hermes_session_rt (30 días) y hermes_session_provider;
-//  - el REST va con esas cookies; el middleware renueva la de acceso con la de refresco y la
-//    devuelve en Set-Cookie, así que cada respuesta actualiza el tarro;
-//  - el WebSocket necesita un ticket de un solo uso (30 s) de POST /api/auth/ws-ticket, en ?ticket=.
-// Las cookies se guardan cifradas con safeStorage (DPAPI). La contraseña no se guarda nunca.
+// "Server": a Hermes on another machine (`hermes dashboard` protected with a username and password). Like
+// Hermes Desktop with a remote gateway of the cookie kind:
+// - POST /auth/password-login {provider:'basic', username, password} leaves the cookies hermes_session_at
+// (12 h), hermes_session_rt (30 days) and hermes_session_provider;
+// - REST goes with those cookies; the middleware renews the access one with the refresh one and returns it
+// in Set-Cookie, so each answer updates the jar;
+// - the WebSocket needs a single-use ticket (30 s) from POST /api/auth/ws-ticket, in ?ticket=.
+// The cookies are stored encrypted with safeStorage (DPAPI). The password is never stored.
+const { tr } = require('./i18n')
 
 class NeedLogin extends Error {
-  constructor(msg = 'Hay que iniciar sesión en el Hermes del servidor') {
+  constructor(msg = tr("You need to sign in to the server's Hermes")) {
     super(msg)
     this.needLogin = true
   }
@@ -17,7 +18,7 @@ class NeedLogin extends Error {
 
 class NeedSetup extends Error {
   constructor() {
-    super('Falta la dirección del servidor (Ajustes → Servidor)')
+    super(tr("The server's address is missing (Settings → Server)"))
     this.setup = true
   }
 }
@@ -56,7 +57,7 @@ class RemoteTransport {
       const obj = await this.secrets.decrypt(enc)
       for (const [k, v] of Object.entries(obj.cookies || {})) { if (typeof v === 'string') { this.jar.set(k, v) } }
     } catch (e) {
-      this.log.warn('[servidor] no pude descifrar la sesión guardada:', e.message)
+      this.log.warn("[server] couldn't decrypt the stored session:", e.message)
     }
   }
 
@@ -81,7 +82,7 @@ class RemoteTransport {
 
   persistSoon() {
     clearTimeout(this.saveTimer)
-    this.saveTimer = setTimeout(() => this.persist().catch(e => this.log.warn('[servidor] no pude guardar la sesión:', e.message)), 300)
+    this.saveTimer = setTimeout(() => this.persist().catch(e => this.log.warn("[server] couldn't store the session:", e.message)), 300)
   }
 
   async persist() {
@@ -94,7 +95,7 @@ class RemoteTransport {
     return this.settings.data.server.urls
   }
 
-  /** La primera dirección que contesta (la de casa primero, la alternativa después); se recuerda 60 s. */
+  /** The first address that answers (the home one first, the alternative one after); remembered for 60 s. */
   async pickBase(force = false) {
     if (!this.urls().length) { throw new NeedSetup() }
     if (this.base && !force && Date.now() - this.baseAt < 60000) { return this.base }
@@ -109,15 +110,15 @@ class RemoteTransport {
           this.status = st
           return u
         }
-        lastErr = new Error(`${u} respondió ${res.status}`)
+        lastErr = new Error(tr('{0} answered {1}', u, res.status))
       } catch (e) { lastErr = e }
     }
     this.base = null
-    throw new Error('No llego al Hermes del servidor' + (lastErr ? ` (${lastErr.cause?.code || lastErr.message})` : ''))
+    throw new Error(tr("Can't reach the server's Hermes") + (lastErr ? ` (${lastErr.cause?.code || lastErr.message})` : ''))
   }
 
   async login(username, password) {
-    if (!this.urls().length) { return { ok: false, error: 'Primero pon la dirección del servidor en Ajustes → Servidor.' } }
+    if (!this.urls().length) { return { ok: false, error: tr("First put the server's address in Settings → Server.") } }
     const base = await this.pickBase(true)
     const res = await fetch(base + '/auth/password-login', {
       method: 'POST',
@@ -126,12 +127,12 @@ class RemoteTransport {
       redirect: 'manual',
       signal: AbortSignal.timeout(20000)
     })
-    if (res.status === 429) { return { ok: false, error: 'Demasiados intentos. Espera unos minutos y vuelve a probar.' } }
-    if (res.status === 401 || res.status === 403) { return { ok: false, error: 'Usuario o contraseña incorrectos.' } }
-    if (!res.ok) { return { ok: false, error: `El servidor respondió ${res.status}.` } }
+    if (res.status === 429) { return { ok: false, error: tr('Too many attempts. Wait a few minutes and try again.') } }
+    if (res.status === 401 || res.status === 403) { return { ok: false, error: tr('Wrong username or password.') } }
+    if (!res.ok) { return { ok: false, error: tr('The server answered {0}.', res.status) } }
     this.jar.clear()
     this.absorb(res)
-    if (!this.hasSession()) { return { ok: false, error: 'El servidor no devolvió la sesión.' } }
+    if (!this.hasSession()) { return { ok: false, error: tr("The server didn't return the session.") } }
     await this.persist()
     return { ok: true }
   }
@@ -151,10 +152,10 @@ class RemoteTransport {
     const base = await this.pickBase()
     const res = await fetch(base + '/api/auth/ws-ticket', { method: 'POST', headers: { Cookie: this.cookieHeader() }, signal: AbortSignal.timeout(15000) })
     this.absorb(res)
-    if (res.status === 401) { throw new NeedLogin('La sesión del servidor caducó (¿se reinició Hermes allí?)') }
-    if (!res.ok) { throw new Error(`No pude pedir el ticket al servidor (${res.status})`) }
+    if (res.status === 401) { throw new NeedLogin(tr('The server session expired (was Hermes restarted there?)')) }
+    if (!res.ok) { throw new Error(tr("Couldn't get a ticket from the server ({0})", res.status)) }
     const j = await res.json()
-    if (!j || typeof j.ticket !== 'string') { throw new Error('El servidor no dio ticket') }
+    if (!j || typeof j.ticket !== 'string') { throw new Error(tr('The server gave no ticket')) }
     return { url: base.replace(/^http/, 'ws') + '/api/ws?ticket=' + encodeURIComponent(j.ticket), protocols: null }
   }
 
@@ -166,14 +167,14 @@ class RemoteTransport {
     if (body !== undefined) { headers['Content-Type'] = 'application/json' }
     const res = await fetch(base + p, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) })
     this.absorb(res)
-    if (res.status === 401) { throw new NeedLogin('La sesión del servidor caducó') }
+    if (res.status === 401) { throw new NeedLogin(tr('The server session expired')) }
     const text = await res.text()
     let json = null
     try { json = JSON.parse(text) } catch {}
     return { status: res.status, json }
   }
 
-  /** Lo que Hermes enseña sin iniciar sesión (/api/status: versión y si está trabajando). */
+  /** What Hermes shows without signing in (/api/status: version and whether it's working). */
   async publicJson(p, { timeoutMs = 15000 } = {}) {
     const base = await this.pickBase()
     const res = await fetch(base + p, { headers: this.hasSession() ? { Cookie: this.cookieHeader() } : {}, signal: AbortSignal.timeout(timeoutMs) })

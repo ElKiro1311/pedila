@@ -1,21 +1,22 @@
 'use strict'
-// Actualizaciones (GitHub Releases o una carpeta web con version.json + instalador) y estadísticas de uso.
+// Updates (GitHub Releases or a web folder with version.json + installer) and usage statistics.
 const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
+const { tr, getLang } = require('./i18n')
 
-const INSTALADOR = 'Pedila-Setup.exe'
+const INSTALLER = 'Pedila-Setup.exe'
 
 /**
- * ¿`a` es más nueva que `b`? Como Semantic Versioning (semver.org, §11): primero x.y.z; con el
- * mismo número, la estable gana a su -alfa/-beta (0.8.0 > 0.8.0-beta). Los sufijos se comparan
- * campo a campo (separados por «.»): los numéricos como números (beta.10 > beta.9) y por debajo de
- * los de texto, y el texto en orden ASCII (beta > alfa); con todo igual, gana el que tiene más
- * campos. Lo que va tras «+» (datos de compilación) no cuenta. Todo lo que siga a los números es
- * sufijo, con o sin guion: una errata en version.json («0.8.0beta», «0.8.0 beta») sigue siendo esa
- * beta y no la 0.8.0 final, que se ofrecería después de cada instalación.
+ * Is `a` newer than `b`? As in Semantic Versioning (semver.org, §11): first x.y.z; with the same number, the
+ * stable one beats its -alpha/-beta (0.8.0 > 0.8.0-beta). Suffixes are compared field by field (separated by
+ * "."): numeric ones as numbers (beta.10 > beta.9) and below the text ones, and text in ASCII order (beta >
+ * alpha); with everything equal, the one with more fields wins. What comes after "+" (build data) doesn't
+ * count. Everything that follows the numbers is a suffix, with or without a hyphen: a typo in version.json
+ * ("0.8.0beta", "0.8.0 beta") is still that beta and not the final 0.8.0, which would be offered after every
+ * installation.
  */
 function newer(a, b) {
   const parse = v => {
@@ -47,77 +48,79 @@ function newer(a, b) {
 const UA = { 'User-Agent': 'pedila-updater', Accept: 'application/vnd.github+json' }
 
 function parseManifest(j) {
-  if (!j || typeof j.version !== 'string' || !/^[0-9a-f]{64}$/i.test(String(j.sha256 || ''))) { throw new Error('version.json no válido') }
-  return { version: j.version, notes: typeof j.notas === 'string' ? j.notas.slice(0, 2000) : '', sha256: j.sha256.toLowerCase() }
+  if (!j || typeof j.version !== 'string' || !/^[0-9a-f]{64}$/i.test(String(j.sha256 || ''))) { throw new Error(tr('invalid version.json')) }
+  // The notes, in both languages: `notes` in English and `notas` in Spanish (the only one versions before 0.16 read).
+  const notes = [getLang() === 'es' ? j.notas : j.notes, j.notes, j.notas].find(n => typeof n === 'string' && n) || ''
+  return { version: j.version, notes: notes.slice(0, 2000), sha256: j.sha256.toLowerCase() }
 }
 
 /**
- * Busca versión nueva. Con `url` usa esa carpeta (version.json + Pedila-Setup.exe); sin ella, la
- * última versión publicada en GitHub Releases del repositorio (`owner/repo`).
+ * Looks for a new version. With `url` it uses that folder (version.json + Pedila-Setup.exe); without it, the
+ * latest version published in the repository's GitHub Releases (`owner/repo`).
  */
 async function checkUpdate(url, current, repo) {
   if (url) {
     const res = await fetch(`${url}/version.json`, { signal: AbortSignal.timeout(10000), cache: 'no-store' })
-    if (!res.ok) { throw new Error(`la carpeta de actualizaciones respondió ${res.status}`) }
+    if (!res.ok) { throw new Error(tr('the updates folder answered {0}', res.status)) }
     const m = parseManifest(await res.json())
-    return { ...m, available: newer(m.version, current), download: `${url}/${INSTALADOR}` }
+    return { ...m, available: newer(m.version, current), download: `${url}/${INSTALLER}` }
   }
-  if (!repo) { return { available: false, reason: 'sin origen' } }
+  if (!repo) { return { available: false, reason: 'no source' } }
   const rel = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, { headers: UA, signal: AbortSignal.timeout(15000) })
-  if (rel.status === 404) { return { available: false, reason: 'sin versiones publicadas' } }
-  if (!rel.ok) { throw new Error(`GitHub respondió ${rel.status}`) }
+  if (rel.status === 404) { return { available: false, reason: 'no published versions' } }
+  if (!rel.ok) { throw new Error(tr('GitHub answered {0}', rel.status)) }
   const r = await rel.json()
   const assets = Array.isArray(r.assets) ? r.assets : []
   const man = assets.find(a => a.name === 'version.json')
-  const exe = assets.find(a => a.name === INSTALADOR)
-  if (!man || !exe) { return { available: false, reason: 'la versión publicada no trae version.json e instalador' } }
+  const exe = assets.find(a => a.name === INSTALLER)
+  if (!man || !exe) { return { available: false, reason: tr("the published version doesn't have version.json and the installer") } }
   const mres = await fetch(man.browser_download_url, { headers: { 'User-Agent': UA['User-Agent'] }, signal: AbortSignal.timeout(15000) })
-  if (!mres.ok) { throw new Error(`no pude leer version.json (${mres.status})`) }
+  if (!mres.ok) { throw new Error(tr("couldn't read version.json ({0})", mres.status)) }
   const m = parseManifest(await mres.json())
   return { ...m, available: newer(m.version, current), download: exe.browser_download_url }
 }
 
 /**
- * El .cmd que instala la versión nueva y vuelve a abrir Pedila: el instalador en silencio (cmd espera
- * a que acabe) y después la app con `args` (['--oculto'] = sigue en la bandeja; ['--sin-foco'] = se
- * ve, pero sin quitar el foco). Las rutas NO van dentro: cmd lee el .cmd con la página de códigos
- * del sistema y rompería una ruta con tildes o «ñ» (C:\Users\José\…). Llegan en las variables de
- * entorno PEDILA_SETUP y PEDILA_EXE, que cmd recibe tal cual. Pura.
+ * The .cmd that installs the new version and opens Pedila again: the installer silently (cmd waits for it to
+ * end) and then the app with `args` (['--oculto'] = stays in the tray; ['--sin-foco'] = shows, but without
+ * taking the focus). The paths do NOT go inside: cmd reads the .cmd with the system's code page and would
+ * break a path with accents or "ñ" (C:\Users\José\…). They arrive in the PEDILA_SETUP and PEDILA_EXE
+ * environment variables, which cmd gets as they are. Pure.
  */
 function relaunchScript(args = []) {
   const extra = args.filter(a => /^--[a-z-]+$/.test(a))
   return ['@echo off', '"%PEDILA_SETUP%" /S', `start "" "%PEDILA_EXE%"${extra.length ? ' ' + extra.join(' ') : ''}`, ''].join('\r\n')
 }
 
-/** Baja el instalador de la versión nueva y comprueba su SHA-256. → ruta del instalador comprobado. */
+/** Downloads the new version's installer and checks its SHA-256. → path of the checked installer. */
 async function downloadUpdate(info, log) {
   const res = await fetch(info.download, { headers: { 'User-Agent': 'pedila-updater' }, signal: AbortSignal.timeout(15 * 60000) })
-  if (!res.ok) { throw new Error(`no pude bajar el instalador (${res.status})`) }
+  if (!res.ok) { throw new Error(tr("couldn't download the installer ({0})", res.status)) }
   const buf = Buffer.from(await res.arrayBuffer())
   const sha = crypto.createHash('sha256').update(buf).digest('hex')
-  if (sha !== info.sha256) { throw new Error('el instalador descargado no coincide con su huella (SHA-256)') }
+  if (sha !== info.sha256) { throw new Error(tr("the downloaded installer doesn't match its checksum (SHA-256)")) }
   const file = path.join(os.tmpdir(), `Pedila-Setup-${info.version}.exe`)
   fs.writeFileSync(file, buf)
-  log.info(`[actualizar] ${info.version} descargada y comprobada`)
+  log.info(`[update] ${info.version} downloaded and checked`)
   return file
 }
 
-/** ¿Sigue ahí el instalador ya comprobado y no lo ha cambiado nadie? */
+/** Is the installer that was already checked still there, with nobody having changed it? */
 function verifiedFile(file, sha256) {
   try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') === sha256 } catch { return false }
 }
 
 /**
- * Lanza en silencio el instalador ya comprobado y, al acabar, vuelve a abrir la app (`exe`, con
- * `args`). Sin `exe` (en desarrollo) solo instala.
+ * Silently launches the installer that was already checked and, when it ends, opens the app again (`exe`,
+ * with `args`). Without `exe` (in development) it only installs.
  */
 function launchInstaller(file, log, { exe = '', args = [] } = {}) {
-  log.info(`[actualizar] lanzo el instalador${args.length ? ` (al volver: ${args.join(' ')})` : ''}`)
+  log.info(`[update] launching the installer${args.length ? ` (on coming back: ${args.join(' ')})` : ''}`)
   let child
   if (exe) {
-    const script = path.join(os.tmpdir(), 'pedila-actualizar.cmd')
+    const script = path.join(os.tmpdir(), 'pedila-update.cmd')
     fs.writeFileSync(script, relaunchScript(args))
-    // /s y las comillas dobles: así cmd acepta una ruta con espacios.
+    // /s and the double quotes: that way cmd takes a path with spaces.
     child = spawn('cmd.exe', ['/d', '/s', '/c', `""${script}""`], { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true, env: { ...process.env, PEDILA_SETUP: file, PEDILA_EXE: exe } })
   } else {
     child = spawn(file, ['/S'], { detached: true, stdio: 'ignore', windowsHide: true })
@@ -126,13 +129,13 @@ function launchInstaller(file, log, { exe = '', args = [] } = {}) {
   return { ok: true }
 }
 
-/** Baja, comprueba y lanza (el botón «Actualizar y reiniciar»). */
+/** Downloads, checks and launches (the "Update and restart" button). */
 async function installUpdate(info, log, opts = {}) {
   const file = await downloadUpdate(info, log)
   return launchInstaller(file, log, opts)
 }
 
-/** Resumen de uso a partir de las filas de chats (todo local). */
+/** Usage summary from the chat rows (all local). */
 function usageStats(rows, now = Date.now()) {
   const ms = v => { const n = Number(v); return Number.isFinite(n) ? (n < 1e12 ? n * 1000 : n) : Date.parse(v) || 0 }
   const day = 86400000
@@ -144,13 +147,13 @@ function usageStats(rows, now = Date.now()) {
     const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     days.push({ date, chats: 0, messages: 0, input: 0, output: 0 })
   }
-  // Un Map y no un objeto: un modelo llamado «constructor» o «__proto__» no debe chocar con Object.
+  // A Map and not an object: a model called "constructor" or "__proto__" must not clash with Object.
   const models = new Map()
   let input = 0
   let output = 0
   let messages = 0
-  // La última tarea: el chat con la actividad más reciente (Hermes la da por su último mensaje, o
-  // por el latido que deja mientras trabaja), venga de Pedila, de Hermes Desktop o de otro sitio.
+  // The last task: the chat with the most recent activity (Hermes gives it by its last message, or by the
+  // heartbeat it leaves while working), whether it comes from Pedila, Hermes Desktop or elsewhere.
   let last = null
   for (const r of rows) {
     const la = ms(r.lastActive || r.startedAt)
@@ -172,9 +175,9 @@ function usageStats(rows, now = Date.now()) {
     output += r.outputTokens || 0
     messages += r.messages || 0
   }
-  // Con el reloj de Hermes adelantado, la última actividad sería del futuro: como mucho, ahora.
+  // With Hermes's clock ahead, the last activity would be in the future: now, at most.
   if (last && last.at > now) { last.at = now }
-  // Hoy y los últimos 7 días (cada chat cuenta en el día en que empezó).
+  // Today and the last 7 days (each chat counts on the day it started).
   const sum = list => list.reduce((a, d) => ({ chats: a.chats + d.chats, messages: a.messages + d.messages, input: a.input + d.input, output: a.output + d.output }), { chats: 0, messages: 0, input: 0, output: 0 })
   return {
     today: sum(days.slice(-1)),
@@ -185,8 +188,8 @@ function usageStats(rows, now = Date.now()) {
     output,
     last,
     days,
-    // Los modelos, de más a menos tokens (leídos + escritos), sumando los chats de la lista. El
-    // panel prefiere los de las estadísticas de Hermes (modelUsageFrom), que cuentan más cosas.
+    // The models, from most to fewest tokens (read + written), adding up the list's chats. The panel
+    // prefers the ones from Hermes's statistics (modelUsageFrom), which count more things.
     models: [...models.values()].sort(byTokens)
   }
 }
@@ -195,16 +198,15 @@ const tokens = m => m.input + m.output
 const byTokens = (a, b) => tokens(b) - tokens(a) || (a.model < b.model ? -1 : a.model > b.model ? 1 : 0)
 const modelId = v => {
   const s = typeof v === 'string' ? v.trim().slice(0, 200) : ''
-  return s && s !== 'unknown' ? s : 'desconocido'
+  return s && s !== 'unknown' ? s : tr('unknown')
 }
 
 /**
- * Los modelos de las estadísticas del propio Hermes (`by_model` de GET /api/analytics/usage, lo que
- * enseña la página de uso de Hermes Desktop) en la forma del panel: { model, input, output, tasks },
- * de más a menos tokens. Hermes suma ahí todos sus chats (también los de subagentes y herramientas)
- * y lo que gastan sus tareas auxiliares (resumir la memoria, poner títulos, ver imágenes…), que
- * viene en `aux_tasks` y ya está dentro de los totales; `tasks` lo desglosa por tarea. null si la
- * respuesta no trae la lista.
+ * The models of Hermes's own statistics (`by_model` in GET /api/analytics/usage, what Hermes Desktop's usage
+ * page shows) in the panel's shape: { model, input, output, tasks }, from most to fewest tokens. There
+ * Hermes adds up all its chats (subagents' and tools' too) and what its auxiliary tasks spend (summarizing
+ * memory, writing titles, looking at images…), which comes in `aux_tasks` and is already inside the totals;
+ * `tasks` breaks it down by task. null if the answer doesn't bring the list.
  */
 function modelUsageFrom(j) {
   if (!j || typeof j !== 'object' || !Array.isArray(j.by_model)) { return null }
@@ -229,4 +231,4 @@ function modelUsageFrom(j) {
   return [...out.values()].sort(byTokens).slice(0, 200)
 }
 
-module.exports = { checkUpdate, installUpdate, downloadUpdate, launchInstaller, verifiedFile, relaunchScript, usageStats, modelUsageFrom, newer, INSTALADOR }
+module.exports = { checkUpdate, installUpdate, downloadUpdate, launchInstaller, verifiedFile, relaunchScript, usageStats, modelUsageFrom, newer, INSTALLER }

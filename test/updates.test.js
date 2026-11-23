@@ -1,6 +1,6 @@
 'use strict'
-// Actualizaciones solas: la versión nueva de Hermes (cuándo se instala y cuándo no), el .cmd que
-// reinstala Pedila y la vuelve a abrir, y los ajustes nuevos.
+// Automatic updates: Hermes's new version (when it installs and when it doesn't), the .cmd that reinstalls
+// Pedila and opens it again, and the new settings.
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -13,80 +13,81 @@ const { HermesUpdates, infoFrom, decide, newestActivity, rosterBusy, IDLE_MS } =
 
 const MIN = 60 * 1000
 
-test('ajustes: instalar solas las versiones de Pedila y de Hermes viene encendido y se puede apagar', () => {
+test("settings: installing Pedila's and Hermes's versions automatically comes on and can be turned off", () => {
   const d = sanitize({})
   assert.equal(d.updates.autoInstall, true)
   assert.equal(d.hermes.autoUpdate, true)
   const s = sanitize({ updates: { autoInstall: false }, hermes: { autoUpdate: false } })
   assert.equal(s.updates.autoInstall, false)
   assert.equal(s.hermes.autoUpdate, false)
-  assert.equal(sanitize({ hermes: { autoUpdate: 'sí' } }).hermes.autoUpdate, true)
+  assert.equal(sanitize({ hermes: { autoUpdate: 'yes' } }).hermes.autoUpdate, true)
 })
 
-test('versión de Hermes: git que se puede actualizar, volver atrás, Docker y sin respuesta', () => {
+test('Hermes version: git that can be updated, going back, Docker and no answer', () => {
   const git = infoFrom({ install_method: 'git', can_apply: true, current_version: '0.23.0', update_available: true, source_version: '0.23.2' }, '', '9.9.9')
   assert.deepEqual(git, { version: '0.23.0', latest: '0.23.2', available: true, canApply: true, method: 'git' })
-  // Esta compilación es más nueva que la estable: «actualizar» sería volver atrás, y eso no se hace solo.
+  // This build is newer than the stable one: "updating" would be going back, and that isn't done
+  // automatically.
   assert.equal(infoFrom({ install_method: 'git', can_apply: true, current_version: '0.24.0', update_available: true, rollback_to: '0.23.2', source_version: '0.23.2' }).available, false)
   const docker = infoFrom({ install_method: 'managed-runtime', can_apply: false, current_version: '0.23.1', update_available: false }, '', 'v0.23.2')
   assert.deepEqual(docker, { version: '0.23.1', latest: '0.23.2', available: true, canApply: false, method: 'managed-runtime' })
   assert.equal(infoFrom(null, '0.23.2', '0.23.2').available, false)
-  assert.equal(infoFrom(null, '0.23.1', '').available, false, 'sin la versión publicada no se inventa nada')
+  assert.equal(infoFrom(null, '0.23.1', '').available, false, 'without the published version nothing is made up')
   assert.equal(infoFrom(null, '0.23.1', '0.23.2').canApply, false)
 })
 
-test('cuándo se instala Hermes solo', () => {
+test('when Hermes installs itself', () => {
   const now = 100 * MIN
   const info = { version: '0.23.0', latest: '0.23.2', available: true, canApply: true }
   const base = { info, watchingSince: now - 11 * MIN, lastBusyAt: 0, lastActive: now - 30 * MIN, busy: false, applying: null, lastResult: null }
-  assert.equal(decide(base, { now, auto: true }), 'instalar')
-  assert.equal(decide({ ...base, info: { ...info, available: false } }, { now, auto: true }), 'al-dia')
-  assert.equal(decide({ ...base, info: { ...info, canApply: false } }, { now, auto: true }), 'servidor')
+  assert.equal(decide(base, { now, auto: true }), 'install')
+  assert.equal(decide({ ...base, info: { ...info, available: false } }, { now, auto: true }), 'up-to-date')
+  assert.equal(decide({ ...base, info: { ...info, canApply: false } }, { now, auto: true }), 'server')
   assert.equal(decide(base, { now, auto: false }), 'manual')
-  assert.equal(decide({ ...base, watchingSince: now - 5 * MIN }, { now, auto: true }), 'observando')
-  assert.equal(decide({ ...base, busy: true }, { now, auto: true }), 'en-uso')
-  assert.equal(decide({ ...base, lastBusyAt: now - 9 * MIN }, { now, auto: true }), 'en-uso')
-  assert.equal(decide({ ...base, lastActive: now - 2 * MIN }, { now, auto: true }), 'en-uso')
-  assert.equal(decide({ ...base, lastResult: { ok: false, to: '0.23.2', at: now - 60 * MIN } }, { now, auto: true }), 'fallo-reciente')
-  // Pasadas 6 h, o con otra versión nueva, se vuelve a intentar.
-  assert.equal(decide({ ...base, lastResult: { ok: false, to: '0.23.2', at: now - 7 * 60 * MIN } }, { now: now, auto: true }), 'instalar')
-  assert.equal(decide({ ...base, lastResult: { ok: false, to: '0.23.1', at: now - MIN } }, { now, auto: true }), 'instalar')
-  assert.equal(decide({ ...base, applying: { at: now } }, { now, auto: true }), 'instalando')
-  // Sin poder comprobar subagentes o chats, no; y tampoco si tú estás usando Pedila o el PC.
-  assert.equal(decide({ ...base, blind: true }, { now, auto: true }), 'sin-saber')
-  assert.equal(decide(base, { now, auto: true, userBusy: 'usas el PC' }), 'tu-uso')
-  assert.equal(decide({ ...base, busy: true }, { now, auto: true, userBusy: 'usas el PC' }), 'en-uso')
+  assert.equal(decide({ ...base, watchingSince: now - 5 * MIN }, { now, auto: true }), 'watching')
+  assert.equal(decide({ ...base, busy: true }, { now, auto: true }), 'in-use')
+  assert.equal(decide({ ...base, lastBusyAt: now - 9 * MIN }, { now, auto: true }), 'in-use')
+  assert.equal(decide({ ...base, lastActive: now - 2 * MIN }, { now, auto: true }), 'in-use')
+  assert.equal(decide({ ...base, lastResult: { ok: false, to: '0.23.2', at: now - 60 * MIN } }, { now, auto: true }), 'recent-failure')
+  // After 6 h, or with another new version, it's tried again.
+  assert.equal(decide({ ...base, lastResult: { ok: false, to: '0.23.2', at: now - 7 * 60 * MIN } }, { now: now, auto: true }), 'install')
+  assert.equal(decide({ ...base, lastResult: { ok: false, to: '0.23.1', at: now - MIN } }, { now, auto: true }), 'install')
+  assert.equal(decide({ ...base, applying: { at: now } }, { now, auto: true }), 'installing')
+  // When subagents or chats can't be checked, no; nor if you're using Pedila or the PC.
+  assert.equal(decide({ ...base, blind: true }, { now, auto: true }), 'unknown')
+  assert.equal(decide(base, { now, auto: true, userBusy: 'the PC is in use' }), 'user-busy')
+  assert.equal(decide({ ...base, busy: true }, { now, auto: true, userBusy: 'the PC is in use' }), 'in-use')
 })
 
-test('subagent.roster: subagentes o procesos en segundo plano', () => {
+test('subagent.roster: subagents or background processes', () => {
   assert.equal(rosterBusy({ sessions: [] }), false)
   assert.equal(rosterBusy({ sessions: [{ session_id: 'a', subagents: 0, background: 0 }] }), false)
   assert.equal(rosterBusy({ sessions: [{ session_id: 'a', subagents: 1, background: 0 }] }), true)
   assert.equal(rosterBusy({ sessions: [{ session_id: 'a', subagents: 0, background: 2 }] }), true)
-  assert.equal(rosterBusy(null), null, 'una respuesta rara no se da por «nada en marcha»')
+  assert.equal(rosterBusy(null), null, 'an odd answer isn\'t taken for "nothing running"')
   assert.equal(rosterBusy({}), null)
 })
 
-test('actividad más reciente de los chats de Hermes (segundos o milisegundos)', () => {
+test("most recent activity of Hermes's chats (seconds or milliseconds)", () => {
   assert.equal(newestActivity([{ last_active: 1000 }, { last_active: 2000.5 }, { last_activity_at: 1500 }]), 2000500)
   assert.equal(newestActivity([{ last_active: 1795102496000 }]), 1795102496000)
   assert.equal(newestActivity([]), 0)
   assert.equal(newestActivity(null), 0)
 })
 
-test('el .cmd que instala Pedila y la vuelve a abrir como estaba: sin rutas dentro (cmd rompería las tildes)', () => {
+test('the .cmd that installs Pedila and opens it again the way it was: no paths inside (cmd would break accents)', () => {
   const s = relaunchScript(['--oculto'])
   assert.deepEqual(s.split('\r\n'), ['@echo off', '"%PEDILA_SETUP%" /S', 'start "" "%PEDILA_EXE%" --oculto', ''])
-  assert.match(s, /^[\x20-\x7e\r\n]*$/, 'solo ASCII: se lee igual con cualquier página de códigos')
-  // Solo pasan opciones --así.
+  assert.match(s, /^[\x20-\x7e\r\n]*$/, 'ASCII only: read the same with any code page')
+  // Only --like-this options get through.
   const raro = relaunchScript(['--sin-foco', '& del *', '--x'])
   assert.match(raro, /"%PEDILA_EXE%" --sin-foco --x\r\n$/)
   assert.doesNotMatch(raro, /del \*/)
   assert.match(relaunchScript(), /start "" "%PEDILA_EXE%"\r\n$/)
 })
 
-test('instalador ya bajado: se reutiliza solo si su huella sigue cuadrando', () => {
-  const tmp = path.join(os.tmpdir(), `pedila-prueba-${process.pid}.bin`)
+test('installer already downloaded: reused only if its checksum still matches', () => {
+  const tmp = path.join(os.tmpdir(), `pedila-test-${process.pid}.bin`)
   fs.writeFileSync(tmp, 'hola')
   const sha = crypto.createHash('sha256').update('hola').digest('hex')
   assert.equal(verifiedFile(tmp, sha), true)
@@ -97,8 +98,8 @@ test('instalador ya bajado: se reutiliza solo si su huella sigue cuadrando', () 
 })
 
 /**
- * Un Hermes de mentira: lo que contestaría /api/status, la lista de chats, /api/hermes/update/check
- * (null = falla), session.active_list y subagent.roster (un objeto, o una función por llamada).
+ * A make-believe Hermes: what /api/status, the chat list, /api/hermes/update/check (null = it fails),
+ * session.active_list and subagent.roster (an object, or a function per call) would answer.
  */
 function fakeConn(id, over = {}) {
   const c = {
@@ -124,7 +125,7 @@ function fakeConn(id, over = {}) {
     async activeList() { c.calls.push('RPC session.active_list'); return c.active },
     async rpc(method) {
       c.calls.push('RPC ' + method)
-      if (method !== 'subagent.roster') { throw new Error('rpc desconocida') }
+      if (method !== 'subagent.roster') { throw new Error('unknown rpc') }
       if (c.rosterFail) { throw new Error('method not found') }
       return typeof c.roster === 'function' ? c.roster() : c.roster
     },
@@ -139,43 +140,43 @@ function fakeConn(id, over = {}) {
 const quiet = { info() {}, warn() {} }
 const settingsOn = { data: { hermes: { autoUpdate: true } } }
 
-test('Hermes del PC: espera 10 min sin uso, cierra la conexión, actualiza y vuelve a conectar', async () => {
+test("the PC's Hermes: waits 10 min unused, closes the connection, updates and connects again", async () => {
   let t = 1000 * MIN
   const local = fakeConn('local')
   const runs = []
   const hu = new HermesUpdates({
     conns: { local }, settings: { data: { hermes: { autoUpdate: true } } }, log: { info() {}, warn() {} },
     hermesExe: () => 'C:\\hermes\\bin\\hermes.exe', now: () => t,
-    run: async (file, args) => { runs.push([file, ...args]); return { code: 0, tail: 'Hermes actualizado' } },
-    fetchImpl: async () => { throw new Error('no debería preguntar a GitHub con una instalación git') }
+    run: async (file, args) => { runs.push([file, ...args]); return { code: 0, tail: 'Hermes updated' } },
+    fetchImpl: async () => { throw new Error("it shouldn't ask GitHub with a git installation") }
   })
   await hu.tickOne(local)
   assert.equal(hu.view().local.available, true)
-  assert.equal(hu.view().local.why, 'observando')
+  assert.equal(hu.view().local.why, 'watching')
   assert.equal(runs.length, 0)
-  // A los 5 min trabaja: hay que esperar otros 10 desde ahí.
+  // After 5 min it's working: another 10 have to be waited from there.
   t += 5 * MIN
   local.status = { ...local.status, active_agents: 1, gateway_busy: true }
   await hu.tickOne(local)
-  assert.equal(hu.view().local.why, 'en-uso')
+  assert.equal(hu.view().local.why, 'in-use')
   local.status = { ...local.status, active_agents: 0, gateway_busy: false }
   t += 9 * MIN
   await hu.tickOne(local)
-  assert.equal(runs.length, 0, '9 min después de trabajar, todavía no')
+  assert.equal(runs.length, 0, '9 min after working, not yet')
   t += 2 * MIN
   await hu.tickOne(local)
   assert.deepEqual(runs, [['C:\\hermes\\bin\\hermes.exe', 'update']])
   const seq = local.calls.filter(x => !x.startsWith('GET') && !x.startsWith('RPC'))
-  // El transporte se pausa durante la actualización: nada de Hermes se arranca mientras tanto.
+  // The transport is paused during the update: nothing of Hermes is started meanwhile.
   assert.deepEqual(seq, ['stop', 'pause', 'state updating 0.23.0 → 0.23.2', 'resume', 'invalidate', 'state connecting', 'start'])
-  // La lista de chats va por la última actividad (si no, Hermes la ordena por fecha de creación).
+  // The chat list goes by last activity (otherwise Hermes sorts it by creation date).
   assert.ok(local.calls.some(x => x.startsWith('GET /api/sessions') && x.includes('order=recent')))
   const v = hu.view().local
   assert.equal(v.lastResult.ok, true)
   assert.equal(v.applying, null)
 })
 
-test('Hermes del PC: con subagentes o procesos en segundo plano no se actualiza (active_agents no los cuenta)', async () => {
+test("the PC's Hermes: with subagents or background processes it isn't updated (active_agents doesn't count them)", async () => {
   let t = 4000 * MIN
   const local = fakeConn('local')
   local.roster = { sessions: [{ session_id: 's1', subagents: 0, background: 1 }] }
@@ -183,26 +184,27 @@ test('Hermes del PC: con subagentes o procesos en segundo plano no se actualiza 
   const hu = new HermesUpdates({ conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, run: async () => { runs++; return { code: 0 } } })
   for (let i = 0; i < 15; i++) { await hu.tickOne(local); t += MIN }
   assert.equal(runs, 0)
-  assert.equal(hu.view().local.why, 'en-uso')
-  // Un chat trabajando según session.active_list, igual.
+  assert.equal(hu.view().local.why, 'in-use')
+  // A chat working according to session.active_list, the same.
   local.roster = { sessions: [] }
   local.active = [{ id: 'x', status: 'working' }]
   for (let i = 0; i < 12; i++) { await hu.tickOne(local); t += MIN }
   assert.equal(runs, 0)
-  // Todo termina: 10 min después, sí.
+  // Everything ends: 10 min later, yes.
   local.active = []
   for (let i = 0; i < 9; i++) { await hu.tickOne(local); t += MIN }
-  assert.equal(runs, 0, 'menos de 10 min desde lo último en marcha')
+  assert.equal(runs, 0, 'less than 10 min since the last thing running')
   t += 2 * MIN
   await hu.tickOne(local)
   assert.equal(runs, 1)
 })
 
-test('Hermes del PC: si algo empieza justo antes de actualizar, se vuelve a mirar y no se actualiza', async () => {
+test("the PC's Hermes: if something starts right before updating, it looks again and doesn't update", async () => {
   let t = 4500 * MIN
   const local = fakeConn('local')
   let n = 0
-  // 1.ª mirada y 2.ª (la que decide) sin nada; la 3.ª, justo antes de actualizar, ve un subagente.
+  // The 1st look and the 2nd (the one that decides) see nothing; the 3rd, right before updating, sees a
+  // subagent.
   local.roster = () => (++n >= 3 ? { sessions: [{ session_id: 's', subagents: 1, background: 0 }] } : { sessions: [] })
   let runs = 0
   const hu = new HermesUpdates({ conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, run: async () => { runs++; return { code: 0 } } })
@@ -211,11 +213,11 @@ test('Hermes del PC: si algo empieza justo antes de actualizar, se vuelve a mira
   await hu.tickOne(local)
   assert.equal(n, 3)
   assert.equal(runs, 0)
-  assert.equal(hu.view().local.why, 'en-uso')
-  assert.ok(!local.calls.includes('stop'), 'ni siquiera se cerró la conexión')
+  assert.equal(hu.view().local.why, 'in-use')
+  assert.ok(!local.calls.includes('stop'), "the connection wasn't even closed")
 })
 
-test('Hermes del PC: sin poder comprobar los subagentes no se actualiza, pero eso no frena a Pedila', async () => {
+test("the PC's Hermes: when subagents can't be checked it isn't updated, but that doesn't hold Pedila back", async () => {
   let t = 5000 * MIN
   const local = fakeConn('local')
   local.rosterFail = true
@@ -223,28 +225,28 @@ test('Hermes del PC: sin poder comprobar los subagentes no se actualiza, pero es
   const hu = new HermesUpdates({ conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, run: async () => { runs++; return { code: 0 } } })
   for (let i = 0; i < 12; i++) { await hu.tickOne(local); t += MIN }
   assert.equal(runs, 0)
-  assert.equal(hu.view().local.why, 'sin-saber')
-  assert.equal(hu.busyWithin('local', IDLE_MS, t), false, 'reiniciar Pedila no corta nada de Hermes')
+  assert.equal(hu.view().local.why, 'unknown')
+  assert.equal(hu.busyWithin('local', IDLE_MS, t), false, 'restarting Pedila cuts nothing of Hermes off')
 })
 
-test('Hermes del PC: si estás usando Pedila o el PC, espera', async () => {
+test("the PC's Hermes: if you're using Pedila or the PC, it waits", async () => {
   let t = 5500 * MIN
   const local = fakeConn('local')
-  let you = 'usas el PC'
+  let you = 'the PC is in use'
   let runs = 0
   const hu = new HermesUpdates({ conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, userBusy: () => you, run: async () => { runs++; return { code: 0 } } })
   await hu.tickOne(local)
   t += 11 * MIN
   await hu.tickOne(local)
   assert.equal(runs, 0)
-  assert.equal(hu.view().local.why, 'tu-uso')
+  assert.equal(hu.view().local.why, 'user-busy')
   you = ''
   t += MIN
   await hu.tickOne(local)
   assert.equal(runs, 1)
 })
 
-test('versión «0.23.0+12.gabc» (compilación por delante de su etiqueta): no se comprueba cada minuto', async () => {
+test('version "0.23.0+12.gabc" (a build ahead of its tag): it isn\'t checked every minute', async () => {
   let t = 6000 * MIN
   const local = fakeConn('local')
   local.check = { install_method: 'git', can_apply: true, current_version: '0.23.0+12.gabc1234', update_available: false }
@@ -253,7 +255,7 @@ test('versión «0.23.0+12.gabc» (compilación por delante de su etiqueta): no 
   assert.equal(local.calls.filter(x => x.includes('/update/check')).length, 1)
 })
 
-test('GitHub respondiendo 403: no se le vuelve a preguntar en horas (el límite sin clave es por IP)', async () => {
+test("GitHub answering 403: it isn't asked again for hours (the limit without a key is per IP)", async () => {
   let t = 7000 * MIN
   const server = fakeConn('server', { state: 'login' })
   server.status = { version: '0.23.1', active_agents: 0, gateway_busy: false }
@@ -262,16 +264,16 @@ test('GitHub respondiendo 403: no se le vuelve a preguntar en horas (el límite 
   await hu.tickOne(server)
   assert.equal(gh, 1)
   for (let i = 0; i < 3; i++) { t += MIN; await hu.checkNow('server') }
-  assert.equal(gh, 1, '«Buscar ahora» tampoco insiste')
+  assert.equal(gh, 1, '"Check now" doesn\'t insist either')
   t += 6 * 60 * MIN + MIN
   await hu.tickOne(server)
   assert.equal(gh, 2)
 })
 
-test('Hermes del PC: si la comprobación falla una vez, se queda lo que se sabía y se repite a los 15 min', async () => {
+test("the PC's Hermes: if the check fails once, what was known stays and it's repeated after 15 min", async () => {
   let t = 8000 * MIN
   const local = fakeConn('local')
-  const hu = new HermesUpdates({ conns: { local }, settings: { data: { hermes: { autoUpdate: false } } }, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, fetchImpl: async () => assert.fail('no hace falta GitHub') })
+  const hu = new HermesUpdates({ conns: { local }, settings: { data: { hermes: { autoUpdate: false } } }, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, fetchImpl: async () => assert.fail("GitHub isn't needed") })
   await hu.tickOne(local)
   assert.equal(hu.view().local.canApply, true)
   const checks = () => local.calls.filter(x => x.includes('/update/check')).length
@@ -279,7 +281,7 @@ test('Hermes del PC: si la comprobación falla una vez, se queda lo que se sabí
   t += 6 * 60 * MIN + MIN
   await hu.tickOne(local)
   assert.equal(checks(), 2)
-  assert.equal(hu.view().local.canApply, true, 'no pasa a «se actualiza desde su servidor»')
+  assert.equal(hu.view().local.canApply, true, 'it doesn\'t turn into "it\'s updated from its server"')
   t += 10 * MIN
   await hu.tickOne(local)
   assert.equal(checks(), 2)
@@ -288,44 +290,44 @@ test('Hermes del PC: si la comprobación falla una vez, se queda lo que se sabí
   assert.equal(checks(), 3)
 })
 
-test('Este PC: mientras Hermes se actualiza no se arranca nada suyo, y después se vuelve a preguntar dónde está', async () => {
+test("This PC: while Hermes updates nothing of its own is started, and afterwards it's asked again where it is", async () => {
   const { LocalTransport } = require('../src/main/local')
   const tr = new LocalTransport({ log: quiet })
   tr.ep = { api_origin: 'http://127.0.0.1:1', profile_id: 'x' }
   let disposed = 0
-  tr.bridge = { dispose: () => { disposed++ }, mint: async () => assert.fail('no debería pedir tickets') }
+  tr.bridge = { dispose: () => { disposed++ }, mint: async () => assert.fail("it shouldn't ask for tickets") }
   tr.pause()
   assert.equal(disposed, 1)
-  await assert.rejects(tr.fetchJson('/api/sessions'), /se está actualizando/)
-  await assert.rejects(tr.wsTarget(), /se está actualizando/)
+  await assert.rejects(tr.fetchJson('/api/sessions'), /is updating/)
+  await assert.rejects(tr.wsTarget(), /is updating/)
   tr.resume()
   assert.equal(tr.paused, false)
   assert.equal(tr.ep, null)
   assert.equal(tr.bridge, null)
 })
 
-test('Hermes del PC: si la actualización falla, no se reintenta hasta pasadas 6 h', async () => {
+test("the PC's Hermes: if the update fails, it isn't retried until 6 h later", async () => {
   let t = 2000 * MIN
   const local = fakeConn('local')
   let runs = 0
   const hu = new HermesUpdates({
     conns: { local }, settings: { data: { hermes: { autoUpdate: true } } }, log: { info() {}, warn() {} },
-    hermesExe: () => 'hermes.exe', now: () => t, run: async () => { runs++; return { code: 1, tail: 'error: no pude\n✗ falló la descarga' } }
+    hermesExe: () => 'hermes.exe', now: () => t, run: async () => { runs++; return { code: 1, tail: "error: I couldn't\n✗ the download failed" } }
   })
   await hu.tickOne(local)
   t += 11 * MIN
   await hu.tickOne(local)
   assert.equal(runs, 1)
   assert.equal(hu.view().local.lastResult.ok, false)
-  assert.equal(hu.view().local.lastResult.error, '✗ falló la descarga')
+  assert.equal(hu.view().local.lastResult.error, '✗ the download failed')
   for (let i = 0; i < 5; i++) { t += 30 * MIN; await hu.tickOne(local) }
-  assert.equal(runs, 1, 'mientras tanto no se repite')
+  assert.equal(runs, 1, "meanwhile it isn't repeated")
   t += 4 * 60 * MIN
   await hu.tickOne(local)
   assert.equal(runs, 2)
 })
 
-test('Hermes del servidor en Docker: solo avisa, nunca actualiza; sin sesión también mira su versión', async () => {
+test("the server's Hermes in Docker: only a notice, never updates; without a session it looks at its version too", async () => {
   const t = 3000 * MIN
   const server = fakeConn('server', { state: 'login' })
   server.status = { version: '0.23.1', active_agents: 0, gateway_busy: false }
@@ -338,28 +340,28 @@ test('Hermes del servidor en Docker: solo avisa, nunca actualiza; sin sesión ta
   await hu.tickOne(server)
   const v = hu.view().server
   assert.deepEqual([v.version, v.latest, v.available, v.canApply], ['0.23.1', '0.23.2', true, false])
-  assert.ok(!server.calls.some(x => x.includes('/api/sessions') || x.includes('/update/check') || x.startsWith('RPC')), 'sin sesión solo lee /api/status')
-  await hu.applyNow('server').then(() => assert.fail('no debería'), e => assert.match(e.message, /servidor/))
+  assert.ok(!server.calls.some(x => x.includes('/api/sessions') || x.includes('/update/check') || x.startsWith('RPC')), 'without a session it only reads /api/status')
+  await hu.applyNow('server').then(() => assert.fail("it shouldn't"), e => assert.match(e.message, /server/))
   assert.equal(runs, 0)
   assert.equal(IDLE_MS, 10 * MIN)
 })
 
-test('al conectar, Pedila vuelve a seguir los chats que están trabajando (y no se para por uno que falle)', async () => {
+test("on connecting, Pedila follows the working chats again (and doesn't stop because one fails)", async () => {
   const { Connection } = require('../src/main/connection')
-  const c = new Connection({ id: 'local', name: 'Este PC', transport: {}, log: { info() {}, warn() {} } })
+  const c = new Connection({ id: 'local', name: 'This PC', transport: {}, log: { info() {}, warn() {} } })
   c.state = 'ready'
   c.stopped = false
   const attached = []
   c.rpc = async () => ({ sessions: [{ id: 'a', status: 'working', title: 'Paper Mario' }, { id: 'b', status: 'idle' }, { id: 'c', status: 'waiting' }, { session_key: 'd', id: 'sock-1', status: 'starting' }] })
   c.live.set('c', { liveId: 'c', running: true })
-  c.attach = async sid => { if (sid === 'a') { throw new Error('se cayó') } attached.push(sid) }
+  c.attach = async sid => { if (sid === 'a') { throw new Error('it dropped') } attached.push(sid) }
   await c.reattachRunning()
-  assert.deepEqual(attached, ['d'], 'a falló, b no trabaja, c ya estaba enganchado, d sí')
+  assert.deepEqual(attached, ['d'], "a failed, b isn't working, c was already attached, d is")
 })
 
-test('modelo y esfuerzo de un chat empezado, protocolo nuevo: session.mutate con sus vallas, confirmación y reintento', async () => {
+test('model and effort of a chat already started, new protocol: session.mutate with its fences, confirmation and retry', async () => {
   const { Connection } = require('../src/main/connection')
-  const c = new Connection({ id: 'local', name: 'Este PC', transport: {}, log: { info() {}, warn() {} } })
+  const c = new Connection({ id: 'local', name: 'This PC', transport: {}, log: { info() {}, warn() {} } })
   c.canonical = true
   c.attach = async sid => ({ liveId: sid })
   let rev = 7
@@ -369,22 +371,22 @@ test('modelo y esfuerzo de un chat empezado, protocolo nuevo: session.mutate con
   c.rpc = async (method, params) => {
     calls.push([method, params.operation, params.payload, params.expected_revision, params.expected_generation])
     if (params.operation === 'model' && conflictOnce) { conflictOnce = false; rev = 8; const e = new Error('revision_conflict'); throw e }
-    if (params.operation === 'model' && params.payload.model === 'caro' && !params.payload.confirm) { return { status: 'confirmation_required', confirm: 'abc123', confirm_message: 'Cuesta mucho', target_model: 'caro', target_provider: 'nube' } }
+    if (params.operation === 'model' && params.payload.model === 'caro' && !params.payload.confirm) { return { status: 'confirmation_required', confirm: 'abc123', confirm_message: "It's expensive", target_model: 'caro', target_provider: 'nube' } }
     return { ok: true }
   }
   const ui = []
   c.on('ui', e => ui.push(e))
   assert.deepEqual(await c.setChatOptions('s1', { model: 'qwen', provider: 'local' }), { applied: 'now', model: 'qwen', effort: null })
-  assert.deepEqual(calls.slice(0, 2).map(x => x.slice(0, 4)), [['session.mutate', 'model', { model: 'qwen', provider: 'local' }, 7], ['session.mutate', 'model', { model: 'qwen', provider: 'local' }, 8]], 'tras un choque de revisión, se repite una vez con la nueva')
+  assert.deepEqual(calls.slice(0, 2).map(x => x.slice(0, 4)), [['session.mutate', 'model', { model: 'qwen', provider: 'local' }, 7], ['session.mutate', 'model', { model: 'qwen', provider: 'local' }, 8]], "after a revision clash, it's repeated once with the new one")
   assert.equal(calls[1][4], 3)
   assert.equal(ui.find(e => e.kind === 'info').model, 'qwen')
   const r = await c.setChatOptions('s1', { model: 'caro', provider: 'nube' })
-  assert.deepEqual(r, { needsConfirm: true, confirm: 'abc123', message: 'Cuesta mucho', model: 'caro', provider: 'nube' })
+  assert.deepEqual(r, { needsConfirm: true, confirm: 'abc123', message: "It's expensive", model: 'caro', provider: 'nube' })
   assert.equal((await c.setChatOptions('s1', { model: 'caro', provider: 'nube', confirm: 'abc123' })).applied, 'now')
   await c.setChatOptions('s1', { reasoning: 'max' })
   await c.setChatOptions('s1', { reasoning: '' })
   await c.setChatOptions('s1', { model: null })
   assert.deepEqual(calls.slice(-3).map(x => [x[1], x[2]]), [['reasoning', { effort: 'max' }], ['reasoning', { effort: null }], ['model', { model: 'reset' }]])
   c.rpc = async () => { const e = new Error('session busy: turn_active'); throw e }
-  await assert.rejects(c.setChatOptions('s1', { reasoning: 'low' }), /cámbialo cuando termine/)
+  await assert.rejects(c.setChatOptions('s1', { reasoning: 'low' }), /change it when it finishes/)
 })

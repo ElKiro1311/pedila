@@ -1,137 +1,132 @@
-<p align="center"><img src="docs/banner.jpg" alt="Una mensajera con sandalias aladas de oro corre por el cielo con una carta, dibujada en tinta"></p>
+<p align="center"><img src="docs/banner.jpg" alt="A messenger with winged golden sandals runs across the sky with a letter, drawn in ink"></p>
 
-<p align="center"><img src="docs/icono.png" width="112" alt="Icono de Pedila: una sandalia alada a toda velocidad, en tinta con un toque de oro"></p>
+<p align="center"><img src="docs/icon.png" width="112" alt="Pedila's icon: a winged sandal at full speed, in ink with a touch of gold"></p>
 
-<h1 align="center">Pedila, la mensajera</h1>
+<h1 align="center">Pedila, the messenger</h1>
 
-<p align="center"><b>Una ventana sencilla, en español, para usar <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>: el de tu PC y el de tu servidor.</b><br>
-<i>Cliente no oficial. Pedila no está hecho ni respaldado por Nous Research.</i></p>
+<p align="center"><b>A simple window for <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>: the one on your PC and the one on your server. In English and Spanish.</b><br>
+<i>Unofficial client. Pedila is not made or endorsed by Nous Research.</i></p>
 
-## El nombre
+<p align="center"><b>English</b> · <a href="README.es.md">Español</a></p>
 
-**Pedila** viene del griego **πέδιλα** (*pédila*), las sandalias aladas de Hermes. Los romanos las llamaron *talaria*. Con ellas Hermes, el mensajero de los dioses, llevaba los mensajes de un mundo a otro. Homero lo cuenta dos veces con los mismos versos, cuando Zeus lo envía con un recado (*Odisea* V, 44-46; *Ilíada* XXIV, 340-342):
+## The name
+
+**Pedila** comes from the Greek **πέδιλα** (*pédila*), Hermes's winged sandals. The Romans called them *talaria*. With them Hermes, the messenger of the gods, carried messages from one world to another. Homer tells it twice with the same lines, when Zeus sends him on an errand (*Odyssey* 5.44–46; *Iliad* 24.340–342):
 
 > αὐτίκ᾽ ἔπειθ᾽ ὑπὸ ποσσὶν ἐδήσατο καλὰ πέδιλα,
 > ἀμβρόσια χρύσεια, τά μιν φέρον ἠμὲν ἐφ᾽ ὑγρὴν
 > ἠδ᾽ ἐπ᾽ ἀπείρονα γαῖαν ἅμα πνοιῇς ἀνέμοιο.
 >
-> «Enseguida se ató a los pies las hermosas sandalias, inmortales, de oro, que lo llevaban sobre el mar y sobre la tierra sin límites, tan rápido como los soplos del viento».
+> "At once he tied on his feet the beautiful sandals, immortal, golden, that carried him over the sea and over the boundless earth as fast as the breaths of the wind."
 
-Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, esté en tu PC o en tu servidor.
+That is what this app wants to be: the sandals that carry your messages to Hermes, whether it is on your PC or on your server.
 
-**Pedila, la mensajera.** En la app las sandalias cobran vida: Pedila es una chica que se las calza y corre con tus mensajes de un lado a otro. Es la mascota de la app. Espera tranquila con su carta, corre mientras Hermes trabaja, lee su pergamino cuando Hermes usa herramientas, te ofrece la carta cuando Hermes necesita tu permiso, salta de alegría cuando termina y se pone triste si algo falla.
+**Pedila, the messenger.** In the app the sandals come to life: Pedila is a girl who puts them on and runs back and forth with your messages. She is the app's pet. She waits calmly with her letter, runs while Hermes works, reads her scroll while Hermes uses tools, offers you the letter when Hermes needs your permission, jumps for joy when it finishes and gets sad if something fails.
 
-<p align="center"><img src="docs/mascota/quieta.png" height="150" alt="Pedila, de pie con su carta"> <img src="docs/mascota/correr-1.png" height="130" alt="Pedila corriendo con la carta"> <img src="docs/mascota/lee.png" height="150" alt="Pedila leyendo un pergamino"> <img src="docs/mascota/salto.png" height="140" alt="Pedila saltando de alegría"></p>
+<p align="center"><img src="docs/pet/still.png" height="150" alt="Pedila, standing with her letter"> <img src="docs/pet/run-1.png" height="130" alt="Pedila running with the letter"> <img src="docs/pet/read.png" height="150" alt="Pedila reading a scroll"> <img src="docs/pet/jump.png" height="140" alt="Pedila jumping for joy"></p>
 
-**El icono, el banner y Pedila** están dibujados en tinta al estilo manga, con el oro de las sandalias como único color: en el icono, una sandalia alada a toda velocidad; en el banner, Pedila cruzando el cielo con una carta. Los generó el propio Hermes con un modelo de imágenes en local (Qwen-Image), y después se recortaron para la app ([`docs/icono.png`](docs/icono.png), [`docs/banner.jpg`](docs/banner.jpg), [`docs/mascota/`](docs/mascota)). Las poses de Pedila se pidieron sobre fondo verde; `scripts/make-pet.js` quita el verde y monta la hoja animada.
+**The icon, the banner and Pedila** are drawn in manga-style ink, with the gold of the sandals as the only color: on the icon, a winged sandal at full speed; on the banner, Pedila crossing the sky with a letter. Hermes itself made them with a local image model (Qwen-Image), and then they were cropped for the app ([`docs/icon.png`](docs/icon.png), [`docs/banner.jpg`](docs/banner.jpg), [`docs/pet/`](docs/pet)). Pedila's poses were made on a green background; `scripts/make-pet.js` removes the green and builds the animated sheet.
 
-## Qué hace
+## What it does
 
-- **Tus Hermes en una ventana:**
-  - **Este PC** usa el mismo Hermes que Hermes Desktop, con los mismos chats. Solo aparece si Hermes está instalado en el PC.
-  - **Servidor** es un Hermes en otra máquina (`hermes dashboard` con usuario y contraseña). Solo aparece cuando pones su dirección en Ajustes → Servidor.
-  - Con un único Hermes no hay selector: se usa ese.
-- **Cuotas de tus APIs:** si tu Hermes usa OpenRouter, Venice u OpenCode, el panel enseña lo que te queda de cada una:
-  - **OpenRouter:** saldo de créditos; límite de la clave, cuándo se reinicia y lo gastado hoy, en la semana y en el mes.
-  - **Venice:** saldo USD, créditos del plan y DIEM; cuándo se reinicia el DIEM; límites por modelo.
-  - **OpenCode Go:** % usado de las ventanas de 5 h, semana y mes, y cuándo se reinician. De **OpenCode Zen**, OpenCode no publica el saldo.
-  - En cada una, lo que Hermes ha gastado en 24 h, 7 y 30 días.
-  - Lo lee un complemento pequeño de Pedila dentro de Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): tus claves no salen de Hermes, solo llegan números. Se instala con el botón «Activar cuotas» del panel, sin reiniciar Hermes. Las APIs que no tienes no aparecen.
-- **Modelo y esfuerzo de un chat empezado:** se pueden cambiar con el chat ya en marcha (Hermes los cambia con sus órdenes `/model` y `/reasoning`), con niveles de razonamiento hasta «al máximo».
-- **Herramientas como en Claude Code:** las que van seguidas se juntan en una línea que se abre («Ejecutó 2 órdenes, leyó captura.png · +12 −3 · 1 falló»). Dentro, cada una con su título, lo que se le pasó (la orden, el código o el cambio en verde y rojo), lo que devolvió y, si falló, en rojo. Las imágenes que mira o genera salen ahí mismo.
-- **Imágenes:** las que adjuntas se ven en tu mensaje y en el recuadro de escribir; se abren en grande al pulsarlas.
+- **Your Hermes in one window:**
+  - **This PC** uses the same Hermes as Hermes Desktop, with the same chats. It only shows up if Hermes is installed on the PC.
+  - **Server** is a Hermes on another machine (`hermes dashboard` with a username and password). It only shows up once you set its address in Settings → Server.
+  - With a single Hermes there is no switch: that one is used.
+- **Your APIs' quotas:** if your Hermes uses OpenRouter, Venice or OpenCode, the panel shows what is left of each one:
+  - **OpenRouter:** credit balance; the key's limit, when it resets and what was spent today, this week and this month.
+  - **Venice:** USD balance, plan credits and DIEM; when the DIEM resets; limits per model.
+  - **OpenCode Go:** % used of the 5-hour, weekly and monthly windows, and when they reset. OpenCode doesn't publish **OpenCode Zen**'s balance.
+  - For each one, what Hermes has spent in 24 hours, 7 days and 30 days.
+  - A small Pedila plugin reads it inside Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): your keys never leave Hermes, only numbers come out. It is installed with the panel's "Turn on quotas" button, without restarting Hermes. APIs you don't have don't show up.
+- **Model and effort of a chat that has already started:** they can be changed with the chat going (Hermes changes them with its `/model` and `/reasoning` commands), with reasoning levels up to "maximum".
+- **Tools as in Claude Code:** consecutive ones go together on one line that opens ("Ran 2 commands, read screenshot.png · +12 −3 · 1 failed"). Inside, each one with its title, what it was given (the command, the code or the change in green and red), what it returned and, if it failed, in red. The images it looks at or makes come out right there.
+- **Images:** the ones you attach show in your message and in the writing box; a click opens them big.
 - **Chats:**
-  - lista y búsqueda, por título y en el contenido;
-  - fijar, renombrar, archivar (con su vista de archivados) y borrar con confirmación;
-  - exportar a Markdown.
+  - list and search, by title and in their contents;
+  - pin, rename, archive (with its view of archived ones) and delete, with confirmation;
+  - export to Markdown.
 - **Chat:**
-  - respuesta en directo, razonamiento plegable y herramientas en curso;
-  - botón de parar y tarjetas de permiso y de pregunta;
-  - copiar, duración y tokens por segundo;
-  - barra de memoria del chat que avisa al 80 %.
-- **Al escribir:**
-  - imágenes (adjuntar, pegar o arrastrar);
-  - «Solo consultar»;
-  - nivel de razonamiento;
-  - selector de modelo, que marca con ☁ los que están en la nube;
-  - frases rápidas con «/».
-- **Avisos:** avisos de Windows, un sonido propio al terminar, un punto en el icono de la barra de tareas y parpadeo si los avisos de Windows están apagados.
-- **Más:**
-  - un panel a la derecha, como el de Claude Panel, con lo que hace Hermes, la memoria y los tokens del chat abierto, el uso de hoy y de 7 días, los modelos que más tokens han gastado (también en resumir la memoria, poner títulos o ver imágenes) y las conexiones (se pliega con ◨);
-  - la hora de la última respuesta de Hermes y el tiempo que ha pasado desde entonces (o, si está trabajando, desde cuándo), aunque la tarea la empezara Hermes Desktop;
-  - «Tareas», como en Claude Code: el plan de Hermes (su lista de tareas, con subtareas) y cuánto lleva hecho, lo que está haciendo ahora, las herramientas en marcha y sus subagentes;
-  - la lista de chats y el panel se ensanchan o estrechan arrastrando su raya (o con las flechas; doble clic: el ancho de siempre);
-  - «Tu uso», calculado solo con tus datos;
-  - bandeja del sistema y atajo **Ctrl+Alt+H**; «Iniciar con Windows» en Ajustes → Ventana y en el menú del icono de la bandeja;
-  - actualizaciones desde GitHub Releases, que se instalan solas cuando no usas Pedila (10 minutos sin tocarla, sin nada escrito sin enviar y sin Hermes trabajando) y la vuelven a abrir como estaba, sin quitarte el foco;
-  - **versiones de Hermes:** Pedila mira cada 6 horas si hay una nueva (la tarjeta «Conexiones» y Ajustes → Acerca de lo dicen). El Hermes de este PC, si es una instalación que Hermes sabe actualizar (la del instalador oficial), se actualiza solo con su propia orden `hermes update` cuando lleva 10 minutos sin usarse: sin chats trabajando ni con actividad. Un Hermes en Docker (un servidor) no puede actualizarse a sí mismo: Pedila avisa y se actualiza desde su servidor;
-  - Pedila, la mascota, que reacciona a lo que hace Hermes; si prefieres otra, se elige entre más de 5.000 de [Petdex](https://petdex.dev).
-- **Diseño a tu gusto** (Ajustes → Diseño): ordena y esconde las pestañas (Este PC/Servidor), elige qué tarjetas del panel salen y en qué orden, esconde los botones que no uses y pon la lista de chats a la derecha si lo prefieres. Las pestañas y las tarjetas también se arrastran directamente en su sitio.
-- **Cuotas con el mismo diseño para todos:** cada proveedor (OpenRouter, Venice y OpenCode) sale igual: lo que te queda en grande y, debajo, cada medida con su barra y cuándo se reinicia. Para los saldos sin total (Venice), la barra cuenta lo gastado desde el saldo más alto que Pedila ha visto.
-- **Temas:** seis, cada uno en modo oscuro y claro, con vista previa en Ajustes → Apariencia:
-  - **Mensajera** (predeterminado): tinta, grises y oro, como Pedila;
-  - **Clásico**: grises fríos y violeta, el de las primeras versiones;
-  - **Egeo**: azul noche y oro;
-  - **Ánfora**: negro y terracota;
-  - **Olivo**: verdes tranquilos;
-  - **Claude**: pizarra, marfil y terracota, como Claude.
-  - El color de acento puede ser el del tema o uno a elegir.
+  - live answer, collapsible reasoning and tools in progress;
+  - a stop button, and permission and question cards;
+  - copy, duration and tokens per second;
+  - a chat memory bar that warns at 80%.
+- **While writing:**
+  - images (attach, paste or drag);
+  - "Read only";
+  - reasoning level;
+  - a model picker that marks the ones in the cloud with ☁;
+  - quick phrases with "/".
+- **Notifications:** Windows notifications, a sound of its own when it finishes, a dot on the taskbar icon, and flashing if Windows notifications are off.
+- **More:**
+  - a panel on the right, like Claude Panel's, with what Hermes is doing, the open chat's memory and tokens, today's and the last 7 days' usage, the models that have spent the most tokens (summarizing memory, writing titles or looking at images count too) and the connections (it folds with ◨);
+  - the time of Hermes's last answer and how long ago it was (or, if it's working, since when), even if Hermes Desktop started the task;
+  - "Tasks", as in Claude Code: Hermes's plan (its task list, with subtasks) and how much is done, what it's doing now, the running tools and its subagents;
+  - the chat list and the panel get wider or narrower by dragging their line (or with the arrow keys; double-click: the default width);
+  - "Your usage", worked out only from your data;
+  - system tray and **Ctrl+Alt+H** shortcut; "Start with Windows" in Settings → Window and in the tray icon's menu;
+  - updates from GitHub Releases, which install themselves when you aren't using Pedila (10 minutes without touching it, nothing typed and not sent, and Hermes not working) and open it again the way it was, without taking the focus;
+  - **Hermes versions:** Pedila checks every 6 hours whether there's a new one (the "Connections" card and Settings → About say so). This PC's Hermes, if it's an installation Hermes knows how to update (the official installer's), updates itself with its own `hermes update` command after 10 minutes unused: no chats working or active. A Hermes in Docker (a server) can't update itself: Pedila gives notice, and it's updated from its server;
+  - Pedila, the pet, who reacts to what Hermes does; if you prefer another one, there are more than 5,000 to choose from on [Petdex](https://petdex.dev).
+- **Your own layout** (Settings → Layout): sort and hide the tabs (This PC/Server), choose which panel cards show and in what order, hide the buttons you don't use and put the chat list on the right if you like. The tabs and the cards can also be dragged right where they are.
+- **Quotas with the same design for all:** every provider (OpenRouter, Venice and OpenCode) looks the same: what's left, big, and below it each measure with its bar and when it resets. For balances without a total (Venice), the bar counts what was spent since the highest balance Pedila has seen.
+- **Themes:** six, each in dark and light mode, with a preview in Settings → Appearance:
+  - **Messenger** (the default): ink, grays and gold, like Pedila;
+  - **Classic**: cool grays and violet, from the first versions;
+  - **Aegean**: night blue and gold;
+  - **Amphora**: black and terracotta;
+  - **Olive**: calm greens;
+  - **Claude**: slate, ivory and terracotta, like Claude.
+  - The accent color can be the theme's or one of your choice.
+- **In English and Spanish:** the app follows the system's language, or the one you choose in Settings → Appearance.
 
-## Instalar
+## Installing
 
-1. Descarga `Pedila-Setup.exe` desde [Releases](../../releases).
-2. Ábrelo. Se instala en tu usuario, sin pedir permisos de administrador.
-   - El instalador no está firmado, así que Windows puede decir «Windows protegió tu PC». Pulsa **Más información** y luego **Ejecutar de todas formas**.
-3. **Este PC** funciona solo si tienes Hermes Agent instalado (con Hermes Desktop o el instalador oficial).
-4. **Servidor**: pon la dirección de su `hermes dashboard` en Ajustes → Servidor e inicia sesión con su usuario y contraseña. La contraseña no se guarda; la sesión sí, cifrada con Windows (DPAPI).
+1. Download `Pedila-Setup.exe` from [Releases](../../releases).
+2. Open it. It installs for your user, without asking for administrator rights.
+   - The installer isn't signed, so Windows may say "Windows protected your PC". Click **More info** and then **Run anyway**.
+3. **This PC** only works if you have Hermes Agent installed (with Hermes Desktop or the official installer).
+4. **Server**: put the address of its `hermes dashboard` in Settings → Server and sign in with its username and password. The password isn't stored; the session is, encrypted with Windows (DPAPI).
 
-**Requisitos:** Windows 10 u 11 y Hermes Agent 0.22 o 0.23 (probado con 0.22.5 en el servidor y 0.23.0 en el PC). Pedila habla el protocolo interno que usa Hermes Desktop, así que una versión nueva de Hermes puede necesitar una actualización de Pedila.
+**Requirements:** Windows 10 or 11 and Hermes Agent 0.22 or 0.23 (tested with 0.22.5 on the server and 0.23.0 on the PC). Pedila speaks the internal protocol Hermes Desktop uses, so a new Hermes version may need a Pedila update.
 
-## Cómo habla con Hermes (la misma vía que Hermes Desktop)
+## How it talks to Hermes (the same way as Hermes Desktop)
 
-| | Este PC | Servidor |
+| | This PC | Server |
 |---|---|---|
-| Dirección | `hermes gateway ensure --json` (arranca el gateway si hace falta) | La de Ajustes → Servidor; se prueba la primera y, si no responde, la alternativa |
-| Entrar | Sin contraseña. Los tickets de un solo uso salen de la tubería privada del gateway, pedidos con el Python de Hermes | `POST /auth/password-login`; las cookies `hermes_session_*` se guardan cifradas |
-| Chat en vivo | `/api/ws`, con el ticket como subprotocolo junto a `hermes-gateway-v1` | `/api/ws?ticket=` (de `POST /api/auth/ws-ticket`) |
-| Lista, búsqueda y cambios | REST `/api/sessions…`, con un ticket `native-http` por petición | REST con las cookies |
-| Tokens por modelo | `GET /api/analytics/usage?days=365` (lo de la página de uso de Hermes Desktop); sin esa ruta, la suma de la lista de chats | Igual, con las cookies |
+| Address | `hermes gateway ensure --json` (it starts the gateway if needed) | The one in Settings → Server; the first is tried and, if it doesn't answer, the alternative one |
+| Signing in | No password. Single-use tickets come out of the gateway's private pipe, asked for with Hermes's Python | `POST /auth/password-login`; the `hermes_session_*` cookies are stored encrypted |
+| Live chat | `/api/ws`, with the ticket as a subprotocol next to `hermes-gateway-v1` | `/api/ws?ticket=` (from `POST /api/auth/ws-ticket`) |
+| List, search and changes | REST `/api/sessions…`, with a `native-http` ticket per request | REST with the cookies |
+| Tokens per model | `GET /api/analytics/usage?days=365` (what Hermes Desktop's usage page shows); without that route, the sum of the chat list | Same, with the cookies |
 
-Los cambios sobre un chat (renombrar, fijar, archivar, borrar) usan las ediciones protegidas de Hermes: primero `/mutation-snapshot` y luego `request_id` + `expected_revision` + `expected_generation`. Se hablan los dos protocolos del gateway, el nuevo (`session_authority`) y el clásico.
+Changes to a chat (rename, pin, archive, delete) use Hermes's protected edits: first `/mutation-snapshot` and then `request_id` + `expected_revision` + `expected_generation`. Both gateway protocols are spoken, the new one (`session_authority`) and the classic one.
 
-## Desarrollo
+## Development
 
 ```
-npm install                # si falta el binario de Electron: node node_modules/electron/install.js
-npm run assets             # iconos desde docs/icono.png, la hoja de Pedila desde docs/mascota y copia de marked/DOMPurify
-npm test                   # pruebas de las piezas puras
-npm start                  # abre la app
-npm run dist               # instalador en dist/ (NSIS por usuario)
+npm install                # if the Electron binary is missing: node node_modules/electron/install.js
+npm run assets             # icons from docs/icon.png, Pedila's sheet from docs/pet, and a copy of marked/DOMPurify
+npm test                   # tests of the pure parts
+npm start                  # opens the app
+npm run dist               # installer in dist/ (NSIS, per user)
 ```
 
-Solo en desarrollo:
-- `PEDILA_CDP=9334` abre un puerto de depuración. Con `node scripts/cdp.mjs 9334 eval "<js>"` se lee o maneja la ventana.
-- `PEDILA_DEMO=1` usa datos inventados.
-- `PEDILA_DATA=<carpeta>` usa otra carpeta de datos.
-- `PEDILA_DEBUG=1` saca también el registro por consola.
+Only in development:
+- `PEDILA_CDP=9334` opens a debugging port. `node scripts/cdp.mjs 9334 eval "<js>"` reads or drives the window.
+- `PEDILA_DEMO=1` uses made-up data.
+- `PEDILA_DATA=<folder>` uses another data folder.
+- `PEDILA_DEBUG=1` also writes the log to the console.
 
-**Publicar una versión:** sube a la Release `Pedila-Setup.exe` y un `version.json` con `{"version": "0.8.0-beta", "sha256": "<sha256 del instalador>", "notas": "…"}`. La versión tiene que ser exactamente la de `package.json`, con su sufijo -alfa/-beta si lo lleva: si no, la app instalada seguiría viendo una versión «nueva» después de actualizarse. La Release va como normal, no como pre-release: la app mira la última de GitHub (`releases/latest`), que se salta las pre-releases. La app compara la versión (como Semantic Versioning), descarga el instalador, comprueba el SHA-256 y se actualiza en silencio.
+**The texts.** The code has every text in English, `tr('…')`, and [`src/shell/es.json`](src/shell/es.json) has the Spanish ones; `npm test` checks that none is missing or left over. The page (`index.html`) is written in English and translated when it opens.
 
-## Créditos y licencia
+**Publishing a version:** upload to the Release `Pedila-Setup.exe` and a `version.json` with `{"version": "0.16.0-beta", "sha256": "<the installer's sha256>", "notes": "…", "notas": "…"}` (the notes in English and in Spanish; versions before 0.16 only read `notas`). The version must be exactly the one in `package.json`, with its -alpha/-beta suffix if it has one: otherwise the installed app would still see a "new" version after updating. The Release goes as a normal one, not as a pre-release: the app looks at GitHub's latest (`releases/latest`), which skips pre-releases. The app compares the version (as in Semantic Versioning), downloads the installer, checks the SHA-256 and updates silently.
 
-- Código de Pedila: [MIT](LICENSE).
-- [Hermes Agent](https://github.com/NousResearch/hermes-agent) es de Nous Research (MIT). Pedila no incluye su código; usa la misma vía que su app de escritorio.
+## Credits and license
+
+- Pedila's code: [MIT](LICENSE).
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) is by Nous Research (MIT). Pedila doesn't include its code; it uses the same way in as its desktop app.
 - [Electron](https://www.electronjs.org/) (MIT), [marked](https://marked.js.org/) (MIT), [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0).
-- **Pedila**, la mascota, es del proyecto (MIT, como el código) y viaja en el instalador.
-- **Las demás mascotas** son de sus autores en [Petdex](https://petdex.dev) y la app las descarga de allí cuando las eliges; no vienen en el repositorio ni en el instalador.
-- El texto griego es de Homero (dominio público). La traducción es del proyecto.
-
----
-
-### English
-
-**Pedila** (Greek *πέδιλα*, Hermes' winged sandals, Latin *talaria*) is an unofficial Windows desktop client, with Pedila the messenger girl as its mascot, for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It talks to the Hermes on this PC (the same one Hermes Desktop uses) and to a remote `hermes dashboard`.
-
-Features: live chat, tool and permission cards, chat management (pin, rename, archive, delete), full-text search, images, a «read-only» mode, a reasoning level, snippets, usage stats, what is left on the paid APIs your Hermes uses (OpenRouter, Venice, OpenCode — read by a small companion Hermes plugin, so API keys never leave Hermes), a layout you can rearrange, a tray icon, six themes (dark and light) and an animated pet: Pedila by default, or any of 5,000+ from Petdex.
-
-The UI is in Spanish. Not affiliated with Nous Research. Code under the MIT license.
+- **Pedila**, the pet, belongs to the project (MIT, like the code) and travels in the installer.
+- **The other pets** belong to their authors on [Petdex](https://petdex.dev), and the app downloads them from there when you choose them; they aren't in the repository or in the installer.
+- The Greek text is by Homer (public domain). The translation is the project's.

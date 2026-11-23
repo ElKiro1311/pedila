@@ -1,9 +1,10 @@
 'use strict'
-// Canal JSON-RPC 2.0 sobre WebSocket con el gateway de Hermes (/api/ws), como el de Hermes Desktop
-// (apps/shared/src/json-rpc-channel.ts): eventos `{"method":"event","params":{type,…}}`,
-// peticiones del servidor `{id, method, params}` (permisos, preguntas…) y el latido `gateway.ping`
-// cada 15 s; si en 45 s no entra nada, se da por muerto y se cierra para reconectar.
+// JSON-RPC 2.0 channel over a WebSocket with the Hermes gateway (/api/ws), like Hermes Desktop's
+// (apps/shared/src/json-rpc-channel.ts): `{"method":"event","params":{type,…}}` events, requests from the
+// server `{id, method, params}` (permissions, questions…) and the `gateway.ping` heartbeat every 15 s; if
+// nothing comes in for 45 s, it's taken for dead and closed to reconnect.
 const { EventEmitter } = require('node:events')
+const { tr } = require('./i18n')
 
 const READY_TIMEOUT_MS = 20000
 const HEARTBEAT_MS = 15000
@@ -37,7 +38,7 @@ class RpcSocket extends EventEmitter {
     return new Promise((resolve, reject) => {
       let settled = false
       const fail = err => { if (!settled) { settled = true; reject(err) } }
-      const t = setTimeout(() => { fail(new Error('El gateway no respondió a tiempo')); this.close(4001, 'ready timeout') }, READY_TIMEOUT_MS)
+      const t = setTimeout(() => { fail(new Error(tr("The gateway didn't answer in time"))); this.close(4001, 'ready timeout') }, READY_TIMEOUT_MS)
       try {
         this.ws = this.protocols ? new WebSocket(this.url, this.protocols) : new WebSocket(this.url)
       } catch (e) {
@@ -84,21 +85,21 @@ class RpcSocket extends EventEmitter {
       this.ws.addEventListener('close', ev => {
         clearTimeout(t)
         this.stopHeartbeat()
-        for (const call of this.pending.values()) { clearTimeout(call.timer); call.reject(new RpcError('Se perdió la conexión con Hermes', -1)) }
+        for (const call of this.pending.values()) { clearTimeout(call.timer); call.reject(new RpcError(tr('The connection with Hermes was lost'), -1)) }
         this.pending.clear()
-        fail(new Error(`Conexión cerrada (${ev.code})`))
+        fail(new Error(tr('Connection closed ({0})', ev.code)))
         if (!this.closed) { this.closed = true; this.emit('close', { code: ev.code, reason: ev.reason || '' }) }
       })
-      this.ws.addEventListener('error', () => { /* el cierre llega por 'close' */ })
+      this.ws.addEventListener('error', () => { /* the closing arrives through 'close' */ })
     })
   }
 
   request(method, params = {}, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
-      if (!this.ws || this.ws.readyState !== 1) { return reject(new RpcError('No hay conexión con Hermes', -1)) }
+      if (!this.ws || this.ws.readyState !== 1) { return reject(new RpcError(tr('No connection with Hermes'), -1)) }
       const id = ++this.seq
       const timer = timeoutMs > 0
-        ? setTimeout(() => { if (this.pending.delete(id)) { reject(new RpcError(`Hermes no respondió (${method})`, -2)) } }, timeoutMs)
+        ? setTimeout(() => { if (this.pending.delete(id)) { reject(new RpcError(tr("Hermes didn't answer ({0})", method), -2)) } }, timeoutMs)
         : null
       this.pending.set(id, { resolve, reject, timer })
       try {
@@ -129,7 +130,7 @@ class RpcSocket extends EventEmitter {
     let n = 0
     this.timer = setInterval(() => {
       if (Date.now() - this.lastInbound > DEADLINE_MS) {
-        this.log.warn(`[${this.name}] sin latido en ${DEADLINE_MS / 1000} s: reconecto`)
+        this.log.warn(`[${this.name}] no heartbeat in ${DEADLINE_MS / 1000} s: reconnecting`)
         this.close(4000, 'heartbeat')
         return
       }

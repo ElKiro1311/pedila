@@ -1,9 +1,9 @@
-"""Pedila: complemento de Hermes para la app Pedila.
+"""Pedila: Hermes plugin for the Pedila app.
 
-No añade herramientas, ganchos ni texto al prompt: todo su trabajo está en dashboard/plugin_api.py,
-la ruta /api/plugins/pedila/cuotas que lee la app.
+It adds no tools, hooks or prompt text: all its work is in dashboard/plugin_api.py, the
+/api/plugins/pedila/cuotas route that the app reads.
 """
 
 
-def register(ctx):  # noqa: ARG001 - Hermes lo llama al cargar el complemento; no hay nada que registrar
+def register(ctx):  # noqa: ARG001 - Hermes calls it when loading the plugin; there's nothing to register
     return None

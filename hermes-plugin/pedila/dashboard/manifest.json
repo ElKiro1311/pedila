@@ -1,9 +1,9 @@
 {
   "name": "pedila",
   "label": "Pedila",
-  "description": "Cuotas de las APIs de pago para la app Pedila.",
+  "description": "Quotas of the paid APIs, for the Pedila app.",
   "icon": "Gauge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "tab": { "path": "/pedila", "position": "end", "hidden": true },
   "entry": "dist/index.js",
   "api": "plugin_api.py"

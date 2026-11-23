@@ -1,10 +1,11 @@
 'use strict'
-// Puente mínimo entre la pantalla (sandbox, sin Node) y el proceso principal.
+// Minimal bridge between the screen (sandboxed, no Node) and the main process.
 const { contextBridge, ipcRenderer } = require('electron')
 
 const call = (ch, ...args) => ipcRenderer.invoke(ch, ...args)
 
 contextBridge.exposeInMainWorld('hp', {
+  lang: ipcRenderer.sendSync('hp:lang'),
   init: () => call('hp:init'),
   sessions: conn => call('hp:sessions', conn),
   transcript: (conn, sid) => call('hp:transcript', conn, sid),

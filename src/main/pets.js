@@ -1,9 +1,10 @@
 'use strict'
-// Mascotas: la que trae la app (src/assets/pets/pedila, dibujo propio) y las que eliges del catálogo de Petdex
-// (https://petdex.dev/api/manifest), que se guardan en %APPDATA%\Pedila\pets\<slug>\.
-// Solo se descarga de petdex.dev (https), con tamaño máximo y comprobando que sea PNG o WebP.
+// Pets: the one the app brings (src/assets/pets/pedila, drawn for it) and the ones you choose from the
+// Petdex catalog (https://petdex.dev/api/manifest), kept in %APPDATA%\Pedila\pets\<slug>\.
+// It only downloads from petdex.dev (https), with a maximum size and checking that it's PNG or WebP.
 const fs = require('node:fs')
 const path = require('node:path')
+const { tr } = require('./i18n')
 
 const MANIFEST_URL = 'https://petdex.dev/api/manifest'
 const UA = { 'User-Agent': 'pedila-petdex' }
@@ -25,7 +26,7 @@ function sheetType(buf) {
   return null
 }
 
-/** Quita acentos y pasa a minúsculas, para buscar «criatura» o «Pikachu» igual. */
+/** Removes accents and turns to lower case, to search "criatura" or "Pikachu" the same way. */
 function fold(s) {
   return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 }
@@ -62,7 +63,7 @@ class Pets {
     }
   }
 
-  /** El catálogo: en memoria 1 h, en disco 24 h; si no hay red, vale la copia de disco aunque sea vieja. */
+  /** The catalog: 1 h in memory, 24 h on disk; with no network, the copy on disk will do even if it's old. */
   async catalog(force = false) {
     if (this.list && !force && Date.now() - this.loadedAt < MEMORY_TTL) { return this.list }
     if (this.pending) { return this.pending }
@@ -74,20 +75,20 @@ class Pets {
       }
       try {
         const res = await fetch(MANIFEST_URL, { headers: UA, signal: AbortSignal.timeout(45000) })
-        if (!res.ok) { throw new Error(`Petdex respondió ${res.status}`) }
+        if (!res.ok) { throw new Error(tr('Petdex answered {0}', res.status)) }
         const json = await res.json()
         const pets = (Array.isArray(json.pets) ? json.pets : []).map(compact).filter(p => SLUG.test(p.slug) && isPetdexUrl(p.sheet))
-        if (!pets.length) { throw new Error('el catálogo vino vacío') }
+        if (!pets.length) { throw new Error(tr('the catalog came back empty')) }
         fs.mkdirSync(path.dirname(this.cacheFile), { recursive: true })
         fs.writeFileSync(this.cacheFile, JSON.stringify({ savedAt: Date.now(), pets }))
-        this.log.info(`[mascotas] catálogo de Petdex: ${pets.length}`)
+        this.log.info(`[pets] Petdex catalog: ${pets.length}`)
         return this.adopt(pets)
       } catch (e) {
         if (disk && Array.isArray(disk.pets)) {
-          this.log.warn('[mascotas] sin red; uso el catálogo guardado:', e.message)
+          this.log.warn('[pets] no network; using the saved catalog:', e.message)
           return this.adopt(disk.pets)
         }
-        throw new Error(`No pude abrir el catálogo de Petdex (${e.cause?.code || e.message})`)
+        throw new Error(tr("Couldn't open the Petdex catalog ({0})", e.cause?.code || e.message))
       }
     })()
     try { return await this.pending } finally { this.pending = null }
@@ -139,28 +140,28 @@ class Pets {
     return [...out, ...extra]
   }
 
-  /** La mascota guardada con ese slug, o la que trae la app si no está. */
+  /** The stored pet with that slug, or the one the app brings if it isn't there. */
   resolve(slug) {
     const all = this.installed()
     return all.find(p => p.slug === slug) || all[0] || null
   }
 
   async install(slug) {
-    if (!SLUG.test(slug)) { throw new Error('mascota no válida') }
+    if (!SLUG.test(slug)) { throw new Error(tr('invalid pet')) }
     const have = this.installed().find(p => p.slug === slug)
     if (have) { return have }
     const entry = (await this.catalog()).find(p => p.slug === slug)
-    if (!entry) { throw new Error('esa mascota ya no está en Petdex') }
-    if (!isPetdexUrl(entry.sheet)) { throw new Error('la hoja de esa mascota no está en petdex.dev') }
+    if (!entry) { throw new Error(tr('that pet is no longer on Petdex')) }
+    if (!isPetdexUrl(entry.sheet)) { throw new Error(tr("that pet's sheet isn't on petdex.dev")) }
     const res = await fetch(entry.sheet, { headers: UA, signal: AbortSignal.timeout(120000) })
-    if (!res.ok) { throw new Error(`Petdex respondió ${res.status}`) }
-    if (!isPetdexUrl(res.url)) { throw new Error('la descarga salió de petdex.dev') }
+    if (!res.ok) { throw new Error(tr('Petdex answered {0}', res.status)) }
+    if (!isPetdexUrl(res.url)) { throw new Error(tr('the download left petdex.dev')) }
     const len = Number(res.headers.get('content-length') || 0)
-    if (len > MAX_SHEET) { throw new Error('la hoja es demasiado grande') }
+    if (len > MAX_SHEET) { throw new Error(tr('the sheet is too big')) }
     const buf = Buffer.from(await res.arrayBuffer())
-    if (buf.length > MAX_SHEET) { throw new Error('la hoja es demasiado grande') }
+    if (buf.length > MAX_SHEET) { throw new Error(tr('the sheet is too big')) }
     const type = sheetType(buf)
-    if (!type) { throw new Error('la hoja no es PNG ni WebP') }
+    if (!type) { throw new Error(tr('the sheet is neither PNG nor WebP')) }
     const dir = path.join(this.dir, slug)
     fs.mkdirSync(dir, { recursive: true })
     const file = `sprite.${type}`
@@ -169,11 +170,11 @@ class Pets {
       slug, displayName: entry.name, kind: entry.kind, submittedBy: entry.author,
       spritesheetPath: file, source: entry.sheet, installedAt: Date.now()
     }, null, 2))
-    this.log.info(`[mascotas] guardada ${slug} (${(buf.length / 1024).toFixed(0)} KB)`)
+    this.log.info(`[pets] saved ${slug} (${(buf.length / 1024).toFixed(0)} KB)`)
     return this.installed().find(p => p.slug === slug)
   }
 
-  /** Ruta del archivo para app://shell/pets/<slug>/<archivo>, o null si no es válida. */
+  /** Path of the file for app://shell/pets/<slug>/<file>, or null if it isn't valid. */
   fileFor(rel) {
     const m = /^pets\/([a-z0-9][a-z0-9-]{0,100})\/(sprite\.(?:png|webp))$/.exec(rel)
     return m ? path.join(this.dir, m[1], m[2]) : null

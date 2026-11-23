@@ -1,16 +1,22 @@
-// Pedila: la pantalla. Sin Node; habla con el proceso principal por window.hp (preload).
+// Pedila: the screen. No Node; it talks to the main process through window.hp (preload).
 import { Pet, loadSheet } from './pet.js'
 import { describeTool, groupSummary, failedText } from './tools.mjs'
-import { kfmt, setHour12, hhmm, full, dayLabel, span, ago, tokensOf, modelName, tasksLine, usd, nextUtcReset, dayAhead } from './fmt.mjs'
+import { tr, setLang, getLang, locale, translateDom } from './i18n.mjs'
+import { kfmt, setHour12, hhmm, full, clock, dayLabel, span, ago, tokensOf, modelName, tasksLine, usd, nextUtcReset, dayAhead } from './fmt.mjs'
 
 const demo = new URLSearchParams(location.search).get('demo') === '1'
 const api = demo ? (await import('./demo.js')).demoApi : window.hp
+// The language, before anything is painted (the page is written in English).
+setLang(window.hp ? window.hp.lang : 'en')
+document.documentElement.lang = getLang()
+translateDom(document.body)
 const $ = sel => document.querySelector(sel)
-const CONN_NAMES = { local: 'Este PC', server: 'Servidor' }
-const CONN_STATES = { ready: 'conectado', connecting: 'conectando…', offline: 'sin conexión', login: 'falta iniciar sesión', setup: 'falta su dirección', missing: 'sin Hermes instalado', updating: 'actualizando Hermes…', error: 'error', off: 'apagado' }
-const CHOICE_LABELS = { once: 'Permitir una vez', session: 'Permitir en este chat', always: 'Permitir siempre', deny: 'Denegar' }
+const CONN_NAMES = { local: tr('This PC'), server: tr('Server') }
+const CONN_STATES = { ready: tr('connected'), connecting: tr('connecting…'), offline: tr('not connected'), login: tr('not signed in'), setup: tr('no address set'), missing: tr('Hermes not installed'), updating: tr('updating Hermes…'), error: 'error', off: tr('off') }
+const NEED_LOGIN = ['You need to sign in', "You need to sign in to the server's Hermes"]
+const CHOICE_LABELS = { once: tr('Allow once'), session: tr('Allow in this chat'), always: tr('Always allow'), deny: tr('Deny') }
 
-// ── Estado ───────────────────────────────────────────────────────────────────────────────────
+// ── State ────────────────────────────────────────────────────────────────────────────────────
 const S = {
   settings: null,
   dark: true,
@@ -26,7 +32,7 @@ const S = {
   models: { local: null, server: null },
   search: '',
   found: { local: [], server: [] },
-  // Versiones de Hermes de cada conexión (las manda el proceso principal).
+  // Hermes versions of each connection (the main process sends them).
   hermesUpd: {},
   attach: [],
   readOnly: false,
@@ -56,7 +62,7 @@ async function call(fn, ...args) {
   return r ? r.value : undefined
 }
 
-// ── Utilidades ───────────────────────────────────────────────────────────────────────────────
+// ── Utilities ────────────────────────────────────────────────────────────────────────────────
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag)
   for (const [k, v] of Object.entries(attrs)) {
@@ -67,8 +73,8 @@ function el(tag, attrs = {}, ...kids) {
   return n
 }
 
-// Hermes entrega las imágenes (image_generate, capturas…) con una línea «MEDIA:<ruta>». Esa línea se
-// cambia por un hueco que fillMedia llena con la imagen, pedida al gateway de esa conexión.
+// Hermes delivers images (image_generate, screenshots…) with a "MEDIA:<path>" line. That line is replaced
+// by a placeholder that fillMedia fills with the image, asked from that connection's gateway.
 const MEDIA_LINE = /^[ \t]*`?MEDIA:[ \t]*(\S[^\n`]*?\.(?:png|jpe?g|gif|webp|bmp))`?[ \t]*$/gim
 
 function md(text) {
@@ -77,8 +83,9 @@ function md(text) {
   return window.DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, ADD_ATTR: ['target'] })
 }
 
-// Imágenes ya traídas, por conexión y ruta: una promesa mientras llega, luego el data URL (o null si falló;
-// el fallo se olvida a los 30 s para reintentar). Así los repintados del chat en vivo no las vuelven a pedir.
+// Images already fetched, by connection and path: a promise while it arrives, then the data URL (or null
+// if it failed; the failure is forgotten after 30 s, to try again). So repaints of the live chat don't ask
+// for them again.
 const mediaCache = new Map()
 
 function fillMedia(root, conn) {
@@ -90,10 +97,10 @@ function fillMedia(root, conn) {
       box.replaceChildren()
       box.classList.remove('loading')
       if (!url) {
-        // En el detalle de una herramienta, si no se puede enseñar, no se enseña (sin error).
+        // In a tool's details, if it can't be shown, it isn't (no error).
         if (box.dataset.quiet !== undefined) { box.remove(); return }
         box.classList.add('fail')
-        box.textContent = `🖼 No pude cargar la imagen ${name}`
+        box.textContent = tr("🖼 Couldn't load the image {0}", name)
         return
       }
       const img = el('img', { src: url, alt: name, title: name })
@@ -104,7 +111,7 @@ function fillMedia(root, conn) {
     let c = mediaCache.get(k)
     if (typeof c === 'string' || c === null) { show(c); continue }
     box.classList.add('loading')
-    box.textContent = 'Cargando imagen…'
+    box.textContent = tr('Loading image…')
     if (!c) {
       c = call(api.media, conn, file).catch(() => null).then(url => {
         mediaCache.set(k, url || null)
@@ -117,7 +124,7 @@ function fillMedia(root, conn) {
   }
 }
 
-/** La imagen a pantalla completa; un clic o Esc la cierra. */
+/** The image in full screen; a click or Esc closes it. */
 function openImage(url, name) {
   const close = () => { box.remove(); document.removeEventListener('keydown', onKey, true) }
   const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close() } }
@@ -130,9 +137,9 @@ function decorate(root) {
   for (const a of root.querySelectorAll('a[href]')) { a.setAttribute('target', '_blank'); a.setAttribute('rel', 'noopener noreferrer') }
   for (const pre of root.querySelectorAll('pre')) {
     if (pre.querySelector('.copy')) { continue }
-    const b = el('button', { class: 'copy', text: 'Copiar' })
+    const b = el('button', { class: 'copy', text: tr('Copy') })
     b.addEventListener('click', () => {
-      navigator.clipboard.writeText(pre.querySelector('code')?.innerText ?? pre.innerText).then(() => { b.textContent = 'Copiado' ; setTimeout(() => { b.textContent = 'Copiar' }, 1200) }).catch(() => { b.textContent = 'No se pudo' })
+      navigator.clipboard.writeText(pre.querySelector('code')?.innerText ?? pre.innerText).then(() => { b.textContent = tr('Copied') ; setTimeout(() => { b.textContent = tr('Copy') }, 1200) }).catch(() => { b.textContent = tr("Couldn't copy") })
     })
     pre.append(b)
   }
@@ -148,26 +155,26 @@ function toMs(v) {
 }
 
 function groupOf(ms) {
-  if (!ms) { return 'Anteriores' }
+  if (!ms) { return tr('Older') }
   const d = new Date(ms)
   const now = new Date()
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  if (ms >= start) { return 'Hoy' }
-  if (ms >= start - 86400000) { return 'Ayer' }
-  if (ms >= start - 6 * 86400000) { return 'Últimos 7 días' }
-  if (d.getFullYear() === now.getFullYear()) { return d.toLocaleDateString('es', { month: 'long' }).replace(/^\w/, c => c.toUpperCase()) }
+  if (ms >= start) { return tr('Today') }
+  if (ms >= start - 86400000) { return tr('Yesterday') }
+  if (ms >= start - 6 * 86400000) { return tr('Last 7 days') }
+  if (d.getFullYear() === now.getFullYear()) { return d.toLocaleDateString(locale(), { month: 'long' }).replace(/^\w/, c => c.toUpperCase()) }
   return String(d.getFullYear())
 }
 
-// ── Aspecto ──────────────────────────────────────────────────────────────────────────────────
-// Temas (paletas). El primero es el predeterminado; «Clásico» es el de las primeras versiones.
+// ── Look ─────────────────────────────────────────────────────────────────────────────────────
+// Themes (palettes). The first one is the default; "Classic" is the one of the first versions.
 const PALETTES = [
-  { id: 'mensajera', name: 'Mensajera', desc: 'Tinta, grises y oro, como Pedila.', pet: true },
-  { id: 'clasico', name: 'Clásico', desc: 'El de siempre: grises fríos y violeta.' },
-  { id: 'egeo', name: 'Egeo', desc: 'Azul noche del mar y oro.' },
-  { id: 'anfora', name: 'Ánfora', desc: 'Negro y terracota, como la cerámica griega.' },
-  { id: 'olivo', name: 'Olivo', desc: 'Verdes de olivar, tranquilos.' },
-  { id: 'claude', name: 'Claude', desc: 'Pizarra, marfil y terracota, como Claude.' }
+  { id: 'mensajera', name: tr('Messenger'), desc: tr('Ink, grays and gold, like Pedila.'), pet: true },
+  { id: 'clasico', name: tr('Classic'), desc: tr('The original: cool grays and violet.') },
+  { id: 'egeo', name: tr('Aegean'), desc: tr('Night-sea blue and gold.') },
+  { id: 'anfora', name: tr('Amphora'), desc: tr('Black and terracotta, like Greek pottery.') },
+  { id: 'olivo', name: tr('Olive'), desc: tr('Calm olive-grove greens.') },
+  { id: 'claude', name: 'Claude', desc: tr('Slate, ivory and terracotta, like Claude.') }
 ]
 
 function lookMode() {
@@ -175,7 +182,7 @@ function lookMode() {
   return L.theme === 'system' ? (S.dark ? 'dark' : 'light') : L.theme
 }
 
-/** Las tarjetas del menú de temas: cada una se pinta con su paleta, en el modo actual. */
+/** The cards of the theme menu: each one is painted with its palette, in the current mode. */
 function renderThemeGrid() {
   const grid = $('#theme-grid')
   if (!grid) { return }
@@ -189,10 +196,10 @@ function renderThemeGrid() {
             p.pet ? el('div', { class: 'tp-pet' }) : null,
             el('div', { class: 'tp-in' }, el('span', { class: 'tp-send' })))),
         el('div', { class: 'theme-meta' },
-          el('span', { class: 'theme-name' }, p.name, p.id === PALETTES[0].id ? el('em', {}, 'predeterminado') : null),
+          el('span', { class: 'theme-name' }, p.name, p.id === PALETTES[0].id ? el('em', {}, tr('default')) : null),
           el('span', { class: 'theme-desc' }, p.desc),
           el('span', { class: 'theme-dots' }, el('span', { style: 'background: var(--bg)' }), el('span', { style: 'background: var(--surface-2)' }), el('span', { style: 'background: var(--text)' }), el('span', { style: 'background: var(--accent)' }))))
-      // Al elegir un tema se vuelve a su color de acento.
+      // Choosing a theme goes back to its accent color.
       card.addEventListener('click', () => saveSetting({ look: { palette: p.id, accent: 'tema' } }))
       grid.append(card)
     }
@@ -220,17 +227,18 @@ function applyLook() {
   applyLayout()
 }
 
-// ── Conexiones ───────────────────────────────────────────────────────────────────────────────
+// ── Connections ──────────────────────────────────────────────────────────────────────────────
 /**
- * Los Hermes que esta persona tiene: el de este PC si está instalado y el del servidor si puso su
- * dirección en Ajustes. Los demás no se enseñan (ni pestaña, ni tarjeta, ni bandeja). Si no tiene
- * ninguno, queda «Este PC» con el aviso de cómo empezar.
+ * The Hermes this person has: the one on this PC if it's installed, and the server's if they set its address
+ * in Settings. The others aren't shown (no tab, card or tray entry). With none, "This PC" stays, with the
+ * notice on how to start.
  */
 function visibleConns() {
   const v = []
   if (S.conns.local && S.conns.local.state !== 'missing') { v.push('local') }
   if (S.settings && S.settings.server && Array.isArray(S.settings.server.urls) && S.settings.server.urls.length) { v.push('server') }
-  // El orden y lo escondido de Ajustes → Diseño (si lo escondes todo, queda la primera que tienes).
+  // The order and what is hidden, from Settings → Layout (if you hide everything, the first one you have
+  // stays).
   const L = layout()
   const shown = L.conns.filter(c => v.includes(c) && !L.connsHidden.includes(c))
   return shown.length ? shown : (v.length ? [v[0]] : ['local'])
@@ -239,7 +247,7 @@ function visibleConns() {
 function renderConnSwitch() {
   schedulePanel()
   const vis = visibleConns()
-  // Con un solo Hermes no hace falta elegir: el selector entero se esconde.
+  // With a single Hermes there's nothing to choose: the whole switch is hidden.
   $('#conn-switch').hidden = vis.length < 2
   for (const b of document.querySelectorAll('#usage-tabs button')) { b.hidden = !vis.includes(b.dataset.conn) }
   if (!vis.includes(S.active)) { switchConn(vis[0]); return }
@@ -268,25 +276,25 @@ function renderBanner() {
   b.replaceChildren()
   if (st.state === 'missing') {
     b.className = 'login'
-    b.append(el('div', { class: 'grow' }, el('strong', { text: 'No encuentro Hermes en este PC. ' }), el('span', { class: 'muted', text: 'Instálalo aquí, o si tu Hermes está en otro equipo pon su dirección en Ajustes → Servidor.' })),
-      el('button', { class: 'btn-primary', text: 'Abrir Ajustes', onclick: () => openSettings('servidor') }))
+    b.append(el('div', { class: 'grow' }, el('strong', { text: tr("Can't find Hermes on this PC. ") }), el('span', { class: 'muted', text: tr('Install it here or, if your Hermes is on another computer, put its address in Settings → Server.') })),
+      el('button', { class: 'btn-primary', text: tr('Open Settings'), onclick: () => openSettings('server') }))
   } else if (st.state === 'login') {
     b.className = 'login'
-    b.append(el('div', { class: 'grow' }, el('strong', { text: 'Falta iniciar sesión en el Hermes del servidor. ' }), el('span', { class: 'muted', text: st.detail && !/^Hay que/.test(st.detail) ? st.detail : 'Usa el usuario y la contraseña de su página web.' })),
-      el('button', { class: 'btn-primary', text: 'Iniciar sesión', onclick: openLogin }))
+    b.append(el('div', { class: 'grow' }, el('strong', { text: tr("You're not signed in to the server's Hermes. ") }), el('span', { class: 'muted', text: st.detail && !NEED_LOGIN.some(x => st.detail === tr(x)) ? st.detail : tr('Use the username and password of its web page.') })),
+      el('button', { class: 'btn-primary', text: tr('Sign in'), onclick: openLogin }))
   } else if (st.state === 'setup') {
     b.className = 'login'
-    b.append(el('div', { class: 'grow' }, el('strong', { text: 'Falta la dirección de tu servidor. ' }), el('span', { class: 'muted', text: 'Ponla en Ajustes → Servidor (la de su página web de Hermes, por ejemplo http://192.168.1.50:9119).' })),
-      el('button', { class: 'btn-primary', text: 'Abrir Ajustes', onclick: () => openSettings('servidor') }))
+    b.append(el('div', { class: 'grow' }, el('strong', { text: tr("Your server's address is missing. ") }), el('span', { class: 'muted', text: tr('Put it in Settings → Server (the address of its Hermes web page, for example http://192.168.1.50:9119).') })),
+      el('button', { class: 'btn-primary', text: tr('Open Settings'), onclick: () => openSettings('server') }))
   } else if (st.state === 'offline' || st.state === 'error') {
     b.className = st.state
-    b.append(el('div', { class: 'grow' }, el('strong', { text: `Sin conexión con ${CONN_NAMES[S.active]}. ` }), el('span', { class: 'muted', text: st.detail || '' })),
-      el('button', { class: 'btn-ghost', text: 'Reintentar', onclick: () => call(api.retry, S.active).catch(() => {}) }))
+    b.append(el('div', { class: 'grow' }, el('strong', { text: tr('Not connected to {0}. ', CONN_NAMES[S.active]) }), el('span', { class: 'muted', text: st.detail || '' })),
+      el('button', { class: 'btn-ghost', text: tr('Try again'), onclick: () => call(api.retry, S.active).catch(() => {}) }))
   } else if (st.state === 'updating') {
     b.className = 'login'
-    b.append(el('div', { class: 'grow' }, el('strong', { text: 'Actualizando Hermes de este PC' + (st.detail ? ` (${st.detail})` : '') + '. ' }), el('span', { class: 'muted', text: 'Tarda unos minutos; Pedila se vuelve a conectar sola al acabar.' })))
+    b.append(el('div', { class: 'grow' }, el('strong', { text: tr("Updating this PC's Hermes") + (st.detail ? ` (${st.detail})` : '') + '. ' }), el('span', { class: 'muted', text: tr("It takes a few minutes; Pedila reconnects by itself when it's done.") })))
   } else if (st.state === 'connecting' && st.detail) {
-    b.append(el('div', { class: 'grow muted', text: `Conectando con ${CONN_NAMES[S.active]}… ${st.detail}` }))
+    b.append(el('div', { class: 'grow muted', text: tr('Connecting to {0}… {1}', CONN_NAMES[S.active], st.detail) }))
   } else {
     b.hidden = true
     return
@@ -304,7 +312,7 @@ async function switchConn(c) {
   await loadSessions(c)
 }
 
-// ── Lista de chats ───────────────────────────────────────────────────────────────────────────
+// ── Chat list ────────────────────────────────────────────────────────────────────────────────
 let listTimer = null
 function reloadSessionsSoon(conn) {
   clearTimeout(listTimer)
@@ -325,7 +333,7 @@ async function loadSessions(conn = S.active) {
   }
   S.listLoaded[conn] = true
   if (conn === S.active) { renderList() }
-  // El panel usa la lista (mensajes del chat, abrir la última tarea).
+  // The panel uses the list (the chat's messages, opening the last task).
   schedulePanel()
 }
 
@@ -334,19 +342,19 @@ function renderList() {
   nav.replaceChildren()
   const conn = S.active
   if (S.listError[conn] === 'login') {
-    nav.append(el('div', { class: 'list-empty', text: 'Inicia sesión para ver los chats del servidor.' }))
+    nav.append(el('div', { class: 'list-empty', text: tr("Sign in to see the server's chats.") }))
     return
   }
   if (S.listError[conn] === 'setup') {
-    nav.append(el('div', { class: 'list-empty', text: 'Pon la dirección de tu servidor en Ajustes → Servidor para ver sus chats.' }))
+    nav.append(el('div', { class: 'list-empty', text: tr("Put your server's address in Settings → Server to see its chats.") }))
     return
   }
   if (S.listError[conn]) {
-    nav.append(el('div', { class: 'list-empty', text: `No pude cargar los chats: ${S.listError[conn]}` }))
+    nav.append(el('div', { class: 'list-empty', text: tr("Couldn't load the chats: {0}", S.listError[conn]) }))
     return
   }
   if (!S.listLoaded[conn]) {
-    nav.append(el('div', { class: 'list-empty', text: 'Cargando chats…' }))
+    nav.append(el('div', { class: 'list-empty', text: tr('Loading chats…') }))
     return
   }
   const q = S.search.trim().toLowerCase()
@@ -355,20 +363,20 @@ function renderList() {
     .filter(r => !q || r.title.toLowerCase().includes(q) || r.preview.toLowerCase().includes(q))
     .sort((a, b) => b.ms - a.ms)
   if (!rows.length && !(q.length >= 3 && S.found[conn].length)) {
-    nav.append(el('div', { class: 'list-empty', text: q ? (q.length >= 3 ? 'Ningún chat coincide (buscando también en el contenido…).' : 'Ningún chat coincide.') : 'Todavía no hay chats aquí. Escribe algo para empezar.' }))
-    if (!q) { nav.append(el('button', { class: 'archived-link', text: '🗄 Ver chats archivados', onclick: () => openArchived() })) }
+    nav.append(el('div', { class: 'list-empty', text: q ? (q.length >= 3 ? tr('No chat matches (still searching their contents…).') : tr('No chat matches.')) : tr('No chats here yet. Type something to start.') }))
+    if (!q) { nav.append(el('button', { class: 'archived-link', text: tr('🗄 See archived chats'), onclick: () => openArchived() })) }
     return
   }
   let group = null
   const pinned = rows.filter(r => r.pinned)
-  if (pinned.length) { nav.append(el('div', { class: 'group-label', text: '📌 Fijados' })); for (const r of pinned) { nav.append(chatRow(conn, r)) } }
+  if (pinned.length) { nav.append(el('div', { class: 'group-label', text: tr('📌 Pinned') })); for (const r of pinned) { nav.append(chatRow(conn, r)) } }
   for (const r of rows.filter(x => !x.pinned)) {
     const g = groupOf(r.ms)
     if (g !== group) { group = g; nav.append(el('div', { class: 'group-label', text: g })) }
     nav.append(chatRow(conn, r))
   }
   if (q.length >= 3 && S.found[conn].length) {
-    nav.append(el('div', { class: 'group-label', text: '🔎 En el contenido' }))
+    nav.append(el('div', { class: 'group-label', text: tr('🔎 In their contents') }))
     for (const h of S.found[conn].slice(0, 30)) {
       const known = S.sessions[conn].find(x => x.id === h.id)
       const row = el('button', { class: 'chat-row found', title: h.snippet },
@@ -378,7 +386,7 @@ function renderList() {
       nav.append(row)
     }
   }
-  nav.append(el('button', { class: 'archived-link', text: '🗄 Ver chats archivados', onclick: () => openArchived() }))
+  nav.append(el('button', { class: 'archived-link', text: tr('🗄 See archived chats'), onclick: () => openArchived() }))
 }
 
 function chatRow(conn, r) {
@@ -389,7 +397,7 @@ function chatRow(conn, r) {
     r.preview ? el('div', { class: 'p', text: r.preview }) : null)
   row.addEventListener('click', () => openChat(conn, r.id))
   row.addEventListener('contextmenu', e => { e.preventDefault(); openChatMenu(conn, r.id, e.clientX, e.clientY) })
-  const more = el('button', { class: 'row-more', title: 'Más opciones', 'aria-label': 'Más opciones', text: '⋯' })
+  const more = el('button', { class: 'row-more', title: tr('More options'), 'aria-label': tr('More options'), text: '⋯' })
   more.addEventListener('click', e => { e.stopPropagation(); const b = more.getBoundingClientRect(); openChatMenu(conn, r.id, b.right, b.bottom) })
   return el('div', { class: 'chat-row-wrap' }, row, more)
 }
@@ -397,10 +405,10 @@ function chatRow(conn, r) {
 // ── Chat ─────────────────────────────────────────────────────────────────────────────────────
 function setTopbar() {
   const ch = currentChat()
-  $('#chat-title').textContent = ch ? (ch.title || 'Chat') : 'Nuevo chat'
+  $('#chat-title').textContent = ch ? (ch.title || 'Chat') : tr('New chat')
   const bits = [CONN_NAMES[S.current.conn]]
   if (ch && ch.model) { bits.push(ch.model) }
-  if (ch && ch.usage && ch.usage.used && ch.usage.max) { bits.push(`contexto ${kfmt(ch.usage.used)} / ${kfmt(ch.usage.max)}`) }
+  if (ch && ch.usage && ch.usage.used && ch.usage.max) { bits.push(tr('context {0} / {1}', kfmt(ch.usage.used), kfmt(ch.usage.max))) }
   $('#chat-meta').textContent = bits.join(' · ')
   $('#chat-actions').hidden = !ch
   const pct = ch && ch.usage && ch.usage.used && ch.usage.max ? Math.min(100, Math.round(ch.usage.used / ch.usage.max * 100)) : 0
@@ -408,10 +416,10 @@ function setTopbar() {
   bar.hidden = !pct
   bar.firstElementChild.style.width = pct + '%'
   bar.classList.toggle('warn', pct >= 80)
-  bar.title = pct ? `Memoria del chat: ${pct} % (Hermes resume lo antiguo al 85 %)` : ''
+  bar.title = pct ? tr('Chat memory: {0}% (at 85%, Hermes summarizes the older part)', pct) : ''
   const warn = $('#ctx-warn')
   warn.hidden = !(ch && pct >= 80 && !S.ctxHidden.has(key(ch.conn, ch.sid)))
-  if (!warn.hidden) { $('#ctx-warn-text').textContent = `Este chat va por el ${pct} % de su memoria. Si cambias de tema, mejor sigue en uno nuevo.` }
+  if (!warn.hidden) { $('#ctx-warn-text').textContent = tr("This chat is at {0}% of its memory. If you're changing the subject, better go on in a new one.", pct) }
   document.title = ch && ch.title ? `${ch.title} · Pedila` : 'Pedila'
   schedulePanel()
 }
@@ -454,13 +462,13 @@ async function openChat(conn, sid) {
   if (S.current.sid === sid) { renderChat(true) }
   const row = S.sessions[conn].find(r => r.id === sid)
   if (row && row.model && !ch.model) { ch.model = row.model; setTopbar(); updateModelPill() }
-  // Si el chat está cargado en el gateway (quizá respondiendo desde Hermes Desktop), me engancho
-  // para recibir sus eventos en vivo y sus permisos pendientes.
+  // If the chat is loaded in the gateway (maybe answering from Hermes Desktop), attach to it to get its
+  // live events and its pending permissions.
   if ((row && row.active) || ch.running || (ch.live && !ch.live.done)) {
     call(api.attach, conn, sid).then(r => {
       ch.running = r.running
       if (!r.running && ch.live && ch.live.done) { ch.live = null; if (currentChat() === ch) { renderChat(false) } }
-      // Trabajando sin que la pantalla viera empezar el turno (reenganchado al abrir Pedila).
+      // Working without the screen having seen the turn start (reattached when Pedila opened).
       if (r.running && (!ch.live || ch.live.done)) { ch.resumed = true }
       updateComposer()
       renderList()
@@ -470,8 +478,8 @@ async function openChat(conn, sid) {
 }
 
 let liveRaf = 0
-// Mientras se pulsa algo del chat no se repinta el turno en directo (el clic caería en un botón
-// que ya no existe); se repinta al soltar.
+// While something in the chat is being pressed, the live turn isn't repainted (the click would land on a
+// button that no longer exists); it is repainted on release.
 let liveHold = false
 let liveHeld = false
 let liveHeldFull = false
@@ -498,10 +506,10 @@ function renderChat(scroll = true) {
   msgs.replaceChildren()
   const empty = !ch || (ch.loaded && !ch.transcript.length && !ch.live && !ch.loadError)
   $('#welcome').hidden = !(empty || !ch)
-  $('#welcome-where').textContent = `Vas a hablar con el Hermes de ${S.current.conn === 'server' ? 'tu servidor' : 'este PC'}.`
+  $('#welcome-where').textContent = tr("You're about to talk to the Hermes on {0}.", S.current.conn === 'server' ? tr('your server') : tr('this PC'))
   if (!ch) { return }
-  if (!ch.loaded && !ch.live) { msgs.append(el('div', { class: 'status-line' }, el('span', { class: 'spin' }), el('span', { text: 'Cargando el chat…' }))) }
-  if (ch.loadError) { msgs.append(el('div', { class: 'turn-error', text: `No pude cargar el chat: ${ch.loadError}` })) }
+  if (!ch.loaded && !ch.live) { msgs.append(el('div', { class: 'status-line' }, el('span', { class: 'spin' }), el('span', { text: tr('Loading the chat…') }))) }
+  if (ch.loadError) { msgs.append(el('div', { class: 'turn-error', text: tr("Couldn't load the chat: {0}", ch.loadError) })) }
   for (const t of ch.transcript) { msgs.append(renderTurn(t)) }
   if (ch.live) { msgs.append(renderLiveTurn(ch)) }
   for (const [k, p] of ch.prompts) { msgs.append(renderPrompt(ch, k, p)) }
@@ -529,7 +537,7 @@ function whoRow() {
 
 function renderBlocks(blocks) {
   const out = []
-  // Las herramientas seguidas (sin texto entre ellas) van juntas en un grupo plegable, como en Claude Code.
+  // Consecutive tools (with no text in between) go together in a collapsible group, as in Claude Code.
   let group = []
   const flush = () => { if (group.length) { out.push(renderToolGroup(group)); group = [] } }
   for (const b of blocks) {
@@ -548,10 +556,10 @@ function renderBlocks(blocks) {
   return out
 }
 
-// ── Herramientas como en Claude Code ─────────────────────────────────────────────────────────
-// Cada grupo es una línea («Ejecutó 2 órdenes, leyó a.png · +12 −3 · 1 falló») que se abre; dentro,
-// cada herramienta con su título, lo que se le pasó (la orden, el código, el cambio) y lo que
-// devolvió. Lo abierto se recuerda mientras dura la ventana (también al repintar en directo).
+// ── Tools, as in Claude Code ─────────────────────────────────────────────────────────────────
+// Each group is one line ("Ran 2 commands, read a.png · +12 −3 · 1 failed") that opens; inside, each tool
+// with its title, what it was given (the command, the code, the change) and what it returned. What is open
+// is remembered while the window lasts (also when repainting live).
 const toolOpen = new Map()
 let toolSeq = 0
 const keyOf = b => {
@@ -567,12 +575,12 @@ function renderToolGroup(tools) {
   const single = tools.length === 1
   const t0 = tools[0]
   const node = el('div', { class: 'tgroup' + (open ? ' open' : '') + (sum.failed ? ' fail' : '') + (single ? ' single' : '') })
-  const head = el('button', { class: 'tg-head', 'data-k': gk, 'aria-expanded': String(open), title: open ? 'Pulsa para plegar' : 'Pulsa para ver qué hizo' },
+  const head = el('button', { class: 'tg-head', 'data-k': gk, 'aria-expanded': String(open), title: open ? tr('Click to collapse') : tr('Click to see what it did') },
     el('span', { class: 'tg-chev', text: '›' }),
     sum.running ? el('span', { class: 'spin' }) : null,
     el('span', { class: 'tg-text', text: sum.text }),
     sum.add || sum.del ? el('span', { class: 'tg-diff' }, sum.add ? el('span', { class: 'add', text: `+${sum.add}` }) : null, sum.del ? el('span', { class: 'del', text: `−${sum.del}` }) : null) : null,
-    sum.failed ? el('span', { class: 'tg-fail', text: single ? 'Falló' : failedText(sum.failed) }) : null,
+    sum.failed ? el('span', { class: 'tg-fail', text: single ? tr('Failed') : failedText(sum.failed) }) : null,
     single && t0.done && t0.seconds ? el('span', { class: 'tg-time', text: `${t0.seconds.toFixed(1)} s` }) : null)
   head.addEventListener('click', () => {
     toolOpen.set(gk, !open)
@@ -600,7 +608,7 @@ function renderToolItem(b) {
     !b.done ? el('span', { class: 'spin' }) : null,
     el('span', { class: 'ti-title', text: d.title }),
     d.add || d.del ? el('span', { class: 'tg-diff' }, d.add ? el('span', { class: 'add', text: `+${d.add}` }) : null, d.del ? el('span', { class: 'del', text: `−${d.del}` }) : null) : null,
-    b.error ? el('span', { class: 'tg-fail', text: 'Falló' }) : null,
+    b.error ? el('span', { class: 'tg-fail', text: tr('Failed') }) : null,
     b.done && b.seconds ? el('span', { class: 'tg-time', text: `${b.seconds.toFixed(1)} s` }) : null)
   head.addEventListener('click', () => {
     toolOpen.set(tk, !open)
@@ -614,25 +622,25 @@ function renderToolItem(b) {
   return node
 }
 
-/** Lo de dentro de una herramienta: lo que se le pasó, lo que devolvió y sus imágenes. */
+/** The inside of a tool: what it was given, what it returned and its images. */
 function toolDetails(b) {
   const d = describeTool(b)
   const parts = []
   if (d.box && d.box.text) { parts.push(toolBox(d.box, keyOf(b) + ':in')) }
   if (!b.done) {
-    parts.push(el('div', { class: 'tout-label' }, el('span', { class: 'spin' }), el('span', { text: b.message ? ` ${b.message}${b.percent ? ` (${b.percent} %)` : ''}` : ' En marcha…' })))
+    parts.push(el('div', { class: 'tout-label' }, el('span', { class: 'spin' }), el('span', { text: b.message ? ` ${b.message}${b.percent ? ` (${b.percent} %)` : ''}` : tr(' Running…') })))
   } else {
     const out = typeof b.output === 'string' ? b.output : (b.summary || '')
     if (out.trim()) {
-      parts.push(el('div', { class: 'tout-label' + (b.error ? ' fail' : ''), text: b.error ? 'Falló:' : 'Resultado:' }))
+      parts.push(el('div', { class: 'tout-label' + (b.error ? ' fail' : ''), text: b.error ? tr('Failed:') : tr('Result:') }))
       parts.push(el('pre', { class: 'tbox out' + (b.error ? ' err' : ''), 'data-k': keyOf(b) + ':out', text: out }))
     } else if (b.error || !((Array.isArray(b.images) && b.images.length) || b.image)) {
-      parts.push(el('div', { class: 'tout-label muted', text: b.error ? 'Falló sin decir por qué.' : 'Sin resultado que enseñar.' }))
+      parts.push(el('div', { class: 'tout-label muted', text: b.error ? tr('It failed without saying why.') : tr('No result to show.') }))
     }
   }
   const thumbs = []
-  for (const im of Array.isArray(b.images) ? b.images : []) { thumbs.push(thumbOf(im.url, im.name || 'imagen')) }
-  // La imagen que devolvió Hermes, por su ruta.
+  for (const im of Array.isArray(b.images) ? b.images : []) { thumbs.push(thumbOf(im.url, im.name || tr('image'))) }
+  // The image Hermes returned, by its path.
   if (b.image) { thumbs.push(el('div', { class: 'media-img', 'data-quiet': '', 'data-media': encodeURIComponent(b.image) })) }
   if (thumbs.length) {
     const box = el('div', { class: 'thumbs' }, ...thumbs)
@@ -642,7 +650,7 @@ function toolDetails(b) {
   return el('div', { class: 'tdetails' }, ...parts)
 }
 
-/** El recuadro de lo que se le pasó: «$ orden», código, cambios en verde y rojo, ruta o JSON. */
+/** The box with what it was given: "$ command", code, changes in green and red, a path or JSON. */
 function toolBox(box, k) {
   const pre = el('pre', { class: 'tbox ' + box.lang, 'data-k': k || '' })
   if (box.lang === 'cmd') {
@@ -661,16 +669,16 @@ function toolBox(box, k) {
   return wrap
 }
 
-/** Miniatura de una imagen (data:); al pulsar, se ve en grande. */
+/** Thumbnail of an image (data:); a click shows it big. */
 function thumbOf(url, name) {
   const img = el('img', { src: url, alt: name, title: name, loading: 'lazy' })
-  const b = el('button', { class: 'thumb', title: `${name} (pulsa para verla en grande)`, onclick: e => { e.stopPropagation(); openImage(url, name) } }, img)
+  const b = el('button', { class: 'thumb', title: tr('{0} (click to enlarge)', name), onclick: e => { e.stopPropagation(); openImage(url, name) } }, img)
   return b
 }
 
 function renderReasoning(text, live) {
   if (!text) { return null }
-  const d = el('details', { class: 'reasoning' }, el('summary', { text: live ? 'Razonando…' : 'Razonamiento' }), el('div', { class: 'rtext', text }))
+  const d = el('details', { class: 'reasoning' }, el('summary', { text: live ? tr('Reasoning…') : tr('Reasoning process') }), el('div', { class: 'rtext', text }))
   return d
 }
 
@@ -680,13 +688,13 @@ function renderTurn(t) {
     const n = images.length
     let thumbs = null
     if (n) {
-      thumbs = el('div', { class: 'thumbs' }, ...images.map(im => thumbOf(im.url, im.name || 'imagen')))
+      thumbs = el('div', { class: 'thumbs' }, ...images.map(im => thumbOf(im.url, im.name || tr('image'))))
       fillMedia(thumbs, S.current.conn)
     }
     return el('div', { class: 'msg user' }, el('div', { class: 'bubble' + (n ? ' with-images' : '') },
       thumbs, t.text ? el('div', { class: 'btext', text: t.text }) : null))
   }
-  // Lo que Hermes escribe como si fuera tuyo (resúmenes de memoria, avisos): una nota plegable.
+  // What Hermes writes as if it were yours (memory summaries, notices): a collapsible note.
   if (t.role === 'note') {
     return el('details', { class: 'chat-note' }, el('summary', { text: `ℹ ${t.title}` }), el('div', { class: 'note-text', text: t.text }))
   }
@@ -708,8 +716,8 @@ function statsText(st) {
 function turnActions(t) {
   const text = turnText(t)
   if (!text && !t.stats) { return null }
-  const copy = el('button', { class: 'mini', text: 'Copiar' })
-  copy.addEventListener('click', () => navigator.clipboard.writeText(text).then(() => { copy.textContent = 'Copiado'; setTimeout(() => { copy.textContent = 'Copiar' }, 1200) }).catch(() => {}))
+  const copy = el('button', { class: 'mini', text: tr('Copy') })
+  copy.addEventListener('click', () => navigator.clipboard.writeText(text).then(() => { copy.textContent = tr('Copied'); setTimeout(() => { copy.textContent = tr('Copy') }, 1200) }).catch(() => {}))
   return el('div', { class: 'turn-actions' }, text ? copy : null, t.stats ? el('span', { class: 'muted small', text: statsText(t.stats) }) : null)
 }
 
@@ -718,7 +726,7 @@ function renderLiveTurn(ch) {
   const node = el('div', { class: 'msg assistant', id: 'live-turn' }, whoRow(), renderReasoning(L.reasoning, !L.done), renderBlocks(L.blocks))
   node._live = L
   if (!L.done) {
-    const status = L.status || (L.blocks.length ? 'Escribiendo' : 'Pensando')
+    const status = L.status || (L.blocks.length ? tr('Writing') : tr('Thinking'))
     node.append(el('div', { class: 'status-line' }, el('span', { class: 'spin' }), el('span', { class: 'dots', text: status })))
   }
   if (L.error) { node.append(el('div', { class: 'turn-error', text: L.error })) }
@@ -730,7 +738,7 @@ function renderLiveTurn(ch) {
 function renderPrompt(ch, k, p) {
   if (p.promptKind === 'approval') {
     const card = el('div', { class: 'prompt-card' },
-      el('h4', { text: 'Hermes te pide permiso' }),
+      el('h4', { text: tr('Hermes asks for your permission') }),
       p.command ? el('pre', { text: p.command }) : null,
       p.description ? el('div', { class: 'muted small', text: p.description }) : null)
     const actions = el('div', { class: 'actions' })
@@ -745,7 +753,7 @@ function renderPrompt(ch, k, p) {
   const answers = {}
   const qs = p.questions || []
   for (const q of qs) {
-    card.append(el('h4', { text: q.question || 'Hermes te pregunta' }))
+    card.append(el('h4', { text: q.question || tr('Hermes has a question') }))
     const actions = el('div', { class: 'actions' })
     for (const choice of q.choices || []) {
       actions.append(el('button', { text: choice, onclick: () => {
@@ -754,13 +762,13 @@ function renderPrompt(ch, k, p) {
       } }))
     }
     if ((q.choices || []).length) { card.append(actions) }
-    const input = el('input', { placeholder: (q.choices || []).length ? 'U otra respuesta…' : 'Tu respuesta…' })
+    const input = el('input', { placeholder: (q.choices || []).length ? tr('Or another answer…') : tr('Your answer…') })
     input.addEventListener('input', () => { answers[q.qid] = input.value })
     input.addEventListener('keydown', e => { if (e.key === 'Enter' && qs.length === 1 && input.value.trim()) { answerPrompt(ch, k, { [q.qid]: input.value.trim() }, card) } })
-    card.append(el('div', { class: 'free' }, input, qs.length === 1 ? el('button', { class: 'btn-ghost', text: 'Responder', onclick: () => { if (input.value.trim()) { answerPrompt(ch, k, { [q.qid]: input.value.trim() }, card) } } }) : null))
+    card.append(el('div', { class: 'free' }, input, qs.length === 1 ? el('button', { class: 'btn-ghost', text: tr('Answer'), onclick: () => { if (input.value.trim()) { answerPrompt(ch, k, { [q.qid]: input.value.trim() }, card) } } }) : null))
   }
   if (qs.length > 1) {
-    card.append(el('div', { class: 'actions' }, el('button', { class: 'yes', text: 'Enviar respuestas', onclick: () => answerPrompt(ch, k, answers, card) })))
+    card.append(el('div', { class: 'actions' }, el('button', { class: 'yes', text: tr('Send answers'), onclick: () => answerPrompt(ch, k, answers, card) })))
   }
   return card
 }
@@ -774,10 +782,10 @@ async function answerPrompt(ch, k, value, container) {
   try {
     await call(api.answer, ch.conn, k, value)
     ch.prompts.delete(k)
-    if (ch.live && !ch.live.done) { ch.live.status = 'Continuando' }
+    if (ch.live && !ch.live.done) { ch.live.status = tr('Going on') }
   } catch (e) {
     for (const b of container.querySelectorAll('button')) { b.disabled = false }
-    alertInChat(`No pude enviar la respuesta: ${e.message}`)
+    alertInChat(tr("Couldn't send the answer: {0}", e.message))
   }
   if (currentChat() === ch) { renderChat(nearBottom()) }
   updatePet()
@@ -788,7 +796,7 @@ function alertInChat(text) {
   if (ch && ch.live) { ch.live.error = text; scheduleLive() } else { $('#messages').append(el('div', { class: 'turn-error', text })) }
 }
 
-// ── Escribir y enviar ────────────────────────────────────────────────────────────────────────
+// ── Writing and sending ──────────────────────────────────────────────────────────────────────
 function busy(ch) {
   return Boolean(ch && ((ch.live && !ch.live.done) || ch.running))
 }
@@ -801,20 +809,20 @@ function updateComposer() {
   if (running && !hasText) {
     b.classList.add('stop')
     b.textContent = '■'
-    b.title = 'Parar'
+    b.title = tr('Stop')
     b.disabled = false
   } else {
     b.classList.remove('stop')
     b.textContent = '➤'
-    b.title = running ? 'Enviar (se pondrá en cola)' : 'Enviar'
+    b.title = running ? tr('Send (it will be queued)') : tr('Send')
     b.disabled = !hasText
   }
-  $('#input').placeholder = S.current.sid ? 'Escribe a Hermes…' : `Escribe a Hermes (${CONN_NAMES[S.current.conn]})…`
+  $('#input').placeholder = S.current.sid ? tr('Message Hermes…') : tr('Message Hermes ({0})…', CONN_NAMES[S.current.conn])
   if (typeof updateExtrasPills === 'function') { updateExtrasPills() }
   reportDraft()
 }
 
-// Con algo escrito sin enviar (o una imagen preparada), Pedila no se reinicia sola para actualizarse.
+// With something typed and not sent (or an image ready), Pedila doesn't restart by itself to update.
 let draftSent = null
 function reportDraft() {
   const draft = $('#input').value.trim().length > 0 || S.attach.length > 0
@@ -833,12 +841,12 @@ async function onSendClick() {
   const ch = currentChat()
   let text = $('#input').value.trim()
   if (!text && busy(ch) && !S.attach.length) { return stopTurn(ch) }
-  if (!text && S.attach.length) { text = 'Mira la imagen.' }
+  if (!text && S.attach.length) { text = tr('Look at the image.') }
   if (!text) { return }
   const conn = S.current.conn
-  // Mientras Hermes se actualiza el mensaje no llegaría: se queda en el cuadro.
+  // While Hermes updates, the message wouldn't arrive: it stays in the box.
   if (S.conns[conn] && S.conns[conn].state === 'updating') {
-    showToastLine('Hermes se está actualizando: tu mensaje sigue aquí; envíalo cuando vuelva a conectarse.')
+    showToastLine(tr('Hermes is updating: your message is still here; send it once it reconnects.'))
     return
   }
   closeSnippets()
@@ -866,19 +874,19 @@ async function onSendClick() {
       renderAttach()
       autoGrow()
       updateComposer()
-      showToastLine(e.needLogin ? 'Falta iniciar sesión en el servidor.' : `No pude crear el chat: ${e.message}`)
+      showToastLine(e.needLogin ? tr("You're not signed in to the server.") : tr("Couldn't create the chat: {0}", e.message))
       if (e.needLogin) { openLogin() }
       return
     }
   }
   const c = chat(conn, sid)
-  // Con Hermes ya trabajando el mensaje va en cola: la tarea en marcha sigue contando desde antes.
+  // With Hermes already working the message is queued: the running task keeps counting from before.
   if (!busy(c)) { c.turnAt = Date.now() }
   if (c.live && c.live.done) { c.transcript.push(liveToTurn(c.live)); c.live = null }
-  // Tus imágenes se ven en tu mensaje (miniaturas que se abren en grande).
+  // Your images show in your message (thumbnails that open big).
   const mine = { role: 'user', text, ...(images.length ? { images: images.map(i => ({ url: i.url, name: i.name })) } : {}) }
   c.transcript.push(mine)
-  if (!c.live) { c.live = { blocks: [], reasoning: '', status: 'Enviando', done: false, startedAt: Date.now() } }
+  if (!c.live) { c.live = { blocks: [], reasoning: '', status: tr('Sending'), done: false, startedAt: Date.now() } }
   c.running = true
   setTopbar()
   renderList()
@@ -890,11 +898,12 @@ async function onSendClick() {
     for (const img of images) { files.push(await call(api.attachImage, conn, sid, img.b64, img.name)) }
     const wire = S.readOnly ? `${READ_ONLY_NOTE}\n\n${text}` : text
     const r = await call(api.send, conn, sid, wire, files)
-    if (r && r.status === 'queued' && c.live && !c.live.done && c.live.blocks.length) { c.live.note = 'Tu mensaje va en cola: Hermes lo leerá al terminar.' }
-    if (c.live && c.live.status === 'Enviando') { c.live.status = 'Pensando' }
+    if (r && r.status === 'queued' && c.live && !c.live.done && c.live.blocks.length) { c.live.note = tr('Your message is queued: Hermes will read it when it finishes.') }
+    if (c.live && c.live.status === tr('Sending')) { c.live.status = tr('Thinking') }
     scheduleLive()
   } catch (e) {
-    // No llegó: lo escrito (y sus imágenes) vuelve al cuadro, salvo que ya hayas escrito otra cosa.
+    // It didn't arrive: what was typed (and its images) goes back to the box, unless you've already typed
+    // something else.
     const back = !$('#input').value.trim() && !S.attach.length
     if (back) {
       const i = c.transcript.lastIndexOf(mine)
@@ -904,7 +913,7 @@ async function onSendClick() {
       renderAttach()
       autoGrow()
     }
-    if (c.live) { c.live.error = e.needLogin ? 'Falta iniciar sesión en el servidor.' : `No se pudo enviar: ${e.message}${back ? ' (tu mensaje sigue en el cuadro)' : ''}`; c.live.done = true }
+    if (c.live) { c.live.error = e.needLogin ? tr("You're not signed in to the server.") : tr("Couldn't send it: {0}{1}", e.message, back ? tr(' (your message is still in the box)') : ''); c.live.done = true }
     c.running = false
     c.turnAt = 0
     if (e.needLogin) { openLogin() }
@@ -923,21 +932,21 @@ async function stopTurn(ch) {
   if (!ch) { return }
   try {
     await call(api.stop, ch.conn, ch.sid)
-    if (ch.live) { ch.live.status = 'Parando' }
+    if (ch.live) { ch.live.status = tr('Stopping') }
     scheduleLive()
   } catch (e) {
-    showToastLine(`No pude parar: ${e.message}`)
+    showToastLine(tr("Couldn't stop: {0}", e.message))
   }
 }
 
-/** Una herramienta del último turno del historial que aún no tiene resultado (o null). */
+/** A tool of the last turn of the history that has no result yet (or null). */
 function pendingPastTool(ch, id) {
   const last = ch.transcript[ch.transcript.length - 1]
   if (!last || last.role !== 'assistant' || !Array.isArray(last.blocks)) { return null }
   return last.blocks.find(b => b.type === 'tool' && b.id === id && !b.done) || null
 }
 
-/** Lo que trae el aviso de «herramienta terminada»: resultado, si falló, el cambio y las imágenes. */
+/** What the "tool finished" event brings: result, whether it failed, the change and the images. */
 function toolDone(b, evt) {
   b.done = true
   b.summary = evt.summary
@@ -959,37 +968,39 @@ function showToastLine(text) {
   h.textContent = text
   h.classList.add('error')
   clearTimeout(toastT)
-  toastT = setTimeout(() => { h.textContent = 'Enter para enviar · Mayús+Enter, salto de línea'; h.classList.remove('error') }, 6000)
+  toastT = setTimeout(() => { h.textContent = tr('Enter to send · Shift+Enter for a new line'); h.classList.remove('error') }, 6000)
 }
 
-// ── Modelos ──────────────────────────────────────────────────────────────────────────────────
+// ── Models ───────────────────────────────────────────────────────────────────────────────────
 function updateModelPill() {
   const p = $('#model-pill')
   const ch = currentChat()
   if (ch) {
-    p.textContent = ch.model ? `Modelo: ${ch.model}` : 'Modelo del chat'
+    p.textContent = ch.model ? tr('Model: {0}', ch.model) : tr("The chat's model")
     p.disabled = false
-    p.title = 'Cambiar el modelo de este chat (desde tu próximo mensaje)'
+    p.title = tr("Change this chat's model (from your next message on)")
     return
   }
   const conn = S.current.conn
   const choice = S.modelChoice[conn]
   const opts = S.models[conn]
   if (choice) {
-    p.textContent = `Modelo: ${choice.model}${choice.local === false ? ' ☁' : ''}`
+    p.textContent = tr('Model: {0}{1}', choice.model, choice.local === false ? ' ☁' : '')
   } else if (opts && opts.current.model) {
-    p.textContent = `Modelo: predeterminado (${opts.current.model}${opts.current.local ? '' : ' ☁'})`
+    p.textContent = tr('Model: default ({0}{1})', opts.current.model, opts.current.local ? '' : ' ☁')
   } else {
-    p.textContent = 'Modelo: predeterminado'
+    p.textContent = tr('Model: default')
   }
   p.disabled = false
   p.title = choice && choice.local === false || (!choice && opts && !opts.current.local)
-    ? 'Ojo: este modelo está en la nube, no en tu red. Pulsa para elegir otro.'
-    : 'Modelo para este chat nuevo'
+    ? tr('Careful: this model is in the cloud, not on your network. Click to choose another one.')
+    : tr('Model for this new chat')
 }
 
-/** Al abrir un chat nuevo: si el predeterminado de ese Hermes está en la nube y hay modelos en tu
- *  red, propone el primero local (no se guarda hasta que lo eliges tú). */
+/**
+ * On opening a new chat: if that Hermes's default is in the cloud and there are models on your network, it
+ * proposes the first local one (it isn't saved until you choose it).
+ */
 async function ensureModelDefault(conn) {
   if (S.conns[conn].state !== 'ready') { return }
   if (!S.models[conn]) {
@@ -1007,13 +1018,13 @@ async function openModelMenu() {
   const conn = S.current.conn
   const menu = $('#model-menu')
   if (!menu.hidden) { menu.hidden = true; return }
-  menu.replaceChildren(el('div', { class: 'mh', text: 'Cargando modelos…' }))
+  menu.replaceChildren(el('div', { class: 'mh', text: tr('Loading models…') }))
   placeMenu(menu)
   menu.hidden = false
   try {
     S.models[conn] = await call(api.models, conn)
   } catch (e) {
-    menu.replaceChildren(el('div', { class: 'mh', text: `No pude leer los modelos: ${e.message}` }))
+    menu.replaceChildren(el('div', { class: 'mh', text: tr("Couldn't read the models: {0}", e.message) }))
     return
   }
   const opts = S.models[conn]
@@ -1027,26 +1038,26 @@ async function openModelMenu() {
       try {
         const opts = { model: choice ? choice.model : null, ...(choice && choice.provider ? { provider: choice.provider } : {}) }
         let r = await call(api.chatOptions, conn, sid, opts)
-        // Hermes pide confirmar algunos modelos (coste, privacidad, contexto grande): su aviso, y si dices
-        // que sí, el mismo cambio con su código.
+        // Hermes asks for confirmation for some models (cost, privacy, large context): its warning and, if
+        // you say yes, the same change with its code.
         if (r && r.needsConfirm) {
-          const yes = await askBox({ title: `¿Cambiar a ${r.model || (choice ? choice.model : 'ese modelo')}?`, text: r.message || 'Hermes pide confirmación para este modelo.', ok: 'Cambiar' })
+          const yes = await askBox({ title: tr('Switch to {0}?', r.model || (choice ? choice.model : tr('that model'))), text: r.message || tr('Hermes asks you to confirm this model.'), ok: tr('Switch') })
           if (!yes) { return }
           r = await call(api.chatOptions, conn, sid, { ...opts, confirm: r.confirm })
-          if (r && r.needsConfirm) { showNote('Hermes volvió a pedir confirmación: prueba otra vez.', true); return }
+          if (r && r.needsConfirm) { showNote(tr('Hermes asked for confirmation again: try once more.'), true); return }
         }
         if (r && r.model) { ch.model = r.model } else if (choice) { ch.model = choice.model }
         updateModelPill()
         setTopbar()
-        showNote(`Modelo de este chat: ${choice ? choice.model : 'el predeterminado'}${r && r.applied === 'next' ? ' (desde tu próximo mensaje)' : ''}.`)
-      } catch (e) { showNote(`No pude cambiar el modelo: ${e.message}`, true) }
+        showNote(tr("This chat's model: {0}{1}.", choice ? choice.model : tr('the default one'), r && r.applied === 'next' ? tr(' (from your next message on)') : ''))
+      } catch (e) { showNote(tr("Couldn't change the model: {0}", e.message), true) }
       return
     }
     S.modelChoice[conn] = choice
     updateModelPill()
     call(api.settings, { models: { [conn]: choice ? { model: choice.model, provider: choice.provider, local: choice.local } : null } }).catch(() => {})
   }
-  const search = el('input', { class: 'menu-search', placeholder: 'Buscar modelo…', spellcheck: 'false' })
+  const search = el('input', { class: 'menu-search', placeholder: tr('Search models…'), spellcheck: 'false' })
   const list = el('div')
   const draw = () => {
     list.replaceChildren()
@@ -1055,12 +1066,12 @@ async function openModelMenu() {
     const cloud = opts.providers.filter(pv => !pv.local)
     const cur = opts.current
     if (!q) {
-      list.append(el('button', { class: S.modelChoice[conn] ? '' : 'active', text: `Predeterminado de este Hermes${cur.model ? ` (${cur.model}${cur.local ? '' : ' ☁'})` : ''}`, onclick: () => pick(null) }))
+      list.append(el('button', { class: S.modelChoice[conn] ? '' : 'active', text: tr("This Hermes's default{0}", cur.model ? ` (${cur.model}${cur.local ? '' : ' ☁'})` : ''), onclick: () => pick(null) }))
     }
     const group = (pv, cloudy) => {
       const models = pv.models.filter(m => !q || m.id.toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q))
       if (!models.length) { return }
-      list.append(el('div', { class: 'mh', text: `${pv.name || pv.id}${cloudy ? ' · en la nube ☁' : ' · en tu red'}` }))
+      list.append(el('div', { class: 'mh', text: `${pv.name || pv.id}${cloudy ? tr(' · in the cloud ☁') : tr(' · on your network')}` }))
       for (const m of models) {
         const c = S.modelChoice[conn]
         const active = c && c.model === m.id && c.provider === pv.id
@@ -1073,10 +1084,10 @@ async function openModelMenu() {
       if (showCloud || q) {
         for (const pv of cloud) { group(pv, true) }
       } else {
-        list.append(el('button', { class: 'more', text: `☁ Ver también los modelos en la nube (${cloudCount})`, onclick: e => { e.stopPropagation(); showCloud = true; draw() } }))
+        list.append(el('button', { class: 'more', text: tr('☁ Also show the cloud models ({0})', cloudCount), onclick: e => { e.stopPropagation(); showCloud = true; draw() } }))
       }
     }
-    if (!list.children.length) { list.append(el('div', { class: 'mh', text: 'Ningún modelo coincide.' })) }
+    if (!list.children.length) { list.append(el('div', { class: 'mh', text: tr('No model matches.') })) }
   }
   search.addEventListener('input', () => { filter = search.value; draw() })
   menu.replaceChildren(search, list)
@@ -1093,7 +1104,7 @@ function placeMenu(menu) {
   menu.style.top = 'auto'
 }
 
-// ── Eventos del proceso principal ────────────────────────────────────────────────────────────
+// ── Events from the main process ─────────────────────────────────────────────────────────────
 function onEvent(evt) {
   switch (evt.kind) {
     case 'conn': {
@@ -1102,7 +1113,7 @@ function onEvent(evt) {
       renderConnSwitch()
       if (evt.conn === S.active) { renderBanner() }
       if (evt.state === 'ready' && prev !== 'ready') { loadSessions(evt.conn); ensureModelDefault(evt.conn) }
-      // Una conexión que vuelve puede ser otro Hermes (reinicio, otra sesión): cuotas nuevas.
+      // A connection that comes back may be another Hermes (a restart, another session): new quotas.
       if (evt.state !== 'ready' && prev === 'ready') { forgetQuotas(evt.conn) }
       if ((evt.state === 'login' || evt.state === 'setup') && evt.conn === S.active) { S.listError.server = evt.state; renderList() }
       updatePet()
@@ -1118,9 +1129,10 @@ function onEvent(evt) {
           return call(api.attach, ch.conn, ch.sid)
         }).then(r => { if (r) { ch.running = r.running; updateComposer(); updatePet() } }).catch(() => {})
       }
-      // Los demás chats que estaban trabajando: el socket nuevo ya no los sigue (connect() olvida los
-      // enganches) y su final no llegaría nunca. Se vuelven a enganchar: si siguen, llegará; si ya
-      // acabaron, dejan de contar como «en marcha». Lo ya escrito se vuelve a leer al abrirlos.
+      // The other chats that were working: the new socket no longer follows them (connect() forgets the
+      // attachments) and their end would never arrive. They are attached again: if they're still going, it
+      // will arrive; if they already finished, they stop counting as "running". What was already written
+      // is read again when they're opened.
       for (const c of S.chats.values()) {
         if (c === ch || c.conn !== evt.conn || !(busy(c) || liveSubs(c))) { continue }
         c.live = null
@@ -1138,7 +1150,7 @@ function onEvent(evt) {
     case 'sessions-changed':
       if (evt.conn === S.active) {
         reloadSessionsSoon(evt.conn)
-        // Con trabajo en marcha fuera de esta ventana, se mira enseguida si ya terminó (como mucho cada 10 s).
+        // With work running outside this window, look soon whether it has finished (every 10 s at most).
         if (remoteBusy(evt.conn).length && Date.now() - P.at[evt.conn] > 10000) { loadPanelUsage(evt.conn, true) }
       }
       return
@@ -1167,7 +1179,7 @@ function onEvent(evt) {
       if ($('#settings-dialog').open) { renderHermesUpd() }
       return
     case 'settings':
-      // Un ajuste cambiado fuera de Ajustes (por ejemplo «Iniciar con Windows» en la bandeja).
+      // A setting changed outside Settings (for example "Start with Windows" in the tray).
       if (evt.settings) { S.settings = evt.settings; if ($('#settings-dialog').open) { renderSettings() } }
       return
     default:
@@ -1176,20 +1188,20 @@ function onEvent(evt) {
   if (!evt.sid) { return }
   const ch = chat(evt.conn, evt.sid)
   const isCur = currentChat() === ch
-  let fullRender = false // cambió algo del historial, no solo el turno en directo
+  let fullRender = false // something in the history changed, not just the live turn
   const ensureLive = () => {
     if (!ch.live || ch.live.done) {
       if (ch.live && ch.live.done) { ch.transcript.push(liveToTurn(ch.live)) }
-      ch.live = { blocks: [], reasoning: '', status: 'Pensando', done: false, startedAt: Date.now() }
+      ch.live = { blocks: [], reasoning: '', status: tr('Thinking'), done: false, startedAt: Date.now() }
     }
     return ch.live
   }
   switch (evt.kind) {
     case 'turn-start': {
       const L = ensureLive()
-      L.status = 'Pensando'
+      L.status = tr('Thinking')
       ch.running = true
-      // Cuándo empezó la tarea (si se envió desde aquí ya está puesta, con la hora del envío).
+      // When the task started (if it was sent from here it's already set, with the time it was sent).
       if (!ch.turnAt) { ch.turnAt = Date.now() }
       for (const [id, sa] of ch.subagents) { if (sa.state !== 'running' && sa.state !== 'queued') { ch.subagents.delete(id) } }
       break
@@ -1199,7 +1211,7 @@ function onEvent(evt) {
       const last = L.blocks[L.blocks.length - 1]
       if (!L.firstAt) { L.firstAt = Date.now() }
       if (last && last.type === 'text' && !L.cut) { last.text += evt.text } else { L.blocks.push({ type: 'text', text: evt.text }); L.cut = false }
-      L.status = 'Escribiendo'
+      L.status = tr('Writing')
       break
     }
     case 'segment':
@@ -1208,38 +1220,39 @@ function onEvent(evt) {
     case 'reasoning': {
       const L = ensureLive()
       L.reasoning = evt.full ? evt.text : L.reasoning + evt.text
-      L.status = 'Razonando'
+      L.status = tr('Reasoning')
       break
     }
     case 'thinking':
-      if (ch.live && !ch.live.done && evt.text) { ch.live.status = 'Pensando' }
+      if (ch.live && !ch.live.done && evt.text) { ch.live.status = tr('Thinking') }
       break
     case 'status':
       if (evt.text && busy(ch) && (!ch.live || ch.live.done)) { ensureLive() }
       if (ch.live && !ch.live.done && evt.text) {
-        // Al resumir lo antiguo del chat (puede tardar minutos) se dice en castellano y se cuenta el rato.
+        // When the older part of the chat is being summarized (it can take minutes), say so in plain words
+        // and count the time.
         const text = evt.statusKind === 'compacting' ? COMPACT_TEXT : evt.text.replace(/[.…]+$/, '')
         if (text === COMPACT_TEXT && ch.live.status !== COMPACT_TEXT) { ch.live.compactAt = Date.now() }
         ch.live.status = text
       }
       break
     case 'tool': {
-      // La que ya está en el historial sin terminar (turno empezado antes de que la pantalla lo
-      // siguiera, p. ej., reenganchado al abrir Pedila): se completa allí, no se repite en directo.
+      // The one already in the history without an ending (a turn that started before the screen followed
+      // it, e.g. reattached when Pedila opened): it's completed there, not repeated live.
       const inLive = ch.live && !ch.live.done && ch.live.blocks.some(x => x.type === 'tool' && x.id === evt.id)
       const past = evt.id && !inLive ? pendingPastTool(ch, evt.id) : null
       if (past) {
         if (evt.phase === 'complete') { toolDone(past, evt) }
         if (evt.input && typeof evt.input === 'object') { past.input = evt.input }
-        if (ch.live && !ch.live.done) { ch.live.status = evt.phase === 'complete' ? 'Pensando' : `Usando ${past.name}` }
+        if (ch.live && !ch.live.done) { ch.live.status = evt.phase === 'complete' ? tr('Thinking') : tr('Using {0}', past.name) }
         ch.resumed = true
         fullRender = true
         break
       }
       const L = ensureLive()
       let b = L.blocks.find(x => x.type === 'tool' && x.id && x.id === evt.id)
-      // «Preparando» (tool.generating) y «en marcha» (tool.start) pueden llegar con ids distintos:
-      // el bloque que se estaba preparando con el mismo nombre se reutiliza.
+      // "Preparing" (tool.generating) and "running" (tool.start) may come with different ids: the block
+      // being prepared with the same name is reused.
       if (!b && evt.phase === 'start') { b = L.blocks.find(x => x.type === 'tool' && x.generating && !x.done && x.name === evt.name) }
       if (!b) {
         b = { type: 'tool', id: evt.id, name: evt.name, args: evt.args || '', done: false, generating: evt.phase === 'generating', startedAt: Date.now() }
@@ -1249,12 +1262,12 @@ function onEvent(evt) {
       if (evt.phase === 'start') { if (b.generating) { b.startedAt = Date.now() } b.generating = false; if (evt.id) { b.id = evt.id } }
       if (evt.args) { b.args = evt.args }
       if (evt.name) { b.name = evt.name }
-      // El detalle para el grupo plegable: lo que se le pasó, lo que devolvió, si falló, el cambio
-      // de un archivo y la imagen (por su ruta).
+      // The details for the collapsible group: what it was given, what it returned, whether it failed, a
+      // file's change and the image (by its path).
       if (evt.input && typeof evt.input === 'object') { b.input = evt.input }
       if (evt.phase === 'progress') { b.percent = evt.percent; b.message = evt.message }
       if (evt.phase === 'complete') { toolDone(b, evt) }
-      L.status = evt.phase === 'complete' ? 'Pensando' : `Usando ${b.name}`
+      L.status = evt.phase === 'complete' ? tr('Thinking') : tr('Using {0}', b.name)
       break
     }
     case 'complete': {
@@ -1265,7 +1278,7 @@ function onEvent(evt) {
       L.done = true
       ch.running = false
       ch.turnAt = 0
-      // La hora exacta en que terminó (el panel la junta con la última actividad que da Hermes).
+      // The exact time it ended (the panel merges it with the last activity Hermes gives).
       ch.doneAt = Date.now()
       P.done[evt.conn] = { at: ch.doneAt, sid: evt.sid }
       {
@@ -1274,14 +1287,15 @@ function onEvent(evt) {
         L.stats = { ms: evt.ms || (L.startedAt ? Date.now() - L.startedAt : null), tps: out && streamMs > 500 ? out / (streamMs / 1000) : null }
       }
       if (ch.resumed) {
-        // El turno empezó sin la pantalla delante (o se volvió al chat a mitad): al acabar se lee entero
-        // del archivo, como una sola respuesta (si mientras tanto empieza otro turno desde aquí, ese manda).
+        // The turn started without the screen in front (or the chat was come back to halfway): when it
+        // ends it's read whole from the file, as a single answer (if another turn starts from here
+        // meanwhile, that one wins).
         ch.resumed = false
         setTimeout(() => {
           call(api.transcript, evt.conn, evt.sid).then(t => {
-            // Con un error o una nota («Parado.») se queda como está: releer la borraría.
+            // With an error or a note ("Stopped.") it stays as it is: reading it again would erase it.
             if (ch.live !== L || ch.running || L.error || L.note) { return }
-            // La duración del turno se queda (el archivo no la guarda).
+            // The turn's duration stays (the file doesn't keep it).
             const last = t[t.length - 1]
             if (last && last.role === 'assistant' && L.stats) { last.stats = L.stats }
             ch.transcript = t
@@ -1293,7 +1307,7 @@ function onEvent(evt) {
       if (S.settings.notify.chime && (!document.hasFocus() || !isCur)) { chime() }
       if (evt.outcome && !['completed', 'complete'].includes(evt.outcome)) {
         const stopped = ['interrupted', 'cancelled', 'canceled'].includes(evt.outcome)
-        L.note = stopped ? 'Parado.' : `Terminó así: ${evt.outcome}`
+        L.note = stopped ? tr('Stopped.') : tr('It ended like this: {0}', evt.outcome)
         pet.flash(stopped ? 'waving' : 'failed', 2)
       } else {
         pet.flash('jumping', 2)
@@ -1304,13 +1318,14 @@ function onEvent(evt) {
     case 'running':
       ch.running = evt.running
       if (!evt.running && ch.live && !ch.live.done && ch.live.blocks.length) { ch.live.done = true }
-      // Al enviar a un chat sin enganchar, el enganche dice «parado» antes de empezar: la hora del envío se queda.
+      // When sending to a chat that isn't attached, the attachment says "idle" before starting: the
+      // sending time stays.
       if (!evt.running && !busy(ch)) { ch.turnAt = 0 }
       break
     case 'todos': {
-      // La lista entera. Los avisos en vivo y la foto al engancharse mandan siempre (Hermes puede volver
-      // a numerar desde 1 tras reiniciarse o tras una hora parado); la leída del historial solo gana si
-      // no es más vieja o si el chat no está trabajando.
+      // The whole list. Live events and the snapshot on attaching always win (Hermes may number from 1
+      // again after a restart or after an hour idle); the one read from the history only wins if it isn't
+      // older or if the chat isn't working.
       const cur = ch.todos
       if (evt.history && busy(ch) && cur && evt.revision != null && cur.revision != null && evt.revision < cur.revision) { break }
       ch.todos = { items: Array.isArray(evt.todos) ? evt.todos : [], revision: evt.revision ?? (cur ? cur.revision : null) }
@@ -1352,7 +1367,7 @@ function onEvent(evt) {
       break
     }
     case 'turn-lost':
-      if (ch.live && !ch.live.done) { ch.live.note = 'Se cortó la conexión mientras Hermes trabajaba. Al reconectar recargo el chat.' }
+      if (ch.live && !ch.live.done) { ch.live.note = tr('The connection dropped while Hermes was working. The chat will be reloaded when it reconnects.') }
       break
     case 'prompt':
       ch.prompts.set(evt.key, evt)
@@ -1370,20 +1385,20 @@ function onEvent(evt) {
   }
   if (['turn-start', 'complete', 'running', 'title'].includes(evt.kind)) { renderList() }
   updatePet()
-  // El panel: al acabar una respuesta, el uso se recalcula (Hermes tarda un poco en guardar los tokens).
+  // The panel: when an answer ends, usage is worked out again (Hermes takes a while to store the tokens).
   if (evt.kind === 'complete') { setTimeout(() => loadPanelUsage(evt.conn, true), 1500) }
   schedulePanel()
 }
 
-// ── Mascota ──────────────────────────────────────────────────────────────────────────────────
+// ── Pet ──────────────────────────────────────────────────────────────────────────────────────
 const pet = new Pet($('#pet'))
 const welcomePet = new Pet($('#welcome-pet'))
 const settingsPet = new Pet($('#settings-pet'))
 const PEDILA_SHEET = 'assets/pets/pedila/sprite.webp'
 const DEFAULT_PET = { slug: 'pedila', name: 'Pedila', author: '', kind: 'character', url: PEDILA_SHEET, bundled: true, own: true }
-const KIND_NAMES = { character: 'personaje', creature: 'criatura', object: 'objeto' }
-const petName = p => { const n = (p && p.name) || 'mascota'; return n.charAt(0).toUpperCase() + n.slice(1) }
-const petBy = p => (p && p.own ? 'la mensajera, dibujo propio de Pedila' : p && p.author ? `de ${p.author} en Petdex` : 'de Petdex')
+const KIND_NAMES = { character: tr('character'), creature: tr('creature'), object: tr('object') }
+const petName = p => { const n = (p && p.name) || tr('pet'); return n.charAt(0).toUpperCase() + n.slice(1) }
+const petBy = p => (p && p.own ? tr('the messenger, drawn for Pedila') : p && p.author ? tr('by {0} on Petdex', p.author) : tr('from Petdex'))
 
 function updatePet() {
   let base = 'idle'
@@ -1392,7 +1407,7 @@ function updatePet() {
   if (all.some(c => c.prompts.size)) { base = 'waiting' } else if (relevant.some(c => c.live && !c.live.done && c.live.blocks.some(b => b.type === 'tool' && !b.done))) { base = 'review' } else if (relevant.some(c => (c.live && !c.live.done) || c.running)) { base = 'running' }
   pet.setBase(base)
   const name = petName(S.pet)
-  const what = { idle: `${name} está ${S.pet && S.pet.own ? 'tranquila' : 'tranquilo'}`, waiting: 'Hermes te necesita', review: 'Hermes está usando herramientas', running: 'Hermes está trabajando' }[base]
+  const what = { idle: tr('{0} is calm', name), waiting: tr('Hermes needs you'), review: tr('Hermes is using tools'), running: tr('Hermes is working') }[base]
   $('#pet').title = what
 }
 
@@ -1400,11 +1415,11 @@ function renderPetLabels() {
   const p = S.pet || DEFAULT_PET
   $('#settings-pet-name').textContent = petName(p)
   $('#settings-pet-by').textContent = petBy(p) + (p.kind ? ` · ${KIND_NAMES[p.kind] || p.kind}` : '')
-  $('#about-pet').textContent = `Mascota: ${petName(p)}, ${petBy(p)}.`
+  $('#about-pet').textContent = tr('Pet: {0}, {1}.', petName(p), petBy(p))
   updatePet()
 }
 
-/** Pone la mascota en la barra, la bienvenida y Ajustes. Si su hoja no vale, lanza el error. */
+/** Puts the pet in the bar, the welcome screen and Settings. If its sheet is no good, throws the error. */
 async function applyPet(info, { greet = false } = {}) {
   await pet.load(info.url)
   S.pet = info
@@ -1414,24 +1429,24 @@ async function applyPet(info, { greet = false } = {}) {
   if (greet) { pet.flash('waving', 3) }
 }
 
-// Selector: «Tus mascotas» (la de la app y las que ya usaste) y el catálogo de Petdex.
+// Picker: "Your pets" (the app's and the ones you've used) and the Petdex catalog.
 const PP = { tab: 'petdex', q: '', kind: '', items: [], total: 0, sel: null, seq: 0, kinds: null }
 
 function stripFor(item, cls = '') {
   const d = el('div', { class: `strip ${cls}`.trim() })
   const fail = text => { d.classList.add('missing'); d.textContent = text }
   if (item.url) {
-    // Hoja completa guardada: se anima la fila «idle».
+    // A full sheet that was saved: its "idle" row is animated.
     loadSheet(item.url).then(sh => {
       d.style.setProperty('--cols', String(sh.cols))
       d.style.setProperty('--rows', String(sh.rows))
       d.style.backgroundImage = `url("${item.url}")`
-    }).catch(() => fail('no se puede ver'))
+    }).catch(() => fail(tr("can't be shown")))
   } else if (item.preview) {
-    // Vista previa de Petdex: una tira de 6 cuadros (la usa su propia web).
+    // Petdex preview: a strip of 6 frames (its own website uses it).
     const probe = new Image()
     probe.onload = () => { d.style.backgroundImage = `url("${item.preview}")` }
-    probe.onerror = () => fail('sin vista previa')
+    probe.onerror = () => fail(tr('no preview'))
     probe.src = item.preview
   }
   return d
@@ -1442,8 +1457,8 @@ function petCard(item) {
   const card = el('button', { class: 'pet-card' + (PP.sel && PP.sel.slug === item.slug ? ' sel' : ''), title: `${petName(item)} — ${petBy(item)}`, 'data-slug': item.slug },
     stripFor(item),
     el('div', { class: 'n', text: petName(item) }),
-    el('div', { class: 'a', text: item.author ? `de ${item.author}` : '' }),
-    current ? el('div', { class: 'badge', text: 'La que tienes' }) : item.installed ? el('div', { class: 'badge', text: 'Guardada' }) : null)
+    el('div', { class: 'a', text: item.author ? tr('by {0}', item.author) : '' }),
+    current ? el('div', { class: 'badge', text: tr('The one you have') }) : item.installed ? el('div', { class: 'badge', text: tr('Saved') }) : null)
   card.addEventListener('click', () => selectPet(item))
   card.addEventListener('dblclick', () => { selectPet(item); usePet() })
   return card
@@ -1457,7 +1472,7 @@ function selectPet(item) {
   $('#pp-sel-by').textContent = petBy(item) + (item.kind ? ` · ${KIND_NAMES[item.kind] || item.kind}` : '')
   const current = S.pet && S.pet.slug === item.slug
   $('#pp-use').disabled = current
-  $('#pp-use').textContent = current ? 'Ya es tu mascota' : 'Usar esta mascota'
+  $('#pp-use').textContent = current ? tr('Already your pet') : tr('Use this pet')
 }
 
 function ppStatus(text, retry = false) {
@@ -1465,7 +1480,7 @@ function ppStatus(text, retry = false) {
   s.replaceChildren()
   s.hidden = !text
   if (text) { s.append(text) }
-  if (retry) { s.append(' ', el('button', { class: 'btn-ghost', text: 'Reintentar', onclick: () => loadPetPage(true) })) }
+  if (retry) { s.append(' ', el('button', { class: 'btn-ghost', text: tr('Try again'), onclick: () => loadPetPage(true) })) }
 }
 
 async function loadPetPage(reset) {
@@ -1479,13 +1494,13 @@ async function loadPetPage(reset) {
       if (seq !== PP.seq) { return }
       PP.items = mine
       grid.replaceChildren(...mine.map(petCard))
-      ppStatus(mine.length > 1 ? '' : 'Aquí aparecerán las mascotas que elijas del catálogo de Petdex.')
+      ppStatus(mine.length > 1 ? '' : tr('The pets you choose from the Petdex catalog will appear here.'))
     } catch (e) {
-      if (seq === PP.seq) { ppStatus(`No pude leer tus mascotas: ${e.message}`) }
+      if (seq === PP.seq) { ppStatus(tr("Couldn't read your pets: {0}", e.message)) }
     }
     return
   }
-  ppStatus(PP.items.length ? '' : 'Cargando el catálogo de Petdex…')
+  ppStatus(PP.items.length ? '' : tr('Loading the Petdex catalog…'))
   try {
     const r = await call(api.petsSearch, { q: PP.q, kind: PP.kind, offset: PP.items.length, limit: 30 })
     if (seq !== PP.seq) { return }
@@ -1500,8 +1515,8 @@ async function loadPetPage(reset) {
     PP.total = r.total
     grid.append(...r.items.map(petCard))
     $('#pp-more').hidden = PP.items.length >= r.total
-    $('#pp-count').textContent = `${PP.items.length} de ${r.total}`
-    ppStatus(r.total ? '' : 'Ninguna mascota coincide.')
+    $('#pp-count').textContent = tr('{0} of {1}', PP.items.length, r.total)
+    ppStatus(r.total ? '' : tr('No pet matches.'))
   } catch (e) {
     if (seq === PP.seq) { ppStatus(e.message, true) }
   }
@@ -1512,32 +1527,32 @@ async function usePet() {
   if (!item || (S.pet && S.pet.slug === item.slug)) { return }
   const btn = $('#pp-use')
   btn.disabled = true
-  btn.textContent = item.url ? 'Cambiando…' : 'Descargando…'
+  btn.textContent = item.url ? tr('Changing…') : tr('Downloading…')
   const prev = S.pet
   try {
     const info = await call(api.petUse, item.slug)
     try {
       await applyPet(info, { greet: true })
     } catch (e) {
-      // La hoja no tiene la geometría de Petdex: vuelvo a la anterior.
+      // The sheet doesn't have Petdex's geometry: back to the previous one.
       if (prev) { await call(api.petUse, prev.slug).catch(() => {}) }
-      throw new Error(`${petName(item)} ${e.message}; sigues con ${petName(prev)}`)
+      throw new Error(tr('{0} {1}; you still have {2}', petName(item), e.message, petName(prev)))
     }
     $('#pet-dialog').close()
   } catch (e) {
-    ppStatus(`No pude cambiar de mascota: ${e.message}`)
+    ppStatus(tr("Couldn't change the pet: {0}", e.message))
     btn.disabled = false
-    btn.textContent = 'Usar esta mascota'
+    btn.textContent = tr('Use this pet')
   }
 }
 
 function openPetPicker() {
   PP.sel = null
-  $('#pp-sel-name').textContent = 'Elige una'
+  $('#pp-sel-name').textContent = tr('Choose one')
   $('#pp-sel-by').textContent = ''
   $('#pp-sel-strip').replaceWith(Object.assign(el('div', { class: 'strip big missing' }), { id: 'pp-sel-strip' }))
   $('#pp-use').disabled = true
-  $('#pp-use').textContent = 'Usar esta mascota'
+  $('#pp-use').textContent = tr('Use this pet')
   for (const b of document.querySelectorAll('#pp-tabs button')) { b.classList.toggle('active', b.dataset.tab === PP.tab) }
   $('#pet-dialog').showModal()
   loadPetPage(true)
@@ -1569,7 +1584,7 @@ function wirePetPicker() {
   })
 }
 
-// ── Inicio de sesión ─────────────────────────────────────────────────────────────────────────
+// ── Signing in ───────────────────────────────────────────────────────────────────────────────
 function openLogin() {
   const d = $('#login-dialog')
   if (d.open) { return }
@@ -1585,7 +1600,7 @@ async function submitLogin(e) {
   const pass = $('#login-pass').value
   const btn = $('#login-submit')
   btn.disabled = true
-  btn.textContent = 'Entrando…'
+  btn.textContent = tr('Logging in…')
   try {
     const r = await call(api.login, user, pass)
     if (r && r.ok) {
@@ -1595,7 +1610,7 @@ async function submitLogin(e) {
       if (Q.login.server || Q.installed.server) { Q.login.server = false; Q.err.server = ''; Q.at.server = 0; setTimeout(() => loadQuotas('server', true), 1500) }
       if (S.active === 'server') { S.listLoaded.server = false; renderList(); loadSessions('server') }
     } else {
-      $('#login-error').textContent = (r && r.error) || 'No se pudo entrar.'
+      $('#login-error').textContent = (r && r.error) || tr("Couldn't log in.")
       $('#login-error').hidden = false
     }
   } catch (err) {
@@ -1604,18 +1619,18 @@ async function submitLogin(e) {
   } finally {
     $('#login-pass').value = ''
     btn.disabled = false
-    btn.textContent = 'Entrar'
+    btn.textContent = tr('Log in')
   }
 }
 
-// ── Ajustes ──────────────────────────────────────────────────────────────────────────────────
+// ── Settings ─────────────────────────────────────────────────────────────────────────────────
 function getPath(obj, p) {
   return p.split('.').reduce((o, k) => (o ? o[k] : undefined), obj)
 }
 
 function patchFor(p, v) {
   const [a, b] = p.split('.')
-  return { [a]: { [b]: v } }
+  return { [a]: b === undefined ? v : { [b]: v } }
 }
 
 function renderSettings() {
@@ -1629,7 +1644,7 @@ function renderSettings() {
   const urls = st.server.urls || []
   $('#srv-url-1').value = urls[0] || ''
   $('#srv-url-2').value = urls[1] || ''
-  $('#srv-session').textContent = st.serverSignedIn ? 'Sesión del servidor iniciada (guardada cifrada).' : 'Sin sesión en el servidor.'
+  $('#srv-session').textContent = st.serverSignedIn ? tr('Signed in to the server (the session is stored encrypted).') : tr('Not signed in to the server.')
   $('#srv-logout').disabled = !st.serverSignedIn
   $('#about-version').textContent = S.version
   renderThemeGrid()
@@ -1644,14 +1659,32 @@ async function saveSetting(patch) {
   try {
     const before = JSON.stringify(S.settings && S.settings.server ? S.settings.server.urls : [])
     S.settings = await call(api.settings, patch)
-    // Otra dirección del servidor = quizá otro Hermes: sus cuotas se vuelven a pedir.
+    // Another server address = maybe another Hermes: its quotas are asked for again.
     if (JSON.stringify(S.settings.server.urls) !== before) { forgetQuotas('server') }
+    if (S.settings.lang && S.settings.lang !== getLang()) { reloadForLanguage(); return }
     applyLook()
     renderSettings()
     renderConnSwitch()
   } catch (e) {
-    showToastLine(`No pude guardar el ajuste: ${e.message}`)
+    showToastLine(tr("Couldn't save the setting: {0}", e.message))
   }
+}
+
+/** Another language: the page loads again, with what was typed and not sent, and goes back to Settings. */
+function reloadForLanguage() {
+  try { sessionStorage.setItem('pedila.reload', JSON.stringify({ draft: $('#input').value, section: 'appearance' })) } catch {}
+  location.reload()
+}
+
+function afterReload() {
+  try {
+    const r = JSON.parse(sessionStorage.getItem('pedila.reload') || 'null')
+    sessionStorage.removeItem('pedila.reload')
+    if (!r) { return }
+    $('#input').value = String(r.draft || '')
+    autoGrow()
+    openSettings(r.section)
+  } catch {}
 }
 
 function openSettings(section = null) {
@@ -1701,7 +1734,7 @@ function wireSettings() {
   $('#open-logs').addEventListener('click', () => call(api.openLogs).catch(() => {}))
 }
 
-// ── Arranque ─────────────────────────────────────────────────────────────────────────────────
+// ── Startup ──────────────────────────────────────────────────────────────────────────────────
 async function start() {
   const init = await call(api.init)
   S.settings = init.settings
@@ -1726,7 +1759,7 @@ async function start() {
   wirePetPicker()
   wireExtras()
   S.reasoning = init.settings.chat?.reasoning || ''
-  // Versiones de Hermes que el proceso principal ya conozca (luego llegan con los avisos).
+  // Hermes versions the main process may already know (later they come with the events).
   try { S.hermesUpd = (await call(api.hermesUpdates)) || {} } catch { S.hermesUpd = {} }
   updateExtrasPills()
 
@@ -1758,7 +1791,7 @@ async function start() {
   if (init.pet) {
     await applyPet(init.pet).catch(() => {})
   } else {
-    // Primera vez: la mascota se está descargando de Petdex; aparece en cuanto llega.
+    // First time: the pet is being downloaded from Petdex; it appears as soon as it arrives.
     $('#pet-stage').hidden = true
     for (let i = 0; i < 20 && !S.pet; i++) {
       await new Promise(r => setTimeout(r, 3000))
@@ -1773,16 +1806,17 @@ async function start() {
   setInterval(() => { if (!$('#welcome').hidden) { welcomePet.flash('waving', 1) } }, 15000)
   await loadSessions(S.active)
   for (const other of visibleConns()) { if (other !== S.active) { loadSessions(other) } }
+  afterReload()
   updateComposer()
   updateExtrasPills()
   if (!S.current.sid) { renderChat() }
 }
 
 start().catch(e => {
-  document.body.append(el('pre', { class: 'error', text: 'No pude arrancar la pantalla: ' + e.message }))
+  document.body.append(el('pre', { class: 'error', text: tr("Couldn't start the screen: ") + e.message }))
 })
 
-// ── Gestión de chats: menú, renombrar, fijar, archivar, borrar, exportar ─────────────────────
+// ── Managing chats: menu, rename, pin, archive, delete, export ───────────────────────────────
 function closePopup() { $('#popup').hidden = true }
 
 function showPopup(items, x, y) {
@@ -1802,15 +1836,15 @@ function rowOf(conn, sid) {
 function openChatMenu(conn, sid, x, y) {
   const r = rowOf(conn, sid)
   showPopup([
-    ['✏️ Renombrar', () => renameChat(conn, sid)],
-    [r.pinned ? '📌 Quitar de fijados' : '📌 Fijar arriba', () => mutateChat(conn, sid, 'pin', !r.pinned)],
-    ['🗄 Archivar', () => mutateChat(conn, sid, 'archive', true)],
-    ['⬇️ Exportar a Markdown', () => exportChat(conn, sid)],
-    ['🗑 Borrar…', () => deleteChat(conn, sid), 'danger']
+    [tr('✏️ Rename'), () => renameChat(conn, sid)],
+    [r.pinned ? tr('📌 Unpin') : tr('📌 Pin to the top'), () => mutateChat(conn, sid, 'pin', !r.pinned)],
+    [tr('🗄 Archive'), () => mutateChat(conn, sid, 'archive', true)],
+    [tr('⬇️ Export to Markdown'), () => exportChat(conn, sid)],
+    [tr('🗑 Delete…'), () => deleteChat(conn, sid), 'danger']
   ], x, y)
 }
 
-function askBox({ title, text = '', value = null, ok = 'Aceptar', danger = false }) {
+function askBox({ title, text = '', value = null, ok = tr('OK'), danger = false }) {
   return new Promise(resolve => {
     const d = $('#ask-dialog')
     $('#ask-title').textContent = title
@@ -1833,7 +1867,7 @@ function askBox({ title, text = '', value = null, ok = 'Aceptar', danger = false
 
 async function renameChat(conn, sid) {
   const r = rowOf(conn, sid)
-  const title = await askBox({ title: 'Renombrar el chat', value: chat(conn, sid).title || r.title, ok: 'Guardar' })
+  const title = await askBox({ title: tr('Rename the chat'), value: chat(conn, sid).title || r.title, ok: tr('Save') })
   if (!title) { return }
   if (await mutateChat(conn, sid, 'rename', title)) {
     chat(conn, sid).title = title
@@ -1845,7 +1879,7 @@ async function renameChat(conn, sid) {
 
 async function deleteChat(conn, sid) {
   const title = chat(conn, sid).title || rowOf(conn, sid).title
-  const yes = await askBox({ title: '¿Borrar este chat?', text: `«${title}» desaparecerá de Pedila y de Hermes Desktop, con todos sus mensajes. No se puede deshacer. (Si solo quieres quitarlo de en medio, mejor «Archivar».)`, ok: 'Borrar', danger: true })
+  const yes = await askBox({ title: tr('Delete this chat?'), text: tr("“{0}” will disappear from Pedila and from Hermes Desktop, with all its messages. This can't be undone. (If you only want it out of the way, “Archive” is better.)", title), ok: tr('Delete'), danger: true })
   if (yes) { await mutateChat(conn, sid, 'delete') }
 }
 
@@ -1853,7 +1887,7 @@ async function mutateChat(conn, sid, op, value) {
   try {
     await call(api.mutate, conn, sid, op, value)
   } catch (e) {
-    showToastLine(`No se pudo: ${e.message}`)
+    showToastLine(tr("It didn't work: {0}", e.message))
     return false
   }
   const rows = S.sessions[conn]
@@ -1862,7 +1896,7 @@ async function mutateChat(conn, sid, op, value) {
     S.sessions[conn] = rows.filter(x => x.id !== sid)
     if (op === 'delete') { S.chats.delete(key(conn, sid)) }
     if (S.current.conn === conn && S.current.sid === sid) { newChatView() }
-    showToastLine(op === 'delete' ? 'Chat borrado.' : 'Chat archivado. Lo tienes en «Ver chats archivados».')
+    showToastLine(op === 'delete' ? tr('Chat deleted.') : tr("Chat archived. You'll find it in “See archived chats”."))
   } else if (r && op === 'pin') {
     r.pinned = Boolean(value)
   }
@@ -1873,16 +1907,16 @@ async function mutateChat(conn, sid, op, value) {
 
 function chatMarkdown(conn, sid) {
   const ch = chat(conn, sid)
-  const lines = [`# ${ch.title || 'Chat'}`, '', `_Exportado de Pedila · ${CONN_NAMES[conn]}${ch.model ? ' · ' + ch.model : ''} · ${new Date().toLocaleString('es')}_`, '']
+  const lines = [`# ${ch.title || 'Chat'}`, '', tr('_Exported from Pedila · {0}{1} · {2}_', CONN_NAMES[conn], ch.model ? ' · ' + ch.model : '', new Date().toLocaleString(locale())), '']
   const turns = [...ch.transcript, ...(ch.live && ch.live.done ? [liveToTurn(ch.live)] : [])]
   for (const t of turns) {
     if (t.role === 'note') { lines.push(`> ℹ ${t.title}`, ''); continue }
-    if (t.role === 'user') { lines.push('## Tú', '', t.text + (t.images && t.images.length ? `\n\n_(${t.images.length === 1 ? 'una imagen' : t.images.length + ' imágenes'})_` : ''), ''); continue }
+    if (t.role === 'user') { lines.push(tr('## You'), '', t.text + (t.images && t.images.length ? `\n\n_(${t.images.length === 1 ? tr('one image') : t.images.length + tr(' images')})_` : ''), ''); continue }
     lines.push('## Hermes', '')
     for (const b of t.blocks) {
       if (b.type === 'text') { lines.push(b.text, ''); continue }
       const d = describeTool(b)
-      lines.push(`> 🔧 ${d.title.replace(/`/g, "'")}${b.error ? ' — **falló**' : ''}`, '')
+      lines.push(`> 🔧 ${d.title.replace(/`/g, "'")}${b.error ? tr(' — **failed**') : ''}`, '')
     }
   }
   return lines.join('\n')
@@ -1893,9 +1927,9 @@ async function exportChat(conn, sid) {
   try {
     if (!ch.loaded) { ch.transcript = await call(api.transcript, conn, sid); ch.loaded = true }
     const r = await call(api.exportChat, ch.title || rowOf(conn, sid).title, chatMarkdown(conn, sid))
-    if (r.saved) { showToastLine(`Guardado en ${r.file}`) }
+    if (r.saved) { showToastLine(tr('Saved to {0}', r.file)) }
   } catch (e) {
-    showToastLine(`No pude exportar: ${e.message}`)
+    showToastLine(tr("Couldn't export: {0}", e.message))
   }
 }
 
@@ -1904,69 +1938,69 @@ async function openArchived() {
   const list = $('#archived-list')
   const conn = S.active
   $('#archived-where').textContent = CONN_NAMES[conn]
-  list.replaceChildren(el('p', { class: 'muted', text: 'Cargando…' }))
+  list.replaceChildren(el('p', { class: 'muted', text: tr('Loading…') }))
   d.showModal()
   try {
     const rows = await call(api.archived, conn)
     list.replaceChildren()
-    if (!rows.length) { list.append(el('p', { class: 'muted', text: 'No hay chats archivados.' })); return }
+    if (!rows.length) { list.append(el('p', { class: 'muted', text: tr('There are no archived chats.') })); return }
     for (const r of rows) {
       const item = el('div', { class: 'arch-row' },
         el('div', { class: 'grow' }, el('div', { class: 'n', text: r.title }), el('div', { class: 'muted small', text: r.preview })),
-        el('button', { class: 'btn-ghost', text: 'Abrir', onclick: () => { d.close(); openChat(conn, r.id) } }),
-        el('button', { class: 'btn-ghost', text: 'Desarchivar', onclick: async () => { if (await mutateChat(conn, r.id, 'archive', false)) { item.remove(); loadSessions(conn) } } }),
-        el('button', { class: 'btn-ghost danger', text: 'Borrar', onclick: async () => {
-          const yes = await askBox({ title: '¿Borrar este chat?', text: `«${r.title}» se borrará para siempre (también de Hermes Desktop).`, ok: 'Borrar', danger: true })
+        el('button', { class: 'btn-ghost', text: tr('Open'), onclick: () => { d.close(); openChat(conn, r.id) } }),
+        el('button', { class: 'btn-ghost', text: tr('Unarchive'), onclick: async () => { if (await mutateChat(conn, r.id, 'archive', false)) { item.remove(); loadSessions(conn) } } }),
+        el('button', { class: 'btn-ghost danger', text: tr('Delete'), onclick: async () => {
+          const yes = await askBox({ title: tr('Delete this chat?'), text: tr('“{0}” will be deleted for good (from Hermes Desktop too).', r.title), ok: tr('Delete'), danger: true })
           if (yes && await mutateChat(conn, r.id, 'delete')) { item.remove() }
           if (!d.open) { d.showModal() }
         } }))
       list.append(item)
     }
   } catch (e) {
-    list.replaceChildren(el('p', { class: 'error', text: `No pude leerlos: ${e.message}` }))
+    list.replaceChildren(el('p', { class: 'error', text: tr("Couldn't read them: {0}", e.message) }))
   }
 }
 
-// ── Escribir: imágenes, solo consultar, razonamiento, frases ─────────────────────────────────
-const READ_ONLY_NOTE = '[Modo solo consulta: puedes leer, buscar e investigar, pero NO cambies, borres, instales ni ejecutes nada que modifique archivos, programas o el sistema. Si hiciera falta un cambio, explícame cuál y pregúntame antes.]'
-const REASONING = [['', 'el de Hermes'], ['low', 'rápido (low)'], ['medium', 'normal (medium)'], ['high', 'a fondo (high)'], ['xhigh', 'muy a fondo (xhigh)'], ['max', 'al máximo (max)']]
+// ── Writing: images, read only, reasoning, phrases ───────────────────────────────────────────
+const READ_ONLY_NOTE = tr('[Read-only mode: you can read, search and investigate, but do NOT change, delete, install or run anything that modifies files, programs or the system. If a change were needed, explain which one and ask me first.]')
+const REASONING = [['', tr("Hermes's default")], ['low', tr('quick (low)')], ['medium', 'normal (medium)'], ['high', tr('deep (high)')], ['xhigh', tr('very deep (xhigh)')], ['max', tr('maximum (max)')]]
 const effortName = v => (REASONING.find(r => r[0] === v) || [v, v])[1]
 
 function updateExtrasPills() {
   const ro = $('#readonly-pill')
   ro.classList.toggle('on', S.readOnly)
-  ro.title = S.readOnly ? 'Solo consultar: Hermes no cambiará nada (pulsa para quitarlo)' : 'Pulsa para que Hermes solo lea y consulte, sin cambiar nada'
+  ro.title = S.readOnly ? tr("Read only: Hermes won't change anything (click to turn it off)") : tr('Click so that Hermes only reads and looks things up, without changing anything')
   const rp = $('#reason-pill')
   const ch = currentChat()
   rp.disabled = false
   const eff = currentEffort()
-  const label = eff.value ? effortName(eff.value) + (eff.own ? '' : ' · el de Hermes') : ch ? 'el del chat' : 'el de Hermes'
+  const label = eff.value ? effortName(eff.value) + (eff.own ? '' : tr(" · Hermes's default")) : ch ? tr("the chat's") : tr("Hermes's default")
   rp.textContent = `🧠 ${label}`
-  rp.title = ch ? 'Cuánto piensa Hermes en este chat (pulsa para cambiarlo)' : 'Cuánto piensa Hermes en el chat nuevo (pulsa para cambiar)'
+  rp.title = ch ? tr('How much Hermes thinks in this chat (click to change it)') : tr('How much Hermes thinks in the new chat (click to change it)')
   schedulePanel()
 }
 
 function renderAttach() {
   const strip = $('#attach-strip')
   strip.replaceChildren(...S.attach.map((a, i) => el('div', { class: 'att' },
-    el('img', { src: a.url, alt: a.name, title: `${a.name} (pulsa para verla en grande)`, onclick: () => openImage(a.url, a.name) }),
-    el('button', { class: 'att-x', text: '✕', title: 'Quitar', onclick: () => { S.attach.splice(i, 1); renderAttach(); updateComposer() } }))))
+    el('img', { src: a.url, alt: a.name, title: tr('{0} (click to enlarge)', a.name), onclick: () => openImage(a.url, a.name) }),
+    el('button', { class: 'att-x', text: '✕', title: tr('Remove'), onclick: () => { S.attach.splice(i, 1); renderAttach(); updateComposer() } }))))
   strip.hidden = !S.attach.length
   reportDraft()
 }
 
 async function addImages(files) {
   for (const file of files) {
-    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) { showToastLine('Solo se pueden adjuntar imágenes (PNG, JPG, WebP o GIF).'); continue }
-    if (file.size > 15 * 1024 * 1024) { showToastLine(`«${file.name}» pasa de 15 MB.`); continue }
-    if (S.attach.length >= 6) { showToastLine('Como mucho 6 imágenes por mensaje.'); break }
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) { showToastLine(tr('Only images can be attached (PNG, JPG, WebP or GIF).')); continue }
+    if (file.size > 15 * 1024 * 1024) { showToastLine(tr('“{0}” is over 15 MB.', file.name)); continue }
+    if (S.attach.length >= 6) { showToastLine(tr('6 images per message at most.')); break }
     const buf = new Uint8Array(await file.arrayBuffer())
     let bin = ''
     for (let i = 0; i < buf.length; i += 0x8000) { bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000)) }
     const ext = file.type.split('/')[1].replace('jpeg', 'jpg')
     const b64 = btoa(bin)
-    // La miniatura va como data: (la política de seguridad de la ventana no deja cargar blob:).
-    S.attach.push({ name: file.name && file.name !== 'image.png' ? file.name : `captura-${Date.now()}.${ext}`, b64, url: `data:${file.type};base64,${b64}` })
+    // The thumbnail is a data: URL (the window's security policy doesn't let blob: load).
+    S.attach.push({ name: file.name && file.name !== 'image.png' ? file.name : `screenshot-${Date.now()}.${ext}`, b64, url: `data:${file.type};base64,${b64}` })
   }
   renderAttach()
   updateComposer()
@@ -1985,7 +2019,7 @@ function updateSnippets() {
   const list = snippetMatches()
   const m = $('#snip-menu')
   if (!list || !list.length) { m.hidden = true; return }
-  m.replaceChildren(el('div', { class: 'mh', text: 'Frases rápidas (Tab o clic para usar)' }), ...list.map(x => el('button', { text: x.name, title: x.text, onclick: () => useSnippet(x) })))
+  m.replaceChildren(el('div', { class: 'mh', text: tr('Quick phrases (Tab or click to use one)') }), ...list.map(x => el('button', { text: x.name, title: x.text, onclick: () => useSnippet(x) })))
   const box = $('#composer').getBoundingClientRect()
   const main = $('#main').getBoundingClientRect()
   m.style.left = (box.left - main.left) + 'px'
@@ -2003,7 +2037,7 @@ function useSnippet(x) {
   t.setSelectionRange(t.value.length, t.value.length)
 }
 
-// ── Sonido al terminar (generado aquí, sin archivos) ─────────────────────────────────────────
+// ── Sound when finished (made here, no files) ────────────────────────────────────────────────
 let audioCtx = null
 function chime() {
   try {
@@ -2024,8 +2058,8 @@ function chime() {
   } catch {}
 }
 
-// ── Panel derecho: uso y parámetros ──────────────────────────────────────────────────────────
-// Como las tarjetas de Claude Panel: lo que pasa ahora, el chat abierto y el uso, siempre a la vista.
+// ── Right panel: usage and parameters ────────────────────────────────────────────────────────
+// Like Claude Panel's cards: what's going on now, the open chat and usage, always in sight.
 const P = { usage: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, done: { local: null, server: null }, raf: 0, day: '', hold: false, held: false, reconciling: false }
 const panelOn = () => S.settings && S.settings.window && S.settings.window.sidePanel !== false
 
@@ -2045,7 +2079,7 @@ function schedulePanel() {
   P.raf = requestAnimationFrame(() => { P.raf = 0; renderPanel() })
 }
 
-/** El resumen de uso de una conexión, como mucho una vez por minuto (o al acabar una respuesta). */
+/** A connection's usage summary, once per minute at most (or when an answer ends). */
 async function loadPanelUsage(conn, force = false) {
   if (P.loading[conn] || (!force && Date.now() - P.at[conn] < 60000)) { return }
   if (!S.conns[conn] || S.conns[conn].state !== 'ready') { return }
@@ -2059,20 +2093,20 @@ const spKv = pairs => el('dl', { class: 'sp-kv' }, ...pairs.filter(Boolean).flat
 function hermesNow() {
   const all = [...S.chats.values()]
   const live = all.filter(c => (c.live && !c.live.done) || c.running)
-  // También lo que Hermes hace fuera de esta ventana (Hermes Desktop, o empezado antes de abrir Pedila).
+  // Also what Hermes does outside this window (Hermes Desktop, or started before Pedila opened).
   const remote = remoteBusy(S.active)
-  if (all.some(c => c.prompts.size) || remote.some(a => a.status === 'waiting')) { return { cls: 'need', text: 'Hermes te necesita', live, remote } }
-  if (live.some(c => c.live && !c.live.done && c.live.blocks.some(b => b.type === 'tool' && !b.done))) { return { cls: 'busy', text: 'Usando herramientas', live, remote } }
-  if (live.length || remote.length) { return { cls: 'busy', text: 'Trabajando', live, remote } }
-  if (all.some(c => liveSubs(c))) { return { cls: 'busy', text: 'Subagentes trabajando', live, remote } }
-  return { cls: 'idle', text: 'Tranquilo', live, remote }
+  if (all.some(c => c.prompts.size) || remote.some(a => a.status === 'waiting')) { return { cls: 'need', text: tr('Hermes needs you'), live, remote } }
+  if (live.some(c => c.live && !c.live.done && c.live.blocks.some(b => b.type === 'tool' && !b.done))) { return { cls: 'busy', text: tr('Using tools'), live, remote } }
+  if (live.length || remote.length) { return { cls: 'busy', text: tr('Working'), live, remote } }
+  if (all.some(c => liveSubs(c))) { return { cls: 'busy', text: tr('Subagents working'), live, remote } }
+  return { cls: 'idle', text: tr('Idle'), live, remote }
 }
 
 function panelChatCard() {
   const ch = currentChat()
   if (!ch) {
-    return el('section', { class: 'sp-card' }, el('h4', { text: 'Este chat' }),
-      el('p', { class: 'muted small', text: `Chat nuevo en ${CONN_NAMES[S.current.conn]}. Al empezar verás aquí su memoria, sus tokens y su velocidad.` }))
+    return el('section', { class: 'sp-card' }, el('h4', { text: tr('This chat') }),
+      el('p', { class: 'muted small', text: tr('New chat on {0}. Once it starts, its memory, tokens and speed show up here.', CONN_NAMES[S.current.conn]) }))
   }
   const u = ch.usage || {}
   const max = u.max || ch.contextMax || 0
@@ -2081,40 +2115,40 @@ function panelChatCard() {
   const turns = [...(ch.transcript || []), ...(ch.live ? [ch.live] : [])]
   const tools = turns.reduce((n, t) => n + ((t.blocks || []).filter(b => b.type === 'tool').length), 0)
   const last = [...(ch.transcript || [])].reverse().find(t => t.role === 'assistant' && t.stats)
-  const ring = el('div', { class: 'sp-ring' + (pct >= 80 ? ' warn' : ''), style: `--p:${pct}`, title: 'Memoria del chat: Hermes resume lo antiguo al 85 %' }, el('span', { text: max ? pct + '%' : '—' }))
-  return el('section', { class: 'sp-card' }, el('h4', { text: 'Este chat' }),
+  const ring = el('div', { class: 'sp-ring' + (pct >= 80 ? ' warn' : ''), style: `--p:${pct}`, title: tr('Chat memory: at 85%, Hermes summarizes the older part') }, el('span', { text: max ? pct + '%' : '—' }))
+  return el('section', { class: 'sp-card' }, el('h4', { text: tr('This chat') }),
     el('div', { class: 'sp-ctx' }, ring, el('div', { class: 'sp-ctx-txt' },
-      el('b', { text: 'Memoria usada' }),
-      el('span', { class: 'muted', text: max ? `${kfmt(u.used || 0)} de ${kfmt(max)} tokens` : 'Aún sin datos' }))),
+      el('b', { text: tr('Memory used') }),
+      el('span', { class: 'muted', text: max ? tr('{0} of {1} tokens', kfmt(u.used || 0), kfmt(max)) : tr('No data yet') }))),
     spKv([
-      ['Modelo', ch.model || '—'],
-      (() => { const e = currentEffort(); return e.value ? ['Esfuerzo', effortName(e.value)] : null })(),
-      ch.provider ? ['Proveedor', ch.provider] : null,
-      ['Mensajes', String(row.messages || turns.length || 0)],
-      ['Tokens leídos', kfmt(row.inputTokens || 0)],
-      ['Tokens escritos', kfmt(row.outputTokens || u.out || 0)],
-      ['Herramientas', String(tools)],
-      last ? ['Última respuesta', statsText(last.stats) || '—'] : null
+      [tr('Model'), ch.model || '—'],
+      (() => { const e = currentEffort(); return e.value ? [tr('Effort'), effortName(e.value)] : null })(),
+      ch.provider ? [tr('Provider'), ch.provider] : null,
+      [tr('Messages'), String(row.messages || turns.length || 0)],
+      [tr('Tokens read'), kfmt(row.inputTokens || 0)],
+      [tr('Tokens written'), kfmt(row.outputTokens || u.out || 0)],
+      [tr('Tools'), String(tools)],
+      last ? [tr('Last answer'), statsText(last.stats) || '—'] : null
     ]))
 }
 
 function panelNowCard() {
   const now = hermesNow()
-  const model = $('#model-pill') ? $('#model-pill').textContent.replace(/^Modelo:\s*/, '') : ''
-  return el('section', { class: 'sp-card' }, el('h4', { text: 'Ahora' }),
+  const model = $('#model-pill') ? $('#model-pill').textContent.replace(tr('Model: {0}', ''), '') : ''
+  return el('section', { class: 'sp-card' }, el('h4', { text: tr('Now') }),
     el('div', { class: 'sp-state' }, el('span', { class: 'dot ' + now.cls }), el('span', { text: now.text })),
     spKv([
-      ['Chats en marcha', String(now.live.length + now.remote.length)],
-      ['Solo consultar', S.readOnly ? 'sí' : 'no'],
-      // El razonamiento y el modelo se eligen al empezar un chat; con uno abierto, el modelo sale en «Este chat».
-      (() => { const e = currentEffort(); return [currentChat() ? 'Esfuerzo (este chat)' : 'Esfuerzo (chat nuevo)', e.value ? effortName(e.value) : 'el de Hermes'] })(),
-      !currentChat() ? ['Modelo (chat nuevo)', model || '—'] : null
+      [tr('Chats running'), String(now.live.length + now.remote.length)],
+      [tr('Read only'), S.readOnly ? tr('yes') : 'no'],
+      // Reasoning and model are chosen when a chat starts; with one open, the model shows in "This chat".
+      (() => { const e = currentEffort(); return [currentChat() ? tr('Effort (this chat)') : tr('Effort (new chat)'), e.value ? effortName(e.value) : tr("Hermes's default")] })(),
+      !currentChat() ? [tr('Model (new chat)'), model || '—'] : null
     ]))
 }
 
 /**
- * La primera fila de «Uso»: a qué hora respondió Hermes por última vez y cuánto hace, o, con
- * Hermes trabajando, desde qué hora. El tiempo se pone al día solo (tickPanel), sin repintar.
+ * The first row of "Usage": at what time Hermes last answered and how long ago or, with Hermes working,
+ * since when. The time updates by itself (tickPanel), without repainting.
  */
 function panelLastTiles(conn, u) {
   const now = Date.now()
@@ -2122,61 +2156,62 @@ function panelLastTiles(conn, u) {
   const remote = remoteBusy(conn)
   const total = busyChats.length + remote.length
   if (total) {
-    // Inicio: el envío o el comienzo del turno que vio Pedila; si el chat se abrió con Hermes ya
-    // trabajando, tu último mensaje guardado. De lo empezado fuera de esta ventana Hermes no da la hora.
+    // Start: the sending or the beginning of the turn Pedila saw; if the chat was opened with Hermes
+    // already working, your last stored message. For what was started outside this window Hermes doesn't
+    // give the time.
     const starts = busyChats.map(c => c.turnAt || toMs([...(c.transcript || [])].reverse().find(t => t.role === 'user' && t.ts)?.ts)).filter(t => t > 0 && t <= now + 60000)
     const first = starts.length ? Math.min(...starts, now) : 0
-    const label = total > 1 ? `${total} tareas en marcha` : 'en marcha'
+    const label = total > 1 ? tr('{0} tasks running', total) : tr('running')
     if (!first) {
-      // Un clic la abre aquí y entonces ya se ve desde cuándo trabaja.
+      // A click opens it here, and then it does show since when it has been working.
       const row = total === 1 && remote.length ? listedRow(conn, remote[0].id) : null
       const open = row ? () => openChat(conn, row.id) : null
       const names = remote.map(a => a.title || (listedRow(conn, a.id) || {}).title).filter(Boolean)
-      return [el('div', { class: 'sp-num sp-wide' + (open ? ' sp-go' : ''), title: open ? `Abrir «${row.title || 'el chat'}»` : names.join(' · '), ...opener(open, 'busy') },
-        el('b', { text: 'Trabajando ahora' }), el('span', { text: total > 1 ? label : 'una tarea en marcha' }))]
+      return [el('div', { class: 'sp-num sp-wide' + (open ? ' sp-go' : ''), title: open ? tr('Open “{0}”', row.title || tr('the chat')) : names.join(' · '), ...opener(open, 'busy') },
+        el('b', { text: tr('Working now') }), el('span', { text: total > 1 ? label : tr('one task running') }))]
     }
     const day = dayLabel(first)
     return [
-      el('div', { class: 'sp-num', title: `Empezó: ${full(first)}` }, el('b', { text: hhmm(first) }), el('span', { text: `empezó la tarea${day ? ' · ' + day : ''}` })),
-      el('div', { class: 'sp-num', title: 'Lo que lleva Hermes con esta tarea' }, el('b', { 'data-span': first, text: span(now - first) }), el('span', { text: label }))
+      el('div', { class: 'sp-num', title: tr('Started: {0}', full(first)) }, el('b', { text: hhmm(first) }), el('span', { text: tr('task started{0}', day ? ' · ' + day : '') })),
+      el('div', { class: 'sp-num', title: tr('How long Hermes has been on this task') }, el('b', { 'data-span': first, text: span(now - first) }), el('span', { text: label }))
     ]
   }
-  // Lo más reciente entre lo que vio terminar Pedila (al momento) y la última actividad que guarda
-  // Hermes (cuenta también lo hecho desde Hermes Desktop u otros sitios, y sobrevive a reinicios).
+  // The most recent of what Pedila saw finish (right away) and the last activity Hermes keeps (it also
+  // counts what was done from Hermes Desktop or elsewhere, and survives restarts).
   const fromHermes = u && u.last && u.last.at ? u.last : null
   const mine = P.done[conn]
   const last = mine && (!fromHermes || mine.at >= fromHermes.at) ? { at: mine.at, id: mine.sid, title: (S.chats.get(key(conn, mine.sid)) || {}).title || '' } : fromHermes
   if (!last) { return [] }
   const at = Math.min(last.at, now)
   const day = dayLabel(at)
-  // Solo se abre si el chat está en la lista (no archivado ni borrado).
+  // It only opens if the chat is in the list (not archived or deleted).
   const row = last.id ? listedRow(conn, last.id) : null
   const name = (row && row.title) || last.title || ''
   const open = row ? () => openChat(conn, row.id) : null
   return [
-    el('div', { class: 'sp-num' + (open ? ' sp-go' : ''), title: `${open ? `Abrir «${name || 'el chat'}»` : name || 'Última respuesta'} · ${full(at)}`, ...opener(open, 'last') },
-      el('b', { text: hhmm(at) }), el('span', { text: `última respuesta${day ? ' · ' + day : ''}` })),
-    el('div', { class: 'sp-num', title: 'El tiempo que ha pasado desde la última respuesta de Hermes' }, el('b', { 'data-span': at, text: span(now - at) }), el('span', { text: 'desde entonces' }))
+    el('div', { class: 'sp-num' + (open ? ' sp-go' : ''), title: `${open ? tr('Open “{0}”', name || tr('the chat')) : name || tr('Last answer')} · ${full(at)}`, ...opener(open, 'last') },
+      el('b', { text: hhmm(at) }), el('span', { text: tr('last answer{0}', day ? ' · ' + day : '') })),
+    el('div', { class: 'sp-num', title: tr("Time since Hermes's last answer") }, el('b', { 'data-span': at, text: span(now - at) }), el('span', { text: tr('since then') }))
   ]
 }
 
-// El chat solo si está en la lista (ni archivado ni borrado); rowOf da uno de relleno.
+// The chat only if it's in the list (not archived or deleted); rowOf gives a filler one.
 const listedRow = (conn, id) => (S.sessions[conn] || []).find(r => r.id === id) || null
 
-/** Atributos de una tarjeta del panel que abre un chat, con ratón o teclado. */
+/** Attributes of a panel card that opens a chat, with the mouse or the keyboard. */
 function opener(open, focus) {
   if (!open) { return {} }
   return { role: 'button', tabindex: '0', 'data-focus': focus, onclick: open, onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() } } }
 }
 
 /**
- * Chats en los que Hermes trabaja sin que esta ventana los siga (empezados en Hermes Desktop, o
- * antes de abrir Pedila), según la última consulta a `session.active_list`. Lo que esta ventana
- * sigue manda, y lo que vio terminar después de esa consulta ya no cuenta.
+ * Chats Hermes is working in without this window following them (started in Hermes Desktop, or before Pedila
+ * opened), according to the last `session.active_list` query. What this window follows wins, and what it saw
+ * finish after that query no longer counts.
  */
 function remoteBusy(conn) {
   const u = P.usage[conn]
-  // Sin conexión, o con una consulta de hace más de 3 minutos, no se sabe: no se cuenta nada.
+  // Not connected, or with a query more than 3 minutes old, it isn't known: nothing is counted.
   if (!u || !Array.isArray(u.active) || !S.conns[conn] || S.conns[conn].state !== 'ready' || Date.now() - (u.activeAt || 0) > 180000) { return [] }
   return u.active.filter(a => {
     const ch = S.chats.get(key(conn, a.id))
@@ -2184,7 +2219,10 @@ function remoteBusy(conn) {
   })
 }
 
-/** Cada segundo: los relojes del panel («25 min», «40 s») al día; al cambiar de día se repinta (hoy → ayer). */
+/**
+ * Every second: the panel's clocks ("25 min", "40 s") up to date; on a day change it repaints (today →
+ * yesterday).
+ */
 function tickPanel() {
   if (!panelOn()) { return }
   const d = new Date().toDateString()
@@ -2196,8 +2234,8 @@ function panelUsageCard() {
   const conn = S.active
   const u = P.usage[conn]
   loadPanelUsage(conn)
-  const head = el('h4', {}, el('span', { class: 'grow', text: `Uso · ${CONN_NAMES[conn]}` }), el('button', { class: 'sp-link', text: 'Ver todo', 'data-focus': 'usage-all', onclick: () => openUsage(conn) }))
-  if (!u) { return el('section', { class: 'sp-card' }, head, el('p', { class: 'muted small', text: S.conns[conn] && S.conns[conn].state === 'ready' ? 'Calculando…' : 'Sin conexión.' })) }
+  const head = el('h4', {}, el('span', { class: 'grow', text: tr('Usage · {0}', CONN_NAMES[conn]) }), el('button', { class: 'sp-link', text: tr('See all'), 'data-focus': 'usage-all', onclick: () => openUsage(conn) }))
+  if (!u) { return el('section', { class: 'sp-card' }, head, el('p', { class: 'muted small', text: S.conns[conn] && S.conns[conn].state === 'ready' ? tr('Calculating…') : tr('Not connected.') })) }
   const days = u.days.slice(-14)
   const max = Math.max(1, ...days.map(d => d.chats))
   const today = u.today || { chats: 0, input: 0, output: 0 }
@@ -2205,49 +2243,49 @@ function panelUsageCard() {
   return el('section', { class: 'sp-card' }, head,
     el('div', { class: 'sp-nums' },
       ...panelLastTiles(conn, u),
-      el('div', { class: 'sp-num' }, el('b', { text: String(today.chats) }), el('span', { text: 'chats hoy' })),
-      el('div', { class: 'sp-num' }, el('b', { text: kfmt(today.input + today.output) }), el('span', { text: 'tokens hoy' })),
-      el('div', { class: 'sp-num' }, el('b', { text: String(week.chats) }), el('span', { text: 'chats en 7 días' })),
-      el('div', { class: 'sp-num' }, el('b', { text: kfmt(week.input + week.output) }), el('span', { text: 'tokens en 7 días' }))),
-    el('div', { class: 'sp-spark', title: 'Chats por día, últimos 14 días' }, ...days.map(d => el('div', { class: d.chats ? '' : 'zero', style: `height:${d.chats ? Math.max(8, Math.round(d.chats / max * 100)) : 4}%`, title: `${d.date}: ${d.chats} chats · ${kfmt(d.input + d.output)} tokens` }))),
-    el('div', { class: 'sp-spark-l' }, el('span', { text: 'hace 14 días' }), el('span', { text: 'hoy' })))
+      el('div', { class: 'sp-num' }, el('b', { text: String(today.chats) }), el('span', { text: tr('chats today') })),
+      el('div', { class: 'sp-num' }, el('b', { text: kfmt(today.input + today.output) }), el('span', { text: tr('tokens today') })),
+      el('div', { class: 'sp-num' }, el('b', { text: String(week.chats) }), el('span', { text: tr('chats in 7 days') })),
+      el('div', { class: 'sp-num' }, el('b', { text: kfmt(week.input + week.output) }), el('span', { text: tr('tokens in 7 days') }))),
+    el('div', { class: 'sp-spark', title: tr('Chats per day, last 14 days') }, ...days.map(d => el('div', { class: d.chats ? '' : 'zero', style: `height:${d.chats ? Math.max(8, Math.round(d.chats / max * 100)) : 4}%`, title: `${d.date}: ${d.chats} chats · ${kfmt(d.input + d.output)} tokens` }))),
+    el('div', { class: 'sp-spark-l' }, el('span', { text: tr('14 days ago') }), el('span', { text: tr('today') })))
 }
 
-/** Qué cuentan los tokens por modelo, para los textos de ayuda. */
+/** What the tokens per model count, for the help texts. */
 function modelsHow(u) {
   return u && u.modelsFrom === 'hermes'
-    ? 'Tokens leídos + escritos de cada modelo en el último año, según las estadísticas de Hermes: todos sus chats y también lo que gasta en resumir la memoria, poner títulos o ver imágenes.'
-    : 'Tokens leídos + escritos de cada modelo, sumando tus chats.'
+    ? tr("Tokens read + written by each model over the last year, according to Hermes's statistics: all its chats, and also what it spends on summarizing memory, writing titles or looking at images.")
+    : tr('Tokens read + written by each model, adding up your chats.')
 }
 
-/** Los modelos que más tokens han gastado (leídos + escritos), no los de más chats. */
+/** The models that have spent the most tokens (read + written), not the ones with the most chats. */
 function panelModelsCard() {
   const u = P.usage[S.active]
   const used = u && Array.isArray(u.models) ? u.models.filter(m => tokensOf(m) > 0) : []
   if (!used.length) { return null }
   const top = used.slice(0, 4)
   const max = Math.max(1, ...top.map(tokensOf))
-  return el('section', { class: 'sp-card' }, el('h4', { text: 'Modelos más usados', title: modelsHow(u) }),
+  return el('section', { class: 'sp-card' }, el('h4', { text: tr('Most used models'), title: modelsHow(u) }),
     ...top.map(m => {
       const n = tokensOf(m)
       const aux = tasksLine(m.tasks)
-      return el('div', { class: 'sp-model', title: `${m.model}\n${kfmt(n)} tokens: ${kfmt(m.input)} leídos · ${kfmt(m.output)} escritos${aux ? `\nIncluye ${aux}` : ''}` },
+      return el('div', { class: 'sp-model', title: tr('{0}\n{1} tokens: {2} read · {3} written{4}', m.model, kfmt(n), kfmt(m.input), kfmt(m.output), aux ? tr('\nIncludes {0}', aux) : '') },
         el('span', { class: 'n', text: modelName(m.model) }), el('span', { class: 'muted', text: `${kfmt(n)} tokens` }),
         el('div', { class: 'sp-bar' }, el('i', { style: `width:${Math.max(2, Math.round(n / max * 100))}%` })))
     }))
 }
 
-// ── Cuotas de las APIs de pago (OpenRouter, Venice, OpenCode) ───────────────────────────────
-// Las lee el complemento «pedila» dentro de Hermes (las claves no salen de allí). La tarjeta solo
-// aparece si ese Hermes tiene alguna de esas APIs: con el complemento, las que tienen clave; sin él,
-// un botón para activarlo si Hermes tiene alguna puesta. Si no, no se ve nada.
+// ── Quotas of the paid APIs (OpenRouter, Venice, OpenCode) ──────────────────────────────────
+// The "pedila" plugin reads them inside Hermes (the keys don't leave it). The card only appears if that
+// Hermes has one of those APIs: with the plugin, the ones that have a key; without it, a button to turn it
+// on if Hermes has any set. If not, nothing shows.
 const Q = { data: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, again: { local: false, server: false }, gen: { local: 0, server: 0 }, err: { local: '', server: '' }, login: { local: false, server: false }, note: { local: '', server: '' }, busy: { local: '', server: '' }, ask: { local: null, server: null }, installed: { local: false, server: false } }
 const QUOTA_NAMES = { openrouter: 'OpenRouter', venice: 'Venice', 'opencode-go': 'OpenCode Go', 'opencode-zen': 'OpenCode Zen' }
-const RESET_NAMES = { daily: 'cada día', weekly: 'cada semana', monthly: 'cada mes' }
+const RESET_NAMES = { daily: tr('daily'), weekly: tr('weekly'), monthly: tr('monthly') }
 
-/** Olvida las cuotas de una conexión (otra dirección, otra sesión…): se vuelven a pedir. */
+/** Forgets a connection's quotas (another address, another session…): they're asked for again. */
 function forgetQuotas(conn) {
-  Q.gen[conn]++ // lo que esté llegando de antes ya no vale
+  Q.gen[conn]++ // whatever is arriving from before is no longer good
   Q.data[conn] = null
   Q.at[conn] = 0
   Q.err[conn] = ''
@@ -2256,7 +2294,7 @@ function forgetQuotas(conn) {
   Q.installed[conn] = false
 }
 
-/** Las cuotas de una conexión, como mucho una vez por minuto (o al pulsar ↻). */
+/** A connection's quotas, once per minute at most (or when ↻ is clicked). */
 async function loadQuotas(conn, fresh = false) {
   if (Q.loading[conn]) { if (fresh) { Q.again[conn] = true } return }
   if (!fresh && Date.now() - Q.at[conn] < 60000) { return }
@@ -2276,7 +2314,7 @@ async function loadQuotas(conn, fresh = false) {
     if (gen === Q.gen[conn]) { Q.at[conn] = Date.now() }
     Q.loading[conn] = false
     schedulePanel()
-    // Alguien pidió leer de nuevo mientras tanto (↻ o justo tras instalar): se lee otra vez.
+    // Someone asked to read again meanwhile (↻ or right after installing): it's read again.
     if (Q.again[conn]) { Q.again[conn] = false; loadQuotas(conn, true) }
   }
 }
@@ -2291,19 +2329,19 @@ async function installQuotas(conn, force = false) {
     const r = await call(api.quotasInstall, conn, force)
     Q.busy[conn] = ''
     if (!r.ok) {
-      // El análisis de seguridad de Hermes puso una pega: se enseña y decide la persona.
-      if (r.scan) { Q.ask[conn] = { scan: r.scan, findings: r.findings || [] } } else { Q.note[conn] = r.error || 'No pude activar las cuotas.' }
+      // Hermes's security scan raised an objection: it's shown and the person decides.
+      if (r.scan) { Q.ask[conn] = { scan: r.scan, findings: r.findings || [] } } else { Q.note[conn] = r.error || tr("Couldn't turn the quotas on.") }
       schedulePanel()
       return
     }
     Q.installed[conn] = true
-    if (r.restart) { Q.note[conn] = 'Complemento instalado. Si las cuotas no salen en un momento, reinicia Hermes y pulsa «Ya lo reinicié: comprobar».' }
+    if (r.restart) { Q.note[conn] = tr("Plugin installed. If the quotas don't show up in a moment, restart Hermes and click “I restarted it: check”.") }
     schedulePanel()
     await loadQuotas(conn, true)
   } catch (e) {
     Q.busy[conn] = ''
-    Q.note[conn] = `No pude activar las cuotas: ${e.message || e}`
-    // Puede que se cortara la espera pero Hermes sí lo instalara: se vuelve a mirar.
+    Q.note[conn] = tr("Couldn't turn the quotas on: {0}", e.message || e)
+    // The wait may have been cut off while Hermes did install it: look again.
     loadQuotas(conn, true)
     schedulePanel()
   }
@@ -2314,24 +2352,24 @@ function quotaBar(usedPct, warnAt = 80) {
   return el('div', { class: 'sp-bar q-bar' + (p >= warnAt ? ' warn' : '') }, el('i', { style: `width:${Math.max(p > 0 ? 2 : 0, Math.round(p))}%` }))
 }
 
-/** «se reinicia en 3 h 10 min (21:00)» o «se reinicia mañana, 19:00». */
+/** "resets in 3 h 10 min (21:00)" or "resets tomorrow at 19:00". */
 function resetText(ms, now = Date.now()) {
   if (!Number.isFinite(ms)) { return '' }
-  if (ms <= now) { return 'se reinicia ahora' }
-  if (ms - now < 24 * 3600e3) { return `se reinicia en ${span(ms - now)} (${hhmm(ms)})` }
-  return `se reinicia ${dayAhead(ms, now)} a las ${hhmm(ms)}`
+  if (ms <= now) { return tr('resets now') }
+  if (ms - now < 24 * 3600e3) { return tr('resets in {0} ({1})', span(ms - now), hhmm(ms)) }
+  return tr('resets {0} at {1}', dayAhead(ms, now), hhmm(ms))
 }
 
 function spentLine(sp) {
   if (!sp) { return null }
   const part = (label, x) => `${label} ${kfmt(x.tokens)}${x.cost > 0 ? ' · ' + usd(x.cost) : ''}`
-  return el('div', { class: 'q-line muted', title: 'Lo que Hermes ha gastado con esta API según su propio registro: tokens leídos + escritos (y el coste, si Hermes lo conoce). Cuenta también resúmenes, títulos e imágenes.' },
-    `Hermes gastó: ${part('24 h', sp.day)} · ${part('7 d', sp.week)} · ${part('30 d', sp.month)}`)
+  return el('div', { class: 'q-line muted', title: tr('What Hermes has spent with this API according to its own records: tokens read + written (and the cost, if Hermes knows it). Summaries, titles and images count too.') },
+    tr('Hermes spent: {0} · {1} · {2}', part('24 h', sp.day), part('7 d', sp.week), part('30 d', sp.month)))
 }
 
 /**
- * Una medida de un proveedor, con el mismo molde para todos: nombre y valor en una línea, la barra
- * de lo gastado debajo y, si hace falta, una nota (cuándo se reinicia, desde cuándo cuenta…).
+ * One of a provider's measures, with the same mold for all: name and value on one line, the bar of what's
+ * been spent below and, if needed, a note (when it resets, since when it counts…).
  */
 function quotaMetric({ label, value, pct = null, note = '', warn = false, title = '' }) {
   return el('div', { class: 'q-win', title },
@@ -2340,9 +2378,24 @@ function quotaMetric({ label, value, pct = null, note = '', warn = false, title 
     note ? el('span', { class: 'q-line muted', text: note }) : null)
 }
 
-// Para los saldos sin «total» (Venice), Pedila recuerda el más alto que ha visto desde la última
-// recarga y la barra enseña lo gastado desde entonces. Si el saldo sube (recarga o día nuevo), se
-// empieza a contar otra vez. Solo en este PC (es una ayuda para mirar, no un dato de la API).
+// For balances without a "total" (Venice), Pedila remembers the highest one it has seen since the last
+// top-up and the bar shows what has been spent since then. If the balance goes up (a top-up or a new day),
+// it starts counting again. Only on this PC (it's a visual aid, not the API's data).
+// What the plugin says when it can't read a provider. Its 1.0.0 version said it in Spanish.
+const PLUGIN_ES = {
+  'la clave no vale o no tiene permiso para ver esto': "the key isn't valid or isn't allowed to see this",
+  'el proveedor no tiene este dato': "the provider doesn't have this data",
+  'el proveedor pide esperar (demasiadas consultas)': 'the provider asks to wait (too many queries)',
+  'respuesta ilegible del proveedor': 'unreadable answer from the provider',
+  'el proveedor tardó demasiado': 'the provider took too long',
+  'no pude llegar al proveedor': "couldn't reach the provider",
+  'fallo inesperado leyendo el proveedor': 'unexpected failure reading the provider'
+}
+function pluginText(s) {
+  const m = /^(?:el proveedor respondió|the provider answered) (\d+)$/.exec(s)
+  return m ? tr('the provider answered {0}', m[1]) : tr(PLUGIN_ES[s] || s)
+}
+
 const PEAKS_KEY = 'pedila.cuotas.picos'
 let peaks = null
 function observedUse(key, value, epoch = '') {
@@ -2357,8 +2410,8 @@ function observedUse(key, value, epoch = '') {
   const spent = Math.max(0, r.max - value)
   return { pct: r.max > 0 ? spent / r.max * 100 : 0, spent, max: r.max, since: r.since }
 }
-const sinceText = (o, fmt) => (o.spent > 0 ? `gastado ${fmt(o.spent)} de ${fmt(o.max)} desde ${dayLabel(o.since)} ${hhmm(o.since)}` : `sin gastar desde ${dayLabel(o.since)} ${hhmm(o.since)}`)
-const diemFmt = n => `${(n || 0).toLocaleString('es', { maximumFractionDigits: 2 })} DIEM`
+const sinceText = (o, fmt) => (o.spent > 0 ? tr('spent {0} of {1} since {2}', fmt(o.spent), fmt(o.max), clock(o.since)) : tr('nothing spent since {0}', clock(o.since)))
+const diemFmt = n => `${(n || 0).toLocaleString(locale(), { maximumFractionDigits: 2 })} DIEM`
 
 function quotaBlock(p, conn = S.active) {
   const now = Date.now()
@@ -2367,57 +2420,57 @@ function quotaBlock(p, conn = S.active) {
   const rows = []
   const line = (text, cls = 'muted', title = '') => rows.push(el('div', { class: 'q-line ' + cls, text, title }))
   if (!p.ok) {
-    line(`No pude leerla: ${p.error}`, 'warn')
+    line(tr("Couldn't read it: {0}", pluginText(p.error)), 'warn')
   } else if (p.kind === 'openrouter') {
-    big(usd(p.balance), 'Saldo de créditos que te queda en OpenRouter')
+    big(usd(p.balance), tr('Credit balance you have left on OpenRouter'))
     if (p.creditsTotal > 0 && p.creditsUsed !== null) {
-      rows.push(quotaMetric({ label: 'Créditos', value: `${usd(p.balance)} de ${usd(p.creditsTotal)}`, pct: p.creditsUsed / p.creditsTotal * 100, note: `gastado ${usd(p.creditsUsed)} de lo comprado` }))
+      rows.push(quotaMetric({ label: tr('Credits'), value: tr('{0} of {1}', usd(p.balance), usd(p.creditsTotal)), pct: p.creditsUsed / p.creditsTotal * 100, note: tr('spent {0} of what was bought', usd(p.creditsUsed)) }))
     }
     if (p.keyLimit) {
       const used = p.keyLimit.remaining !== null ? p.keyLimit.limit - p.keyLimit.remaining : null
       const at = nextUtcReset(p.keyLimit.reset, now)
-      rows.push(quotaMetric({ label: 'Límite de la clave', value: `${usd(p.keyLimit.remaining)} de ${usd(p.keyLimit.limit)}`, pct: used !== null ? used / p.keyLimit.limit * 100 : null, note: p.keyLimit.reset ? `${RESET_NAMES[p.keyLimit.reset]}, ${resetText(at, now)}` : 'no se reinicia' }))
+      rows.push(quotaMetric({ label: tr('Key limit'), value: tr('{0} of {1}', usd(p.keyLimit.remaining), usd(p.keyLimit.limit)), pct: used !== null ? used / p.keyLimit.limit * 100 : null, note: p.keyLimit.reset ? `${RESET_NAMES[p.keyLimit.reset]}, ${resetText(at, now)}` : tr("doesn't reset") }))
     }
     const ku = p.keyUsage || {}
-    if (ku.total !== null && ku.total !== undefined) { line(`Esta clave: hoy ${usd(ku.day)} · semana ${usd(ku.week)} · mes ${usd(ku.month)} · total ${usd(ku.total)}`) }
-    if (p.freeTier) { line('Sin créditos comprados: los modelos «:free» tienen un límite de peticiones al día que vuelve a las 00:00 UTC.') }
+    if (ku.total !== null && ku.total !== undefined) { line(tr('This key: today {0} · week {1} · month {2} · total {3}', usd(ku.day), usd(ku.week), usd(ku.month), usd(ku.total))) }
+    if (p.freeTier) { line(tr('No credits bought: the “:free” models have a daily request limit that resets at 00:00 UTC.')) }
   } else if (p.kind === 'venice') {
-    big(usd((p.usd || 0) + (p.bundled || 0)), 'Saldo USD + créditos incluidos en tu plan')
+    big(usd((p.usd || 0) + (p.bundled || 0)), tr('USD balance + credits included in your plan'))
     const epoch = p.nextEpoch ? Date.parse(p.nextEpoch) : NaN
     const k = `${conn}:venice:`
     if (p.bundled !== null && p.bundled !== undefined) {
       const o = observedUse(k + 'bundled', p.bundled)
-      rows.push(quotaMetric({ label: 'Créditos del plan', value: usd(p.bundled), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '', title: 'La barra cuenta lo gastado desde el saldo más alto que Pedila ha visto (se reinicia al recargar)' }))
+      rows.push(quotaMetric({ label: tr('Plan credits'), value: usd(p.bundled), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '', title: tr('The bar counts what was spent since the highest balance Pedila has seen (it starts over when you top up)') }))
     }
     if (p.usd !== null && p.usd !== undefined) {
       const o = observedUse(k + 'usd', p.usd)
-      rows.push(quotaMetric({ label: 'Saldo USD', value: usd(p.usd), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '' }))
+      rows.push(quotaMetric({ label: tr('USD balance'), value: usd(p.usd), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '' }))
     }
     if (p.diem !== null && p.diem !== undefined) {
       const o = observedUse(k + 'diem', p.diem, p.nextEpoch || '')
-      rows.push(quotaMetric({ label: 'DIEM de hoy', value: diemFmt(p.diem), pct: o ? o.pct : null, note: Number.isFinite(epoch) ? resetText(epoch, now) : '', title: '1 DIEM = 1 $ de uso al día mientras lo tienes en stake; lo que no gastas no se acumula' }))
+      rows.push(quotaMetric({ label: tr("Today's DIEM"), value: diemFmt(p.diem), pct: o ? o.pct : null, note: Number.isFinite(epoch) ? resetText(epoch, now) : '', title: tr("1 DIEM = $1 of usage per day while you have it staked; what you don't spend doesn't accumulate") }))
     }
     if (p.tier) { line(`Plan: ${p.tier}`) }
-    if (p.access === false) { line('Sin acceso: Venice no deja usar la API (falta saldo).', 'warn') }
-    if (p.keyExpires) { line(`La clave caduca el ${full(Date.parse(p.keyExpires))}`) }
+    if (p.access === false) { line(tr("No access: Venice doesn't let you use the API (not enough balance)."), 'warn') }
+    if (p.keyExpires) { line(tr('The key expires on {0}', full(Date.parse(p.keyExpires)))) }
     if (p.modelLimits.length) {
-      const fmtL = m => [m.rpm ? `${kfmt(m.rpm)}/min` : '', m.rpd ? `${kfmt(m.rpd)}/día` : '', m.tpm ? `${kfmt(m.tpm)} tokens/min` : ''].filter(Boolean).join(' · ')
-      rows.push(el('details', { class: 'q-more' }, el('summary', { text: `Límites por modelo (${p.modelLimits.length})` }),
+      const fmtL = m => [m.rpm ? `${kfmt(m.rpm)}/min` : '', m.rpd ? tr('{0}/day', kfmt(m.rpd)) : '', m.tpm ? `${kfmt(m.tpm)} tokens/min` : ''].filter(Boolean).join(' · ')
+      rows.push(el('details', { class: 'q-more' }, el('summary', { text: tr('Limits per model ({0})', p.modelLimits.length) }),
         ...p.modelLimits.map(m => el('div', { class: 'q-line muted', title: m.model, text: `${modelName(m.model)}: ${fmtL(m)}` }))))
     }
   } else if (p.kind === 'opencode-go') {
     if (!p.windows.length) {
-      line('OpenCode no dio el uso de tu plan.')
+      line(tr("OpenCode didn't report your plan's usage."))
     } else {
-      big(`${Math.round(100 - Math.max(0, ...p.windows.map(w => w.percent)))} %`, 'Lo que te queda de la ventana más gastada')
+      big(`${Math.round(100 - Math.max(0, ...p.windows.map(w => w.percent)))} %`, tr("What's left of the most used window"))
     }
-    const label = { rolling: 'Ventana de 5 h', weekly: 'Semana', monthly: 'Mes' }
+    const label = { rolling: tr('5-hour window'), weekly: tr('Week'), monthly: tr('Month') }
     for (const w of p.windows) {
       const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN
-      rows.push(quotaMetric({ label: label[w.id] || w.label, value: `${Math.round(w.percent)} % usado`, pct: w.percent, note: Number.isFinite(at) ? resetText(at, now) : '' }))
+      rows.push(quotaMetric({ label: label[w.id] || w.label, value: tr('{0}% used', Math.round(w.percent)), pct: w.percent, note: Number.isFinite(at) ? resetText(at, now) : '' }))
     }
   } else if (p.kind === 'opencode-zen') {
-    line('OpenCode no publica el saldo de Zen (míralo en opencode.ai). Aquí sale lo que Hermes ha gastado con ella.')
+    line(tr("OpenCode doesn't publish Zen's balance (check it on opencode.ai). What Hermes has spent with it is shown here."))
   }
   return el('div', { class: 'q-prov' }, head, ...rows, spentLine(p.spent))
 }
@@ -2426,12 +2479,12 @@ function panelQuotasCard() {
   const conn = S.active
   loadQuotas(conn)
   const q = Q.data[conn]
-  const title = `Cuotas · ${CONN_NAMES[conn]}`
-  const refresh = el('button', { class: 'sp-link', text: Q.loading[conn] ? '…' : '↻', title: 'Volver a leer las cuotas', 'aria-label': 'Volver a leer las cuotas', 'data-focus': 'quotas-refresh', onclick: () => loadQuotas(conn, true) })
+  const title = tr('Quotas · {0}', CONN_NAMES[conn])
+  const refresh = el('button', { class: 'sp-link', text: Q.loading[conn] ? '…' : '↻', title: tr('Read the quotas again'), 'aria-label': tr('Read the quotas again'), 'data-focus': 'quotas-refresh', onclick: () => loadQuotas(conn, true) })
   const note = Q.note[conn] ? el('div', { class: 'q-line warn', text: Q.note[conn] }) : null
-  const err = Q.err[conn] ? el('div', { class: 'q-line warn', text: `No pude leer las cuotas: ${Q.err[conn]}` }) : null
+  const err = Q.err[conn] ? el('div', { class: 'q-line warn', text: tr("Couldn't read the quotas: {0}", Q.err[conn]) }) : null
   if (!q) {
-    // La primera lectura falló: se dice, con la opción de reintentar (si no, no hay nada que enseñar).
+    // The first reading failed: say so, with the option to try again (otherwise there's nothing to show).
     return err ? el('section', { class: 'sp-card' }, el('h4', {}, el('span', { class: 'grow', text: title }), refresh), err, Q.login[conn] ? loginAgain(conn) : null) : null
   }
   if (q.state === 'missing') {
@@ -2440,26 +2493,27 @@ function panelQuotasCard() {
     const busy = Q.busy[conn] === 'installing'
     const ask = Q.ask[conn]
     const parts = [el('h4', { text: title }),
-      el('p', { class: 'small', text: `Este Hermes usa ${names}. Pedila puede enseñarte lo que te queda de cada una: saldo, límites, cuándo se reinician y lo que llevas gastado.` }),
-      el('p', { class: 'muted small', text: 'Para eso instala en Hermes un complemento pequeño de Pedila: lee el saldo dentro de Hermes y solo devuelve números, así tus claves no salen de allí. No toca tus chats ni reinicia Hermes.' })]
-    // Al cargar un complemento, un Hermes con usuario y contraseña sin «secret» fijo cierra las sesiones de su web.
-    if (conn === 'server') { parts.push(el('p', { class: 'muted small', text: 'Ojo: al cargarlo, el Hermes del servidor puede cerrar las sesiones de su página (también la de Pedila) y tendrás que volver a iniciar sesión una vez.' })) }
+      el('p', { class: 'small', text: tr("This Hermes uses {0}. Pedila can show you what's left of each one: balance, limits, when they reset and what you've spent.", names) }),
+      el('p', { class: 'muted small', text: tr("For that it installs a small Pedila plugin in Hermes: it reads the balance inside Hermes and only returns numbers, so your keys never leave it. It doesn't touch your chats or restart Hermes.") })]
+    // When loading a plugin, a Hermes with username and password and no fixed "secret" closes its web
+    // sessions.
+    if (conn === 'server') { parts.push(el('p', { class: 'muted small', text: tr("Careful: when it loads it, the server's Hermes may close its web sessions (Pedila's too) and you'll have to sign in again once.") })) }
     if (ask && ask.scan === 'dangerous') {
       parts.push(el('div', { class: 'q-ask' },
-        el('p', { class: 'small warn', text: 'El análisis de seguridad de Hermes no deja instalar este complemento.' }),
+        el('p', { class: 'small warn', text: tr("Hermes's security scan doesn't allow this plugin to be installed.") }),
         ...ask.findings.map(f => el('div', { class: 'q-line muted', text: '• ' + f })),
-        el('div', { class: 'q-actions' }, el('button', { class: 'btn-ghost', text: 'Entendido', onclick: () => { Q.ask[conn] = null; schedulePanel() } }))))
+        el('div', { class: 'q-actions' }, el('button', { class: 'btn-ghost', text: tr('Got it'), onclick: () => { Q.ask[conn] = null; schedulePanel() } }))))
     } else if (ask) {
       parts.push(el('div', { class: 'q-ask' },
-        el('p', { class: 'small', text: 'El análisis de seguridad de Hermes pide confirmación. Es lo esperable: el complemento usa tus claves dentro de Hermes para preguntar el saldo.' }),
+        el('p', { class: 'small', text: tr("Hermes's security scan asks for confirmation. That's expected: the plugin uses your keys, inside Hermes, to ask for the balance.") }),
         ...ask.findings.map(f => el('div', { class: 'q-line muted', text: '• ' + f })),
         el('div', { class: 'q-actions' },
-          el('button', { class: 'btn-primary', text: 'Instalar igualmente', onclick: () => installQuotas(conn, true) }),
-          el('button', { class: 'btn-ghost', text: 'Ahora no', onclick: () => { Q.ask[conn] = null; schedulePanel() } }))))
+          el('button', { class: 'btn-primary', text: tr('Install anyway'), onclick: () => installQuotas(conn, true) }),
+          el('button', { class: 'btn-ghost', text: tr('Not now'), onclick: () => { Q.ask[conn] = null; schedulePanel() } }))))
     } else if (Q.installed[conn]) {
-      parts.push(el('button', { class: 'btn-ghost', text: Q.loading[conn] ? 'Comprobando…' : 'Ya lo reinicié: comprobar', disabled: Q.loading[conn], onclick: () => loadQuotas(conn, true) }))
+      parts.push(el('button', { class: 'btn-ghost', text: Q.loading[conn] ? tr('Checking…') : tr('I restarted it: check'), disabled: Q.loading[conn], onclick: () => loadQuotas(conn, true) }))
     } else {
-      parts.push(el('button', { class: 'btn-primary', text: busy ? 'Instalando… (puede tardar un minuto)' : 'Activar cuotas', disabled: busy, onclick: () => installQuotas(conn) }))
+      parts.push(el('button', { class: 'btn-primary', text: busy ? tr('Installing… (it may take a minute)') : tr('Turn on quotas'), disabled: busy, onclick: () => installQuotas(conn) }))
     }
     if (note) { parts.push(note) }
     if (err) { parts.push(err) }
@@ -2471,68 +2525,68 @@ function panelQuotasCard() {
   const at = q.data.fetchedAt ? Date.parse(q.data.fetchedAt) : NaN
   return el('section', { class: 'sp-card' },
     el('h4', {}, el('span', { class: 'grow', text: title }),
-      Number.isFinite(at) ? el('span', { class: 'q-ago', text: ago(at), title: `Leído: ${full(at)}` }) : null, refresh),
+      Number.isFinite(at) ? el('span', { class: 'q-ago', text: ago(at), title: tr('Read at: {0}', full(at)) }) : null, refresh),
     ...provs.map(pv => quotaBlock(pv, conn)),
     err, Q.login[conn] ? loginAgain(conn) : null)
 }
 
-/** Hermes cerró la sesión (por ejemplo, al cargar el complemento): botón para entrar otra vez. */
+/** Hermes closed the session (for example, when loading the plugin): a button to sign in again. */
 function loginAgain(conn) {
   if (conn !== 'server') { return null }
-  return el('div', { class: 'q-actions' }, el('button', { class: 'btn-primary', text: 'Iniciar sesión otra vez', onclick: () => openLogin() }))
+  return el('div', { class: 'q-actions' }, el('button', { class: 'btn-primary', text: tr('Sign in again'), onclick: () => openLogin() }))
 }
 
 function panelConnsCard() {
-  return el('section', { class: 'sp-card' }, el('h4', { text: 'Conexiones' }),
+  return el('section', { class: 'sp-card' }, el('h4', { text: tr('Connections') }),
     ...visibleConns().filter(c => S.conns[c]).flatMap(c => {
       const st = S.conns[c]
       const what = CONN_STATES[st.state] || st.state
       const row = el('div', { class: 'sp-conn', title: connLabel(c) }, el('span', { class: 'dot ' + st.state }), el('span', { text: CONN_NAMES[c] }), el('span', { class: 's', text: st.state === 'ready' && st.detail ? `${what} · ${st.detail}` : what }))
-      // Debajo, la versión de su Hermes y si hay una nueva (pulsando, Ajustes → Acerca de).
+      // Below, their Hermes's version and whether there's a new one (a click goes to Settings → About).
       const u = hermesUpdText(c)
       if (!u) { return [row] }
-      return [row, el('button', { class: 'sp-hint sp-hermes' + (u.warn ? ' warn' : ''), 'data-focus': 'hermes-' + c, text: u.text, title: 'Versiones de Hermes: Ajustes → Acerca de', onclick: () => openSettings('acerca') })]
+      return [row, el('button', { class: 'sp-hint sp-hermes' + (u.warn ? ' warn' : ''), 'data-focus': 'hermes-' + c, text: u.text, title: tr('Hermes versions: Settings → About'), onclick: () => openSettings('about') })]
     }))
 }
 
-/** La versión de Hermes de una conexión, para la tarjeta y Ajustes: { text, warn } o null. */
+/** A connection's Hermes version, for the card and Settings: { text, warn } or null. */
 function hermesUpdText(c) {
   const u = S.hermesUpd && S.hermesUpd[c]
   if (!u || !u.version) { return null }
   const to = u.latest ? ` ${u.latest}` : ''
   const auto = ((S.settings && S.settings.hermes) || {}).autoUpdate !== false
-  if (u.applying) { return { text: `Actualizando Hermes ${u.applying.from} → ${u.applying.to || 'lo último'}…`, warn: true } }
+  if (u.applying) { return { text: tr('Updating Hermes {0} → {1}…', u.applying.from, u.applying.to || tr('the latest')), warn: true } }
   const r = u.lastResult
-  if (u.available && r && !r.ok) { return { text: `Hermes ${u.version} · no se pudo actualizar (${r.error})${auto ? '; se reintentará en unas horas' : ''}`, warn: true } }
-  if (u.available && !u.canApply && c !== 'local') { return { text: `Hermes ${u.version} · hay versión nueva${to}: se actualiza desde su servidor`, warn: false } }
-  // El de este PC sin método conocido = no pude preguntarle (se repite a los 15 min).
-  if (u.available && !u.canApply && !u.method) { return { text: `Hermes ${u.version} · hay versión nueva${to} (aún no sé si puede instalarse sola; lo vuelvo a mirar en unos minutos)`, warn: false } }
-  if (u.available && !u.canApply) { return { text: `Hermes ${u.version} · hay versión nueva${to}: actualízalo con su instalador o con Hermes Desktop`, warn: true } }
-  if (u.available && !auto) { return { text: `Hermes ${u.version} · hay versión nueva${to}`, warn: true } }
-  if (u.available) { return { text: `Hermes ${u.version} · hay versión nueva${to}: se instalará sola tras 10 min sin usar Hermes ni el PC`, warn: false } }
-  if (r && r.ok && Date.now() - r.at < 24 * 3600e3) { return { text: `Hermes ${u.version} · actualizado ${ago(r.at)}`, warn: false } }
-  return { text: `Hermes ${u.version} · al día`, warn: false }
+  if (u.available && r && !r.ok) { return { text: tr("Hermes {0} · couldn't be updated ({1}){2}", u.version, r.error, auto ? tr('; it will be tried again in a few hours') : ''), warn: true } }
+  if (u.available && !u.canApply && c !== 'local') { return { text: tr("Hermes {0} · new version available{1}: it's updated from its server", u.version, to), warn: false } }
+  // This PC's without a known method = it couldn't be asked (repeated after 15 min).
+  if (u.available && !u.canApply && !u.method) { return { text: tr('Hermes {0} · new version available{1} (not known yet whether it can install itself; checking again in a few minutes)', u.version, to), warn: false } }
+  if (u.available && !u.canApply) { return { text: tr('Hermes {0} · new version available{1}: update it with its installer or with Hermes Desktop', u.version, to), warn: true } }
+  if (u.available && !auto) { return { text: tr('Hermes {0} · new version available{1}', u.version, to), warn: true } }
+  if (u.available) { return { text: tr('Hermes {0} · new version available{1}: it will install itself after 10 min without Hermes or the PC being used', u.version, to), warn: false } }
+  if (r && r.ok && Date.now() - r.at < 24 * 3600e3) { return { text: tr('Hermes {0} · updated {1}', u.version, ago(r.at)), warn: false } }
+  return { text: tr('Hermes {0} · up to date', u.version), warn: false }
 }
 
-/** Ajustes → Acerca de → Hermes: cada conexión con su versión y los botones. */
+/** Settings → About → Hermes: each connection with its version and the buttons. */
 function renderHermesUpd() {
   const box = $('#hermes-upd')
   if (!box) { return }
   box.replaceChildren(...visibleConns().filter(c => S.conns[c]).map(c => {
     const u = S.hermesUpd[c] || {}
     const t = hermesUpdText(c)
-    const check = el('button', { class: 'btn-ghost', text: 'Buscar ahora', disabled: Boolean(u.applying), onclick: async e => {
+    const check = el('button', { class: 'btn-ghost', text: tr('Check now'), disabled: Boolean(u.applying), onclick: async e => {
       e.target.disabled = true
-      e.target.textContent = 'Buscando…'
-      try { S.hermesUpd[c] = await call(api.hermesCheck, c) } catch (err) { showToastLine(`No pude mirarlo: ${err.message}`) }
+      e.target.textContent = tr('Looking for updates…')
+      try { S.hermesUpd[c] = await call(api.hermesCheck, c) } catch (err) { showToastLine(tr("Couldn't look it up: {0}", err.message)) }
       renderHermesUpd()
       schedulePanel()
     } })
     const apply = u.available && u.canApply && !u.applying
-      ? el('button', { class: 'btn-primary', text: `Actualizar ahora${u.latest ? ' a ' + u.latest : ''}`, onclick: () => hermesUpdateNow(c) })
+      ? el('button', { class: 'btn-primary', text: u.latest ? tr('Update now to {0}', u.latest) : tr('Update now'), onclick: () => hermesUpdateNow(c) })
       : null
     return el('div', { class: 'hermes-upd-row' },
-      el('div', { class: 'grow' }, el('b', { text: CONN_NAMES[c] }), el('div', { class: 'muted small' + (t && t.warn ? ' warn' : ''), text: t ? t.text : 'Sin conexión: no sé su versión.' })),
+      el('div', { class: 'grow' }, el('b', { text: CONN_NAMES[c] }), el('div', { class: 'muted small' + (t && t.warn ? ' warn' : ''), text: t ? t.text : tr('Not connected: its version is unknown.') })),
       check, apply)
   }))
 }
@@ -2540,23 +2594,23 @@ function renderHermesUpd() {
 async function hermesUpdateNow(c) {
   const u = S.hermesUpd[c] || {}
   const ok = await askBox({
-    title: `¿Actualizar Hermes${u.latest ? ' a ' + u.latest : ''}?`,
+    title: u.latest ? tr('Update Hermes to {0}?', u.latest) : tr('Update Hermes?'),
     text: u.busy
-      ? 'Hermes está trabajando ahora mismo: actualizarlo lo reinicia y corta lo que esté haciendo. Si puedes, espera a que termine (se instala solo cuando lleve 10 minutos sin usarse).'
-      : 'Hermes se cierra unos minutos para actualizarse y Pedila se vuelve a conectar sola al acabar.',
-    ok: 'Actualizar', danger: Boolean(u.busy)
+      ? tr("Hermes is working right now: updating restarts it and cuts off whatever it's doing. If you can, wait until it finishes (it installs itself after 10 minutes without being used).")
+      : tr("Hermes closes for a few minutes to update, and Pedila reconnects by itself when it's done."),
+    ok: tr('Update'), danger: Boolean(u.busy)
   })
   if (!ok) { return }
-  try { await call(api.hermesUpdate, c) } catch (e) { showToastLine(`No pude actualizar Hermes: ${e.message}`) }
+  try { await call(api.hermesUpdate, c) } catch (e) { showToastLine(tr("Couldn't update Hermes: {0}", e.message)) }
 }
 
 function renderPanel() {
   if (!panelOn() || !S.settings) { return }
   const body = $('#panel-body')
   const top = body.scrollTop
-  // Con el foco en una tarjeta que se puede pulsar, al repintar se le devuelve (teclado).
+  // With the focus on a card that can be clicked, repainting gives it back (keyboard).
   const focused = body.contains(document.activeElement) ? document.activeElement.getAttribute('data-focus') : null
-  // Las tarjetas y su orden salen de Ajustes → Diseño (cada una dice en qué modo se ve).
+  // The cards and their order come from Settings → Layout (each one says in which mode it shows).
   const L = layout()
   const on = L.cardsChats
   const cards = []
@@ -2566,7 +2620,7 @@ function renderPanel() {
     if (!c) { continue }
     c.dataset.card = id
     const h = c.querySelector('h4')
-    if (h) { h.classList.add('drag-handle'); h.title = 'Arrastra para cambiar de sitio' }
+    if (h) { h.classList.add('drag-handle'); h.title = tr('Drag to move it') }
     cards.push(c)
   }
   body.replaceChildren(...cards)
@@ -2575,19 +2629,19 @@ function renderPanel() {
   if (focused) { body.querySelector(`[data-focus="${focused}"]`)?.focus({ preventScroll: true }) }
 }
 
-// ── Tareas: el plan de Hermes y lo que está haciendo (como en Claude Code) ──────────────────
-// El plan sale de su herramienta todo_list (avisos todo.updated, o el último resultado guardado);
-// lo demás, de lo que ya llega del turno: estado, herramientas en marcha y subagentes.
-const COMPACT_TEXT = 'Resumiendo la memoria del chat'
+// ── Tasks: Hermes's plan and what it's doing (as in Claude Code) ────────────────────────────
+// The plan comes from its todo_list tool (todo.updated events, or the last stored result); the rest, from
+// what already arrives of the turn: state, running tools and subagents.
+const COMPACT_TEXT = tr("Summarizing the chat's memory")
 const TODO_ICON = { completed: '✓', in_progress: '●', pending: '○', cancelled: '✕' }
-const TODO_NAME = { completed: 'Hecha', in_progress: 'En curso', pending: 'Pendiente', cancelled: 'Cancelada' }
+const TODO_NAME = { completed: tr('Done'), in_progress: tr('In progress'), pending: tr('Pending'), cancelled: tr('Canceled') }
 const SUB_ICON = { running: '⟳', queued: '○', done: '✓', failed: '✕', stopped: '■', gone: '–' }
 const liveSubs = c => { let n = 0; for (const sa of c.subagents.values()) { if (sa.state === 'running' || sa.state === 'queued') { n++ } } return n }
 
 /**
- * Los subagentes que Pedila cree vivos se comparan cada 10 s con los que Hermes tiene de verdad
- * (subagent.list): un hijo que nunca arrancó, o cuyo aviso de fin se perdió (reconexión, reinicio
- * del gateway), deja de salir «trabajando» para siempre. Dos faltas seguidas = «terminó».
+ * The subagents Pedila believes alive are checked every 10 s against the ones Hermes really has
+ * (subagent.list): a child that never started, or whose end event was lost (a reconnection, a gateway
+ * restart), stops showing as "working" forever. Two absences in a row = "finished".
  */
 async function reconcileSubagents() {
   if (P.reconciling) { return }
@@ -2620,7 +2674,10 @@ async function reconcileOnce() {
   }
 }
 
-/** El chat del que se enseñan las tareas: el abierto si tiene algo; si no, uno de esta conexión con Hermes trabajando. */
+/**
+ * The chat whose tasks are shown: the open one if it has any; otherwise, one of this connection with Hermes
+ * working.
+ */
 function taskChat() {
   const has = c => c && ((c.todos && c.todos.items.length) || busy(c) || c.subagents.size)
   const cur = currentChat()
@@ -2629,7 +2686,7 @@ function taskChat() {
   return working.find(c => busy(c) && c.todos && c.todos.items.length) || working.find(c => busy(c)) || working[0] || null
 }
 
-/** Las tareas en su orden, cada subtarea debajo de la suya (sangrada). */
+/** The tasks in their order, each subtask below its own (indented). */
 function todoRows(items) {
   const ids = new Set(items.map(t => t.id))
   const kids = new Map()
@@ -2654,21 +2711,22 @@ function panelTasksCard() {
   const items = ch && ch.todos ? ch.todos.items : []
   const counted = items.filter(t => t.status !== 'cancelled')
   const done = counted.filter(t => t.status === 'completed').length
-  const head = el('h4', {}, el('span', { text: 'Tareas' }), counted.length ? el('span', { class: 'sp-count', title: `${done} de ${counted.length} hechas`, text: `${done}/${counted.length}` }) : null)
+  const head = el('h4', {}, el('span', { text: tr('Tasks') }), counted.length ? el('span', { class: 'sp-count', title: tr('{0} of {1} done', done, counted.length), text: `${done}/${counted.length}` }) : null)
   if (!ch) {
-    // Lo que Hermes hace fuera de esta ventana no trae su plan: un clic lo abre aquí y entonces sí.
+    // What Hermes does outside this window doesn't bring its plan: a click opens it here, and then it
+    // does.
     const other = remoteBusy(S.active).map(a => listedRow(S.active, a.id)).find(Boolean)
     return el('section', { class: 'sp-card' }, head, other
-      ? el('button', { class: 'sp-hint', 'data-focus': 'tasks-other', text: `Hermes está trabajando en «${other.title || 'un chat'}». Ábrelo para ver su plan y su progreso.`, onclick: () => openChat(S.active, other.id) })
-      : el('p', { class: 'sp-hint', text: 'Nada en marcha. Cuando Hermes trabaje en algo, aquí verás su plan, lo que está haciendo y cuánto lleva.' }))
+      ? el('button', { class: 'sp-hint', 'data-focus': 'tasks-other', text: tr('Hermes is working in “{0}”. Open it to see its plan and its progress.', other.title || tr('a chat')), onclick: () => openChat(S.active, other.id) })
+      : el('p', { class: 'sp-hint', text: tr("Nothing running. When Hermes works on something, its plan, what it's doing and how long it has been at it show up here.") }))
   }
   const running = busy(ch)
   const parts = [head]
   if (ch !== currentChat()) {
-    parts.push(el('button', { class: 'sp-where', 'data-focus': 'tasks-where', title: 'Abrir este chat', text: `En «${ch.title || 'otro chat'}»`, onclick: () => openChat(ch.conn, ch.sid) }))
+    parts.push(el('button', { class: 'sp-where', 'data-focus': 'tasks-where', title: tr('Open this chat'), text: tr('In “{0}”', ch.title || tr('another chat')), onclick: () => openChat(ch.conn, ch.sid) }))
   }
   if (counted.length) {
-    parts.push(el('div', { class: 'sp-progress', role: 'progressbar', 'aria-label': 'Tareas hechas', 'aria-valuemin': '0', 'aria-valuemax': String(counted.length), 'aria-valuenow': String(done) },
+    parts.push(el('div', { class: 'sp-progress', role: 'progressbar', 'aria-label': tr('Tasks done'), 'aria-valuemin': '0', 'aria-valuemax': String(counted.length), 'aria-valuenow': String(done) },
       el('i', { style: `width:${Math.round(done / counted.length * 100)}%` })))
   }
   if (items.length) {
@@ -2678,58 +2736,58 @@ function panelTasksCard() {
       title: TODO_NAME[t.status] || ''
     }, el('span', { class: 'i', text: TODO_ICON[t.status] || '○' }), el('span', { class: 't', text: t.content })))))
     const waiting = liveSubs(ch)
-    if (!running && waiting) { parts.push(el('p', { class: 'sp-note', text: `Esperando a ${waiting === 1 ? 'un subagente' : waiting + ' subagentes'}.` })) }
-    else if (!running && done < counted.length) { parts.push(el('p', { class: 'sp-note', text: 'Se quedó con pasos sin hacer.' })) }
+    if (!running && waiting) { parts.push(el('p', { class: 'sp-note', text: tr('Waiting for {0}.', waiting === 1 ? tr('a subagent') : waiting + tr(' subagents')) })) }
+    else if (!running && done < counted.length) { parts.push(el('p', { class: 'sp-note', text: tr('Some steps were left undone.') })) }
   }
   if (running) {
     const L = ch.live && !ch.live.done ? ch.live : null
-    const status = L ? L.status : 'Trabajando'
+    const status = L ? L.status : tr('Working')
     const tools = L ? L.blocks.filter(b => b.type === 'tool') : []
     const since = L && L.status === COMPACT_TEXT && L.compactAt ? L.compactAt : 0
     parts.push(el('div', { class: 'sp-now' + (items.length ? '' : ' solo') }, el('span', { class: 'spin' }), el('span', { class: 't', title: status, text: status }),
-      since ? el('span', { class: 'w', title: 'Lo que lleva resumiendo', 'data-span': since, text: span(Date.now() - since) })
-        : tools.length ? el('span', { class: 'w', title: 'Herramientas usadas en esta respuesta', text: `${tools.length} herr.` }) : null))
+      since ? el('span', { class: 'w', title: tr('How long it has been summarizing'), 'data-span': since, text: span(Date.now() - since) })
+        : tools.length ? el('span', { class: 'w', title: tr('Tools used in this answer'), text: tr('{0} tools', tools.length) }) : null))
     for (const b of tools.filter(b => !b.done).slice(-4)) {
       parts.push(el('div', { class: 'sp-run running' }, el('span', { class: 'i', text: '⟳' }),
-        el('span', { class: 't' }, el('b', { text: b.name || 'herramienta' }), b.args ? el('span', { class: 'd', title: b.args, text: b.args }) : null),
+        el('span', { class: 't' }, el('b', { text: b.name || tr('tool') }), b.args ? el('span', { class: 'd', title: b.args, text: b.args }) : null),
         b.startedAt ? el('span', { class: 'w', 'data-span': b.startedAt, text: span(Date.now() - b.startedAt) }) : null))
     }
   }
   const subs = [...ch.subagents.values()].sort((a, b) => (a.index || 0) - (b.index || 0))
   if (subs.length) {
-    parts.push(el('div', { class: 'sp-sub-h', text: `Subagentes · ${subs.filter(x => x.state === 'done').length}/${subs.length}` }))
+    parts.push(el('div', { class: 'sp-sub-h', text: tr('Subagents · {0}/{1}', subs.filter(x => x.state === 'done').length, subs.length) }))
     for (const sa of subs) {
-      const what = sa.state === 'running' ? (sa.tool ? `usando ${sa.tool}` : sa.text || 'trabajando')
-        : { queued: 'en cola', failed: 'falló', stopped: 'parado', gone: 'terminó' }[sa.state] || 'hecho'
-      const goal = sa.goal || `Subagente ${(sa.index || 0) + 1}`
+      const what = sa.state === 'running' ? (sa.tool ? tr('using {0}', sa.tool) : sa.text || tr('working'))
+        : { queued: tr('queued'), failed: tr('failed'), stopped: tr('stopped'), gone: tr('finished') }[sa.state] || tr('done')
+      const goal = sa.goal || tr('Subagent {0}', (sa.index || 0) + 1)
       parts.push(el('div', { class: 'sp-run ' + sa.state }, el('span', { class: 'i', text: SUB_ICON[sa.state] || '○' }),
-        el('span', { class: 't' }, el('b', { title: goal, text: goal }), el('span', { class: 'd', text: what + (sa.tools ? ` · ${sa.tools} herr.` : '') })),
+        el('span', { class: 't' }, el('b', { title: goal, text: goal }), el('span', { class: 'd', text: what + (sa.tools ? tr(' · {0} tools', sa.tools) : '') })),
         sa.state === 'running' ? el('span', { class: 'w', 'data-span': sa.since, text: span(Date.now() - sa.since) })
           : sa.seconds != null ? el('span', { class: 'w', text: span(sa.seconds * 1000) }) : null))
     }
   }
-  if (!items.length && !running && !subs.length) { parts.push(el('p', { class: 'sp-hint', text: 'Nada en marcha.' })) }
+  if (!items.length && !running && !subs.length) { parts.push(el('p', { class: 'sp-hint', text: tr('Nothing running.') })) }
   return el('section', { class: 'sp-card' }, ...parts)
 }
 
-// ── Anchos ajustables: la lista de chats y el panel derecho ──────────────────────────────────
-// Se arrastra su raya (o flechas con el foco en ella; Inicio, Intro o doble clic: el ancho de
-// siempre). Mismos límites que settings.js. Al chat le quedan siempre al menos MAIN_MIN píxeles:
-// con la ventana estrecha cede primero el panel (hasta su mínimo) y después la lista, sin tocar lo
-// guardado; así lo que se ve al soltar una raya es lo que queda.
+// ── Adjustable widths: the chat list and the right panel ─────────────────────────────────────
+// Their line is dragged (or arrow keys with the focus on it; Home, Enter or a double click: the default
+// width). Same limits as settings.js. The chat always keeps at least MAIN_MIN pixels: in a narrow window
+// the panel gives way first (down to its minimum) and then the list, without touching what is saved; so
+// what is seen on releasing a line is what stays.
 const MAIN_MIN = 420
 const WIDTHS = {
   side: { key: 'sideWidth', def: 286, min: 240, max: 520, css: '--side-w', box: '#sidebar', dir: 1 },
   panel: { key: 'panelWidth', def: 300, min: 240, max: 680, css: '--panel-w', box: '#side-panel', dir: -1 }
 }
-// Con la lista a la derecha (Diseño), cada raya crece hacia el otro lado.
+// With the list on the right (Layout), each line grows the other way.
 const dirOf = d => d.dir * (layout().swap ? -1 : 1)
 const widthOf = d => { const v = S.settings && S.settings.window ? S.settings.window[d.key] : null; return Number.isFinite(v) ? v : d.def }
-// ≤ 900 px el CSS esconde el panel y las rayas y fija la lista: ahí no se ajusta nada.
+// ≤ 900 px: the CSS hides the panel and the lines and fixes the list: nothing is adjusted there.
 const narrow = () => innerWidth <= 900
 const panelShown = () => panelOn() && !narrow()
 
-/** Los anchos que caben: los guardados, o encogidos (primero el panel) para dejar MAIN_MIN al chat. */
+/** The widths that fit: the saved ones, or shrunk (the panel first) to leave MAIN_MIN for the chat. */
 function fittedWidths(side = widthOf(WIDTHS.side), panel = widthOf(WIDTHS.panel)) {
   const room = Math.max(0, innerWidth - MAIN_MIN)
   if (!panelShown()) { return { side: Math.max(WIDTHS.side.min, Math.min(side, room)), panel } }
@@ -2752,8 +2810,8 @@ function wireResizers() {
     const name = h.dataset.side
     const d = WIDTHS[name]
     if (!d) { continue }
-    // Lo más que puede crecer ahora sin quitar sitio a la otra columna: su máximo, o lo que deje
-    // al chat con MAIN_MIN. La otra no se mueve mientras se arrastra.
+    // The most it can grow now without taking room from the other column: its maximum, or whatever leaves
+    // the chat MAIN_MIN. The other one doesn't move while dragging.
     const ceiling = () => {
       const other = name === 'side' ? (panelShown() ? $('#side-panel').getBoundingClientRect().width : 0) : $('#sidebar').getBoundingClientRect().width
       return Math.max(d.min, Math.min(d.max, Math.floor(innerWidth - MAIN_MIN - other)))
@@ -2762,7 +2820,8 @@ function wireResizers() {
       const v = Math.round(Math.min(top, Math.max(d.min, px)))
       $('#app').style.setProperty(d.css, v + 'px')
       h.setAttribute('aria-valuenow', String(v))
-      // Con la ventana justa, al estrechar la lista el panel recupera su ancho a la vez (no de golpe al soltar).
+      // In a tight window, as the list narrows the panel gets its width back at the same time (not all at
+      // once on release).
       if (name === 'side' && panelShown()) { $('#app').style.setProperty(WIDTHS.panel.css, fittedWidths(v).panel + 'px') }
       return v
     }
@@ -2771,7 +2830,7 @@ function wireResizers() {
       if (e.button !== 0 || narrow()) { return }
       e.preventDefault()
       try { h.setPointerCapture(e.pointerId) } catch {}
-      // Desde el ancho que se ve (con la ventana estrecha puede ser menor que el guardado).
+      // From the width that is seen (in a narrow window it may be smaller than the saved one).
       const startX = e.clientX
       const startW = $(d.box).getBoundingClientRect().width
       const top = ceiling()
@@ -2785,7 +2844,7 @@ function wireResizers() {
         h.removeEventListener('pointercancel', end)
         h.classList.remove('active')
         document.body.classList.remove('resizing')
-        // Solo si se movió de verdad: un intento de ensanchar que no cabía no guarda el ancho apretado.
+        // Only if it really moved: trying to widen what didn't fit doesn't save the squeezed width.
         if (last !== null && last !== Math.round(startW) && last !== widthOf(d)) { save(last) }
       }
       h.addEventListener('pointermove', move)
@@ -2812,14 +2871,14 @@ function wireResizers() {
   addEventListener('resize', () => { if (!fitRaf) { fitRaf = requestAnimationFrame(() => { fitRaf = 0; applyWidths() }) } })
 }
 
-// ── Tu uso ───────────────────────────────────────────────────────────────────────────────────
+// ── Your usage ───────────────────────────────────────────────────────────────────────────────
 async function openUsage(conn = S.active) {
   const d = $('#usage-dialog')
   for (const b of document.querySelectorAll('#usage-tabs button')) { b.classList.toggle('active', b.dataset.conn === conn) }
   const body = $('#usage-body')
-  body.replaceChildren(el('p', { class: 'muted', text: 'Calculando…' }))
+  body.replaceChildren(el('p', { class: 'muted', text: tr('Calculating…') }))
   if (!d.open) { d.showModal() }
-  // Al cambiar de pestaña rápido, solo se pinta la última que se pidió.
+  // When switching tabs fast, only the last one asked for is painted.
   const seq = openUsage.seq = (openUsage.seq || 0) + 1
   try {
     const u = await call(api.usage, conn)
@@ -2829,68 +2888,68 @@ async function openUsage(conn = S.active) {
     const active = u.days.filter(x => x.chats).length
     body.replaceChildren(
       el('div', { class: 'u-cards' },
-        el('div', { class: 'u-card' }, el('b', { text: String(u.chats) }), el('span', { text: 'chats en total' })),
-        el('div', { class: 'u-card' }, el('b', { text: String(u.messages) }), el('span', { text: 'mensajes' })),
-        el('div', { class: 'u-card' }, el('b', { text: kfmt(u.input) }), el('span', { text: 'tokens leídos' })),
-        el('div', { class: 'u-card' }, el('b', { text: kfmt(u.output) }), el('span', { text: 'tokens escritos' }))),
-      el('h4', { text: `Chats por día (últimos 30 días · ${active} días con uso)` }), bars,
-      el('h4', { text: 'Por modelo (de más a menos tokens)', title: modelsHow(u) }),
+        el('div', { class: 'u-card' }, el('b', { text: String(u.chats) }), el('span', { text: tr('chats in total') })),
+        el('div', { class: 'u-card' }, el('b', { text: String(u.messages) }), el('span', { text: tr('messages') })),
+        el('div', { class: 'u-card' }, el('b', { text: kfmt(u.input) }), el('span', { text: tr('tokens read') })),
+        el('div', { class: 'u-card' }, el('b', { text: kfmt(u.output) }), el('span', { text: tr('tokens written') }))),
+      el('h4', { text: tr('Chats per day (last 30 days · {0} days with use)', active) }), bars,
+      el('h4', { text: tr('By model (most tokens first)'), title: modelsHow(u) }),
       el('table', { class: 'u-table' },
-        el('tr', {}, el('th', { text: 'Modelo' }), el('th', { text: 'Tokens' }), el('th', { text: 'Leídos' }), el('th', { text: 'Escritos' })),
+        el('tr', {}, el('th', { text: tr('Model') }), el('th', { text: 'Tokens' }), el('th', { text: tr('Read') }), el('th', { text: tr('Written') })),
         ...u.models.slice(0, 15).map(m => {
           const aux = tasksLine(m.tasks)
           return el('tr', {},
-            el('td', { title: m.model }, modelName(m.model), aux ? el('span', { class: 'u-sub', text: `incluye ${aux}` }) : null),
+            el('td', { title: m.model }, modelName(m.model), aux ? el('span', { class: 'u-sub', text: tr('includes {0}', aux) }) : null),
             el('td', { text: kfmt(tokensOf(m)) }), el('td', { text: kfmt(m.input) }), el('td', { text: kfmt(m.output) }))
         })),
-      ...(u.models.length > 15 ? [el('p', { class: 'muted small', text: u.models.length === 16 ? 'Y 1 modelo más, con menos tokens.' : `Y ${u.models.length - 15} modelos más, con menos tokens.` })] : []),
+      ...(u.models.length > 15 ? [el('p', { class: 'muted small', text: u.models.length === 16 ? tr('And 1 more model, with fewer tokens.') : tr('And {0} more models, with fewer tokens.', u.models.length - 15) })] : []),
       el('p', { class: 'muted small', text: u.modelsFrom === 'hermes'
-        ? 'Por modelo: el último año, con las estadísticas de ese Hermes (cuentan también resumir la memoria, poner títulos…). Lo demás, con tus chats guardados allí. No sale nada de tu red.'
-        : 'Calculado con tus chats guardados en ese Hermes; no sale nada de tu red.' }))
+        ? tr("By model: the last year, from that Hermes's statistics (summarizing memory, writing titles… count too). Everything else, from your chats stored there. Nothing leaves your network.")
+        : tr('Worked out from your chats stored in that Hermes; nothing leaves your network.') }))
   } catch (e) {
-    if (seq === openUsage.seq) { body.replaceChildren(el('p', { class: 'error', text: `No pude calcularlo: ${e.message}` })) }
+    if (seq === openUsage.seq) { body.replaceChildren(el('p', { class: 'error', text: tr("Couldn't work it out: {0}", e.message) })) }
   }
 }
 
-// ── Actualizaciones ──────────────────────────────────────────────────────────────────────────
-// La versión nueva que hay (si la hay): la barra del chat y Ajustes → Acerca de enseñan el mismo botón.
+// ── Updates ──────────────────────────────────────────────────────────────────────────────────
+// The new version there is (if any): the chat's bar and Settings → About show the same button.
 let pendingVersion = null
 let updating = false
 
-/** Los dos botones (la barra y el de Ajustes): los dos «Descargando…» mientras se instala. */
+/** The two buttons (the bar's and the one in Settings): both say "Downloading…" while it installs. */
 function updateButtons() {
   for (const b of document.querySelectorAll('#update-bar .btn-primary, #upd-install')) {
     b.disabled = updating
-    b.textContent = updating ? 'Descargando…' : b.id === 'upd-install' ? `Actualizar a ${pendingVersion} y reiniciar` : 'Actualizar y reiniciar'
+    b.textContent = updating ? tr('Downloading…') : b.id === 'upd-install' ? tr('Update to {0} and restart', pendingVersion) : tr('Update and restart')
   }
 }
 
-/** Descarga e instala la versión nueva (desde la barra o desde Ajustes). */
+/** Downloads and installs the new version (from the bar or from Settings). */
 async function installUpdate(onError) {
   if (updating) { return }
   updating = true
   updateButtons()
   try {
-    // Si al final no se instaló nada, los botones vuelven a estar listos.
+    // If nothing was installed in the end, the buttons are ready again.
     if (await call(api.updateInstall) === false) { updating = false; updateButtons() }
   } catch (err) {
     updating = false
     updateButtons()
-    onError(`No pude actualizar: ${err.message}`)
+    onError(tr("Couldn't update: {0}", err.message))
   }
 }
 
 function showUpdate(version, notes) {
   pendingVersion = version
   const b = $('#update-bar')
-  b.replaceChildren(el('div', { class: 'grow' }, el('strong', { text: `Hay una versión nueva de Pedila (${version}). ` }), el('span', { class: 'muted', text: notes || '' })),
-    el('button', { class: 'btn-primary', text: 'Actualizar y reiniciar', onclick: () => installUpdate(showToastLine) }))
+  b.replaceChildren(el('div', { class: 'grow' }, el('strong', { text: tr("There's a new version of Pedila ({0}). ", version) }), el('span', { class: 'muted', text: notes || '' })),
+    el('button', { class: 'btn-primary', text: tr('Update and restart'), onclick: () => installUpdate(showToastLine) }))
   b.hidden = false
   updateInstallButton()
   updateButtons()
 }
 
-/** El botón de Ajustes → Acerca de: solo cuando hay una versión nueva. */
+/** The button in Settings → About: only when there's a new version. */
 function updateInstallButton() {
   const btn = $('#upd-install')
   btn.hidden = !pendingVersion
@@ -2902,17 +2961,17 @@ function renderSnippetSettings() {
   const list = S.settings.snippets || []
   box.replaceChildren(...list.map((x, i) => el('div', { class: 'snip-row' },
     el('div', { class: 'grow' }, el('div', { class: 'n', text: '/' + x.name }), el('div', { class: 'muted small', text: x.text })),
-    el('button', { class: 'btn-ghost', text: 'Editar', onclick: async () => {
-      const name = await askBox({ title: 'Nombre de la frase', value: x.name, ok: 'Siguiente' })
+    el('button', { class: 'btn-ghost', text: tr('Edit'), onclick: async () => {
+      const name = await askBox({ title: tr('Phrase name'), value: x.name, ok: tr('Next') })
       if (!name) { return }
-      const text = await askBox({ title: `Texto de «${name}»`, value: x.text, ok: 'Guardar' })
+      const text = await askBox({ title: tr('Text of “{0}”', name), value: x.text, ok: tr('Save') })
       if (!text) { return }
       const next = list.slice(); next[i] = { name, text }
       await saveSetting({ snippets: next })
       renderSnippetSettings()
     } }),
-    el('button', { class: 'btn-ghost danger', text: 'Quitar', onclick: async () => { await saveSetting({ snippets: list.filter((_, j) => j !== i) }); renderSnippetSettings() } }))))
-  if (!list.length) { box.append(el('p', { class: 'muted small', text: 'No tienes frases guardadas.' })) }
+    el('button', { class: 'btn-ghost danger', text: tr('Remove'), onclick: async () => { await saveSetting({ snippets: list.filter((_, j) => j !== i) }); renderSnippetSettings() } }))))
+  if (!list.length) { box.append(el('p', { class: 'muted small', text: tr('You have no saved phrases.') })) }
 }
 
 function wireExtras() {
@@ -2923,7 +2982,7 @@ function wireExtras() {
     const ch = currentChat()
     const title = ch ? ch.title : ''
     newChatView()
-    $('#input').value = `Sigamos con lo que hablábamos en el chat «${title}». Si te hace falta el contexto, búscalo en tus sesiones anteriores.`
+    $('#input').value = tr("Let's go on with what we were talking about in the chat “{0}”. If you need the context, look it up in your earlier sessions.", title)
     autoGrow()
     updateComposer()
   })
@@ -2934,10 +2993,10 @@ function wireExtras() {
     const r = e.currentTarget.getBoundingClientRect()
     const ch = currentChat()
     const eff = currentEffort()
-    // Con un chat ya empezado no hay «el predeterminado» (Hermes no tiene cómo volver a él).
+    // With a chat already started there's no "default" (Hermes has no way to go back to it).
     const options = REASONING.filter(([v]) => !(ch && v === ''))
     const mark = v => (eff.own ? v === eff.value : v === '') ? '✓ ' : ''
-    const items = options.map(([v, name]) => [`${mark(v)}${v ? name : 'el de Hermes'}`, () => setReasoning(v)])
+    const items = options.map(([v, name]) => [`${mark(v)}${v ? name : tr("Hermes's default")}`, () => setReasoning(v)])
     showPopup(items, r.left, r.top - Math.min(items.length * 34 + 16, 400))
   })
   $('#attach-btn').addEventListener('click', () => $('#file-input').click())
@@ -2970,14 +3029,15 @@ function wireExtras() {
   $('#open-usage').addEventListener('click', () => openUsage())
   $('#panel-toggle').addEventListener('click', () => saveSetting({ window: { sidePanel: !panelOn() } }).then(applyPanel))
   wireResizers()
-  // Al acabar una respuesta se recalcula el uso; además, cada 2 minutos.
+  // When an answer ends usage is worked out again; also, every 2 minutes.
   setInterval(() => { if (panelOn()) { loadPanelUsage(S.active, true) } }, 120000)
-  // Los relojes del panel enseñan segundos: se ponen al día cada segundo (solo su texto).
+  // The panel's clocks show seconds: they're updated every second (only their text).
   setInterval(tickPanel, 1000)
   setInterval(() => { if (panelOn()) { reconcileSubagents() } }, 10000)
-  // Mientras se pulsa algo del panel no se rehace (el clic acabaría en un botón que ya no existe).
+  // While something in the panel is being pressed it isn't rebuilt (the click would end on a button that
+  // no longer exists).
   $('#panel-body').addEventListener('pointerdown', () => { P.hold = true })
-  // Lo mismo en el chat: al pulsar un grupo de herramientas mientras Hermes escribe.
+  // The same in the chat: when clicking a group of tools while Hermes writes.
   $('#messages').addEventListener('pointerdown', () => { liveHold = true })
   const release = () => {
     if (P.hold) { P.hold = false; if (P.held) { P.held = false; schedulePanel() } }
@@ -2993,9 +3053,9 @@ function wireExtras() {
   $('#usage-close').addEventListener('click', () => $('#usage-dialog').close())
   $('#archived-close').addEventListener('click', () => $('#archived-dialog').close())
   $('#snip-add').addEventListener('click', async () => {
-    const name = await askBox({ title: 'Nombre de la frase (lo que escribirás después de «/»)', value: '', ok: 'Siguiente' })
+    const name = await askBox({ title: tr("Phrase name (what you'll type after “/”)"), value: '', ok: tr('Next') })
     if (!name) { return }
-    const text = await askBox({ title: `Texto de «${name}»`, value: '', ok: 'Guardar' })
+    const text = await askBox({ title: tr('Text of “{0}”', name), value: '', ok: tr('Save') })
     if (!text) { return }
     await saveSetting({ snippets: [...(S.settings.snippets || []), { name, text }] })
     renderSnippetSettings()
@@ -3003,18 +3063,18 @@ function wireExtras() {
   $('#upd-save').addEventListener('click', () => saveSetting({ updates: { url: $('#upd-url').value.trim() } }))
   $('#upd-check').addEventListener('click', async () => {
     const st = $('#upd-status')
-    st.textContent = 'Buscando…'
+    st.textContent = tr('Looking for updates…')
     try {
       const r = await call(api.updateCheck)
-      st.textContent = !r ? 'Falta la dirección de actualizaciones.' : r.available ? `Hay una versión nueva: ${r.version}.` : `Tienes la última (${S.version}).`
+      st.textContent = !r ? tr('The updates address is missing.') : r.available ? tr("There's a new version: {0}.", r.version) : tr('You have the latest ({0}).', S.version)
       if (r && r.available) { showUpdate(r.version, r.notes) }
-    } catch (e) { st.textContent = `No pude comprobarlo: ${e.message}` }
+    } catch (e) { st.textContent = tr("Couldn't check it: {0}", e.message) }
   })
-  // Actualizar desde aquí mismo, sin cerrar Ajustes para ir a la barra del chat.
+  // Update from right here, without closing Settings to go to the chat's bar.
   $('#upd-install').addEventListener('click', () => installUpdate(text => { $('#upd-status').textContent = text }))
 }
 
-// ── Diseño: orden y visibilidad de todo (Ajustes → Diseño, o arrastrando en su sitio) ─────────
+// ── Layout: order and visibility of everything (Settings → Layout, or dragging in place) ──────
 const LAY_DEFAULT = {
   conns: ['local', 'server'], connsHidden: [],
   cards: ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones'],
@@ -3027,25 +3087,25 @@ function layout() {
 }
 const shown = k => layout().show[k] !== false
 const CARDS = {
-  ahora: { name: 'Ahora', make: () => panelNowCard() },
-  tareas: { name: 'Tareas', make: () => panelTasksCard() },
-  chat: { name: 'Este chat', make: () => panelChatCard() },
-  uso: { name: 'Uso', make: () => panelUsageCard() },
-  cuotas: { name: 'Cuotas de tus APIs', make: () => panelQuotasCard() },
-  modelos: { name: 'Modelos más usados', make: () => panelModelsCard() },
-  conexiones: { name: 'Conexiones', make: () => panelConnsCard() }
+  ahora: { name: tr('Now'), make: () => panelNowCard() },
+  tareas: { name: tr('Tasks'), make: () => panelTasksCard() },
+  chat: { name: tr('This chat'), make: () => panelChatCard() },
+  uso: { name: tr('Usage'), make: () => panelUsageCard() },
+  cuotas: { name: tr("Your APIs' quotas"), make: () => panelQuotasCard() },
+  modelos: { name: tr('Most used models'), make: () => panelModelsCard() },
+  conexiones: { name: tr('Connections'), make: () => panelConnsCard() }
 }
 const SHOW_NAMES = {
-  attach: '📎 Adjuntar imágenes', model: 'Modelo', reason: '🧠 Esfuerzo',
-  readonly: '🔒 Solo consultar', hint: 'Texto de ayuda «Enter para enviar»', suggestions: 'Sugerencias en el chat nuevo',
-  search: 'Buscador de chats', version: 'Número de versión abajo', usageButton: 'Botón 📊 Tu uso'
+  attach: tr('📎 Attach images'), model: tr('Model'), reason: tr('🧠 Effort'),
+  readonly: tr('🔒 Read only'), hint: tr('“Enter to send” hint'), suggestions: tr('Suggestions in the new chat'),
+  search: tr('Chat search box'), version: tr('Version number at the bottom'), usageButton: tr('📊 Your usage button')
 }
 
 async function saveLayout(patch) {
   await saveSetting({ layout: { ...layout(), ...patch } })
 }
 
-/** Aplica el diseño guardado: lado y lo que se esconde. */
+/** Applies the saved layout: side and what is hidden. */
 function applyLayout() {
   const L = layout()
   $('#app').classList.toggle('swap', Boolean(L.swap))
@@ -3063,9 +3123,9 @@ function applyLayout() {
 }
 
 /**
- * Ordenar arrastrando (con el ratón; no usa el arrastre del navegador, que no se lleva bien con
- * los botones). `items`: los hijos que se mueven; `handle`: de dónde se coge (o todo el hijo);
- * `done(ids)`: el orden nuevo, con el data-id de cada uno.
+ * Sorting by dragging (with the mouse; it doesn't use the browser's drag and drop, which doesn't get along
+ * with buttons). `items`: the children that move; `handle`: where it's grabbed (or the whole child);
+ * `done(ids)`: the new order, with each one's data-id.
  */
 function sortable(box, { items, handle = null, horizontal = false, onStart = null, done }) {
   box.addEventListener('pointerdown', e => {
@@ -3102,7 +3162,8 @@ function sortable(box, { items, handle = null, horizontal = false, onStart = nul
       if (!dragging) { return }
       it.classList.remove('dragging')
       document.body.classList.remove('sorting')
-      // El clic que llega justo al soltar no debe abrir nada (si no llega, el bloqueo se quita solo).
+      // The click that comes right on release must not open anything (if it doesn't come, the block goes
+      // away by itself).
       const swallow = ev => { ev.stopPropagation(); ev.preventDefault() }
       addEventListener('click', swallow, { capture: true, once: true })
       setTimeout(() => removeEventListener('click', swallow, true), 250)
@@ -3114,7 +3175,7 @@ function sortable(box, { items, handle = null, horizontal = false, onStart = nul
   })
 }
 
-/** Junta el orden visible con el completo: los que no se veían conservan su sitio relativo. */
+/** Merges the visible order with the full one: the ones not seen keep their relative place. */
 function mergeOrder(full, visibleOrder) {
   const vis = new Set(visibleOrder)
   const queue = visibleOrder.slice()
@@ -3131,20 +3192,20 @@ function wireLayout() {
   addEventListener('pointerup', () => { if (P.dragging) { setTimeout(() => { P.dragging = false; schedulePanel() }, 0) } }, true)
   for (const b of document.querySelectorAll('#lay-swap button')) { b.addEventListener('click', () => saveLayout({ swap: b.dataset.v === 'true' })) }
   $('#lay-reset').addEventListener('click', async () => {
-    const ok = await askBox({ title: '¿Volver al diseño de siempre?', text: 'Se recolocan las pestañas, las tarjetas y los botones como vienen de fábrica. No cambia nada más.', ok: 'Sí, volver' })
+    const ok = await askBox({ title: tr('Go back to the default layout?'), text: tr('The tabs, cards and buttons go back to how they come out of the box. Nothing else changes.'), ok: tr('Yes, go back') })
     if (ok) { await saveSetting({ layout: JSON.parse(JSON.stringify({ ...LAY_DEFAULT, show: {} })) }) }
   })
 }
 
-/** Una fila de Ajustes → Diseño: se arrastra por ⠿ o se mueve con ↑ ↓; a la derecha, sus interruptores. */
+/** A row of Settings → Layout: dragged by ⠿ or moved with ↑ ↓; on the right, its switches. */
 function layRow(id, name, list, key, toggles) {
   const i = list.indexOf(id)
   const move = d => { const o = list.slice(); o.splice(i, 1); o.splice(i + d, 0, id); saveLayout({ [key]: o }) }
   return el('div', { class: 'lay-row', 'data-id': id },
-    el('span', { class: 'lay-grip', text: '⠿', title: 'Arrastra para cambiar de sitio' }),
+    el('span', { class: 'lay-grip', text: '⠿', title: tr('Drag to move it') }),
     el('span', { class: 'lay-name', text: name }),
-    el('button', { class: 'icon-mini', text: '↑', title: 'Subir', disabled: i <= 0, onclick: () => move(-1) }),
-    el('button', { class: 'icon-mini', text: '↓', title: 'Bajar', disabled: i >= list.length - 1, onclick: () => move(1) }),
+    el('button', { class: 'icon-mini', text: '↑', title: tr('Move up'), disabled: i <= 0, onclick: () => move(-1) }),
+    el('button', { class: 'icon-mini', text: '↓', title: tr('Move down'), disabled: i >= list.length - 1, onclick: () => move(1) }),
     ...toggles.map(([label, on, fn]) => el('label', { class: 'lay-tog' }, el('input', { type: 'checkbox', checked: on, onchange: e => fn(e.target.checked) }), el('span', { text: label }))))
 }
 
@@ -3152,9 +3213,9 @@ function renderLayoutSettings() {
   const L = layout()
   for (const b of document.querySelectorAll('#lay-swap button')) { b.classList.toggle('active', String(Boolean(L.swap)) === b.dataset.v) }
   const toggleIn = (key, id) => on => { const set = new Set(L[key]); if (on) { set.add(id) } else { set.delete(id) } saveLayout({ [key]: [...set] }) }
-  $('#lay-conns').replaceChildren(...L.conns.map(c => layRow(c, CONN_NAMES[c], L.conns, 'conns', [['Mostrar', !L.connsHidden.includes(c), on => toggleIn('connsHidden', c)(!on)]])))
+  $('#lay-conns').replaceChildren(...L.conns.map(c => layRow(c, CONN_NAMES[c], L.conns, 'conns', [[tr('Show'), !L.connsHidden.includes(c), on => toggleIn('connsHidden', c)(!on)]])))
   $('#lay-cards').replaceChildren(...L.cards.map(id => layRow(id, CARDS[id].name, L.cards, 'cards', [
-    ['Mostrar', L.cardsChats.includes(id), toggleIn('cardsChats', id)]
+    [tr('Show'), L.cardsChats.includes(id), toggleIn('cardsChats', id)]
   ])))
   $('#lay-show').replaceChildren(...Object.entries(SHOW_NAMES).map(([k, name]) => el('label', { class: 'toggle' },
     el('input', { type: 'checkbox', checked: shown(k), onchange: e => saveLayout({ show: { ...L.show, [k]: e.target.checked } }) }), el('span', { text: name }))))
@@ -3164,17 +3225,17 @@ for (const [box, key] of [['#lay-conns', 'conns'], ['#lay-cards', 'cards']]) {
   sortable($(box), { items: '.lay-row', handle: '.lay-grip', done: ids => saveLayout({ [key]: ids }) })
 }
 
-// ── Chats activos: un distintivo en la lista ─────────────────────────────────────────────────
-/** «trabajando» si Hermes está respondiendo en ese chat ahora mismo. */
+// ── Active chats: a badge in the list ────────────────────────────────────────────────────────
+/** "working" if Hermes is answering in that chat right now. */
 function activeBadge(conn, r, running) {
   if (!running) { return null }
-  return el('span', { class: 'live-badge busy', title: 'Hermes está trabajando en este chat' }, el('i'), 'trabajando')
+  return el('span', { class: 'live-badge busy', title: tr('Hermes is working in this chat') }, el('i'), tr('working'))
 }
 
-// ── Modelo y razonamiento de un chat ya empezado ─────────────────────────────────────────────
+// ── Model and reasoning of a chat already started ────────────────────────────────────────────
 /**
- * El esfuerzo que se ve en el botón: { value, own }. own = elegido aquí para este chat (o para el
- * chat nuevo); si no, value es con el que trabaja (el que dice Hermes de ese chat).
+ * The effort shown on the button: { value, own }. own = chosen here for this chat (or for the new chat);
+ * otherwise, value is the one it works with (the one Hermes says for that chat).
  */
 function currentEffort() {
   const ch = currentChat()
@@ -3196,21 +3257,21 @@ async function setReasoning(v) {
     ch.reasoningSet = v
     if (!v) { ch.effortNow = '' }
     updateExtrasPills()
-    const name = v ? effortName(v) : 'el predeterminado'
-    showNote(`Esfuerzo de este chat: ${name}${r && r.applied === 'next' ? ' (desde tu próximo mensaje)' : ''}.`)
-  } catch (e) { showNote(`No pude cambiar el esfuerzo: ${e.message}`, true) }
+    const name = v ? effortName(v) : tr('the default one')
+    showNote(tr("This chat's effort: {0}{1}.", name, r && r.applied === 'next' ? tr(' (from your next message on)') : ''))
+  } catch (e) { showNote(tr("Couldn't change the effort: {0}", e.message), true) }
 }
 
-/** Un aviso corto encima del recuadro de escribir (el texto de ayuda vuelve a los 6 s). */
+/** A short notice above the writing box (the hint text comes back after 6 s). */
 function showNote(text, bad = false) {
   const h = $('#composer-hint')
   h.textContent = text
   h.classList.toggle('error', bad)
   h.hidden = false
   clearTimeout(toastT)
-  toastT = setTimeout(() => { h.textContent = 'Enter para enviar · Mayús+Enter, salto de línea'; h.classList.remove('error'); h.hidden = !shown('hint') }, 6000)
+  toastT = setTimeout(() => { h.textContent = tr('Enter to send · Shift+Enter for a new line'); h.classList.remove('error'); h.hidden = !shown('hint') }, 6000)
 }
 
-// Un error de la pantalla queda en el registro de Pedila (si no, un botón que falla no deja rastro).
+// An error in the screen stays in Pedila's log (otherwise a button that fails leaves no trace).
 addEventListener('error', e => { try { api.logError && api.logError(`${e.message} (${String(e.filename || '').split('/').pop()}:${e.lineno})`) } catch {} })
-addEventListener('unhandledrejection', e => { try { api.logError && api.logError('promesa: ' + ((e.reason && (e.reason.stack || e.reason.message)) || e.reason)) } catch {} })
+addEventListener('unhandledrejection', e => { try { api.logError && api.logError('promise: ' + ((e.reason && (e.reason.stack || e.reason.message)) || e.reason)) } catch {} })

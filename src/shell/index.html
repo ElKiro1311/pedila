@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://assets.petdex.dev; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
@@ -13,34 +13,34 @@
         <img class="brand-icon" src="assets/tray@2x.png" alt="">
         <span class="brand">Pedila</span>
       </div>
-      <div id="conn-switch" class="segmented" role="tablist" aria-label="Qué Hermes usar">
-        <button role="tab" data-conn="local"><span class="dot"></span>Este PC</button>
-        <button role="tab" data-conn="server"><span class="dot"></span>Servidor</button>
+      <div id="conn-switch" class="segmented" role="tablist" aria-label="Which Hermes to use">
+        <button role="tab" data-conn="local"><span class="dot"></span>This PC</button>
+        <button role="tab" data-conn="server"><span class="dot"></span>Server</button>
       </div>
-      <button id="new-chat" class="btn-primary"><span class="plus">＋</span> Nuevo chat</button>
+      <button id="new-chat" class="btn-primary"><span class="plus">＋</span> New chat</button>
       <div class="search-wrap">
-        <input id="search" type="search" placeholder="Buscar chats" autocomplete="off" spellcheck="false">
+        <input id="search" type="search" placeholder="Search chats" autocomplete="off" spellcheck="false">
       </div>
       <nav id="chat-list" aria-label="Chats"></nav>
       <div id="pet-stage"><canvas id="pet" width="192" height="208" title="Pedila"></canvas></div>
       <div class="side-bottom">
-        <button id="open-settings" class="btn-ghost">⚙ Ajustes</button>
-        <button id="open-usage" class="btn-ghost" title="Tu uso">📊</button>
+        <button id="open-settings" class="btn-ghost">⚙ Settings</button>
+        <button id="open-usage" class="btn-ghost" title="Your usage">📊</button>
         <span id="version" class="muted small"></span>
       </div>
     </aside>
 
-    <aside id="side-panel" aria-label="Uso y parámetros">
+    <aside id="side-panel" aria-label="Usage and parameters">
       <header class="sp-head drag"><span class="sp-title">Panel</span></header>
       <div id="panel-body" class="sp-body"></div>
     </aside>
 
     <main id="main">
       <header id="topbar" class="drag">
-        <div id="chat-title">Nuevo chat</div>
+        <div id="chat-title">New chat</div>
         <div id="chat-meta" class="muted small"></div>
-        <button id="chat-actions" class="icon-btn top-act" title="Opciones del chat" aria-label="Opciones del chat" hidden>⋯</button>
-        <button id="panel-toggle" class="icon-btn top-act" title="Mostrar u ocultar el panel de uso" aria-label="Panel de uso" aria-pressed="true">◨</button>
+        <button id="chat-actions" class="icon-btn top-act" title="Chat options" aria-label="Chat options" hidden>⋯</button>
+        <button id="panel-toggle" class="icon-btn top-act" title="Show or hide the usage panel" aria-label="Usage panel" aria-pressed="true">◨</button>
       </header>
       <div id="ctx-bar" hidden><div></div></div>
       <div id="update-bar" class="bar" hidden></div>
@@ -48,13 +48,13 @@
       <section id="scroller">
         <div id="welcome" hidden>
           <canvas id="welcome-pet" width="192" height="208" aria-hidden="true"></canvas>
-          <h1>¿En qué te ayudo?</h1>
+          <h1>What can I help you with?</h1>
           <p class="muted" id="welcome-where"></p>
           <div class="suggestions">
-            <button class="chip">Busca en internet las noticias de hoy sobre tecnología y resúmelas</button>
-            <button class="chip">Explícame paso a paso cómo funciona algo que no entiendo</button>
-            <button class="chip">Revisa el estado de mi servidor y dime si algo va mal</button>
-            <button class="chip">Escríbeme un correo amable para…</button>
+            <button class="chip">Search the web for today's technology news and sum it up</button>
+            <button class="chip">Explain to me step by step how something I don't understand works</button>
+            <button class="chip">Check how my server is doing and tell me if anything is wrong</button>
+            <button class="chip">Write me a friendly email to…</button>
           </div>
         </div>
         <div id="messages" aria-live="polite"></div>
@@ -62,20 +62,20 @@
       <footer id="composer-wrap">
         <div id="ctx-warn" class="bar" hidden>
           <span id="ctx-warn-text" class="grow"></span>
-          <button id="ctx-new" class="btn-primary">Seguir en un chat nuevo</button>
-          <button id="ctx-hide" class="btn-ghost">Ocultar</button>
+          <button id="ctx-new" class="btn-primary">Go on in a new chat</button>
+          <button id="ctx-hide" class="btn-ghost">Hide</button>
         </div>
         <div id="composer">
           <div id="attach-strip" hidden></div>
-          <textarea id="input" rows="1" placeholder="Escribe a Hermes…" spellcheck="true"></textarea>
+          <textarea id="input" rows="1" placeholder="Message Hermes…" spellcheck="true"></textarea>
           <div class="composer-row">
-            <button id="attach-btn" class="pill icon" title="Adjuntar imágenes (también puedes pegar una captura o arrastrarla)">📎</button>
+            <button id="attach-btn" class="pill icon" title="Attach images (you can also paste a screenshot or drag it in)">📎</button>
             <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
-            <button id="model-pill" class="pill" title="Modelo para los chats nuevos">Modelo: predeterminado</button>
-            <button id="reason-pill" class="pill">🧠 el de Hermes</button>
-            <button id="readonly-pill" class="pill">🔒 Solo consultar</button>
-            <span id="composer-hint" class="muted small">Enter para enviar · Mayús+Enter, salto de línea</span>
-            <button id="send" class="send" title="Enviar" aria-label="Enviar">➤</button>
+            <button id="model-pill" class="pill" title="Model for new chats">Model: default</button>
+            <button id="reason-pill" class="pill">🧠 Hermes's default</button>
+            <button id="readonly-pill" class="pill">🔒 Read only</button>
+            <span id="composer-hint" class="muted small">Enter to send · Shift+Enter for a new line</span>
+            <button id="send" class="send" title="Send" aria-label="Send">➤</button>
           </div>
         </div>
       </footer>
@@ -83,21 +83,21 @@
       <div id="snip-menu" class="menu" hidden></div>
     </main>
 
-    <!-- Rayas para ajustar el ancho; van al final para que Electron no las tome por zona de arrastre de la ventana. -->
-    <div class="resizer" data-side="side" role="separator" aria-orientation="vertical" aria-label="Ancho de la lista de chats (arrastra, o flechas; doble clic: el de siempre)" tabindex="0"></div>
-    <div class="resizer" data-side="panel" role="separator" aria-orientation="vertical" aria-label="Ancho del panel (arrastra, o flechas; doble clic: el de siempre)" tabindex="0"></div>
+    <!-- Lines to adjust the widths; they go last so that Electron doesn't take them for a drag region of the window. -->
+    <div class="resizer" data-side="side" role="separator" aria-orientation="vertical" aria-label="Width of the chat list (drag, or arrow keys; double-click: the default)" tabindex="0"></div>
+    <div class="resizer" data-side="panel" role="separator" aria-orientation="vertical" aria-label="Width of the panel (drag, or arrow keys; double-click: the default)" tabindex="0"></div>
   </div>
 
   <dialog id="login-dialog">
     <form method="dialog" id="login-form">
-      <h2>Entrar en el Hermes del servidor</h2>
-      <p class="muted">Usa el mismo usuario y la misma contraseña que en su página web. La contraseña no se guarda: solo la sesión, cifrada con Windows.</p>
-      <label>Usuario<input id="login-user" autocomplete="username" required></label>
-      <label>Contraseña<input id="login-pass" type="password" autocomplete="current-password" required></label>
+      <h2>Log in to the server's Hermes</h2>
+      <p class="muted">Use the same username and password as on its web page. The password isn't stored: only the session is, encrypted with Windows.</p>
+      <label>Username<input id="login-user" autocomplete="username" required></label>
+      <label>Password<input id="login-pass" type="password" autocomplete="current-password" required></label>
       <p id="login-error" class="error" hidden></p>
       <div class="dialog-buttons">
-        <button type="button" class="btn-ghost" id="login-cancel">Cancelar</button>
-        <button type="submit" class="btn-primary" id="login-submit">Entrar</button>
+        <button type="button" class="btn-ghost" id="login-cancel">Cancel</button>
+        <button type="submit" class="btn-primary" id="login-submit">Log in</button>
       </div>
     </form>
   </dialog>
@@ -105,148 +105,150 @@
   <dialog id="settings-dialog">
     <div class="settings">
       <nav class="settings-nav">
-        <h2>Ajustes</h2>
-        <button data-sec="apariencia" class="active">Apariencia</button>
-        <button data-sec="diseno">Diseño</button>
-        <button data-sec="servidor">Servidor</button>
-        <button data-sec="avisos">Avisos</button>
-        <button data-sec="frases">Frases rápidas</button>
-        <button data-sec="mascota">Mascota</button>
-        <button data-sec="ventana">Ventana</button>
-        <button data-sec="acerca">Acerca de</button>
+        <h2>Settings</h2>
+        <button data-sec="appearance" class="active">Appearance</button>
+        <button data-sec="layout">Layout</button>
+        <button data-sec="server">Server</button>
+        <button data-sec="notifications">Notifications</button>
+        <button data-sec="phrases">Quick phrases</button>
+        <button data-sec="pet">Pet</button>
+        <button data-sec="window">Window</button>
+        <button data-sec="about">About</button>
       </nav>
       <div class="settings-body">
-        <section data-sec="apariencia">
-          <h3>Apariencia</h3>
-          <p class="muted small theme-intro">Elige un tema: el cambio se ve al momento. Cada uno tiene versión oscura y clara.</p>
-          <div id="theme-grid" class="theme-grid" role="radiogroup" aria-label="Tema"></div>
-          <div class="row"><span>Modo</span><div class="segmented" data-set="look.theme">
-            <button data-v="system">Sistema</button><button data-v="dark">Oscuro</button><button data-v="light">Claro</button></div></div>
-          <div class="row"><span>Color de acento</span><div class="swatches" data-set="look.accent">
-            <button data-v="tema" title="El del tema"></button><button data-v="oro" title="Oro"></button><button data-v="violeta" title="Violeta"></button><button data-v="azul" title="Azul"></button><button data-v="turquesa" title="Turquesa"></button><button data-v="ambar" title="Ámbar"></button><button data-v="rosa" title="Rosa"></button></div></div>
-          <div class="row"><span>Tamaño del texto</span><div class="segmented" data-set="look.textSize">
-            <button data-v="90">90 %</button><button data-v="100">100 %</button><button data-v="110">110 %</button><button data-v="125">125 %</button></div></div>
+        <section data-sec="appearance">
+          <h3>Appearance</h3>
+          <p class="muted small theme-intro">Choose a theme: the change shows right away. Each one has a dark and a light version.</p>
+          <div id="theme-grid" class="theme-grid" role="radiogroup" aria-label="Theme"></div>
+          <div class="row"><span>Mode</span><div class="segmented" data-set="look.theme">
+            <button data-v="system">System</button><button data-v="dark">Dark</button><button data-v="light">Light</button></div></div>
+          <div class="row"><span>Accent color</span><div class="swatches" data-set="look.accent">
+            <button data-v="tema" title="The theme's"></button><button data-v="oro" title="Gold"></button><button data-v="violeta" title="Violet"></button><button data-v="azul" title="Blue"></button><button data-v="turquesa" title="Turquoise"></button><button data-v="ambar" title="Amber"></button><button data-v="rosa" title="Pink"></button></div></div>
+          <div class="row"><span>Text size</span><div class="segmented" data-set="look.textSize">
+            <button data-v="90">90%</button><button data-v="100">100%</button><button data-v="110">110%</button><button data-v="125">125%</button></div></div>
+          <div class="row"><span>Language</span><div class="segmented" data-set="language">
+            <button data-v="auto">Automatic</button><button data-v="en">English</button><button data-v="es">Español</button></div></div>
         </section>
-        <section data-sec="diseno" hidden>
-          <h3>Diseño</h3>
-          <p class="muted small">Ordena y esconde lo que quieras. También puedes arrastrar las pestañas y las tarjetas del panel directamente en su sitio (las tarjetas, por su título).</p>
-          <div class="row"><span>Lista de chats</span><div class="segmented" id="lay-swap">
-            <button data-v="false">A la izquierda</button><button data-v="true">A la derecha</button></div></div>
-          <h4>A quién hablas</h4>
+        <section data-sec="layout" hidden>
+          <h3>Layout</h3>
+          <p class="muted small">Sort and hide whatever you like. You can also drag the tabs and the panel's cards right where they are (the cards, by their title).</p>
+          <div class="row"><span>Chat list</span><div class="segmented" id="lay-swap">
+            <button data-v="false">On the left</button><button data-v="true">On the right</button></div></div>
+          <h4>Who you talk to</h4>
           <div id="lay-conns" class="lay-list"></div>
-          <h4>Tarjetas del panel</h4>
+          <h4>Panel cards</h4>
           <div id="lay-cards" class="lay-list"></div>
-          <h4>Botones y extras</h4>
+          <h4>Buttons and extras</h4>
           <div id="lay-show"></div>
-          <button id="lay-reset" class="btn-ghost">Volver al diseño de siempre</button>
+          <button id="lay-reset" class="btn-ghost">Back to the default layout</button>
         </section>
-        <section data-sec="servidor" hidden>
-          <h3>Servidor</h3>
-          <p class="muted">Primero prueba la dirección de casa; si no responde, la alternativa (la de una VPN como ZeroTier o Tailscale, para cuando estás fuera).</p>
-          <label class="field">Dirección de casa<input id="srv-url-1" spellcheck="false"></label>
-          <label class="field">Dirección alternativa<input id="srv-url-2" spellcheck="false"></label>
+        <section data-sec="server" hidden>
+          <h3>Server</h3>
+          <p class="muted">It tries the home address first; if that doesn't answer, the alternative one (a VPN's, such as ZeroTier or Tailscale, for when you're away).</p>
+          <label class="field">Home address<input id="srv-url-1" spellcheck="false"></label>
+          <label class="field">Alternative address<input id="srv-url-2" spellcheck="false"></label>
           <div class="row"><span id="srv-session" class="muted"></span>
-            <div class="row-buttons"><button id="srv-save" class="btn-ghost">Guardar direcciones</button><button id="srv-login" class="btn-ghost">Iniciar sesión</button><button id="srv-logout" class="btn-ghost danger">Cerrar sesión</button></div></div>
+            <div class="row-buttons"><button id="srv-save" class="btn-ghost">Save addresses</button><button id="srv-login" class="btn-ghost">Sign in</button><button id="srv-logout" class="btn-ghost danger">Sign out</button></div></div>
         </section>
-        <section data-sec="avisos" hidden>
-          <h3>Avisos de Windows</h3>
-          <p id="toasts-off" class="note-warn" hidden>Tus notificaciones de Windows están <strong>apagadas</strong> (Configuración → Sistema → Notificaciones), así que ninguna app puede mostrarlas. Mientras tanto, el botón de Pedila en la barra de tareas parpadea cuando Hermes termina o te necesita.</p>
-          <label class="toggle"><input type="checkbox" data-set="notify.enabled"><span>Activar los avisos</span></label>
-          <label class="toggle"><input type="checkbox" data-set="notify.done"><span>Cuando Hermes termina</span></label>
-          <label class="toggle"><input type="checkbox" data-set="notify.needs"><span>Cuando Hermes te necesita (permiso o pregunta)</span></label>
-          <label class="toggle"><input type="checkbox" data-set="notify.failed"><span>Cuando algo falla</span></label>
-          <label class="toggle"><input type="checkbox" data-set="notify.sound"><span>Con sonido</span></label>
-          <label class="toggle"><input type="checkbox" data-set="notify.chime"><span>Sonido suave de la app al terminar (suena aunque los avisos de Windows estén apagados)</span></label>
-          <label class="toggle"><input type="checkbox" data-set="notify.badge"><span>Punto en el icono de la barra de tareas cuando hay una respuesta sin ver</span></label>
-          <div class="row"><span>Solo si la respuesta tardó más de</span><div class="segmented" data-set="notify.minDurationSec">
+        <section data-sec="notifications" hidden>
+          <h3>Windows notifications</h3>
+          <p id="toasts-off" class="note-warn" hidden>Your Windows notifications are <strong>turned off</strong> (Settings → System → Notifications), so no app can show any. In the meantime, Pedila's taskbar button flashes when Hermes finishes or needs you.</p>
+          <label class="toggle"><input type="checkbox" data-set="notify.enabled"><span>Turn notifications on</span></label>
+          <label class="toggle"><input type="checkbox" data-set="notify.done"><span>When Hermes finishes</span></label>
+          <label class="toggle"><input type="checkbox" data-set="notify.needs"><span>When Hermes needs you (a permission or a question)</span></label>
+          <label class="toggle"><input type="checkbox" data-set="notify.failed"><span>When something fails</span></label>
+          <label class="toggle"><input type="checkbox" data-set="notify.sound"><span>With sound</span></label>
+          <label class="toggle"><input type="checkbox" data-set="notify.chime"><span>Soft sound from the app when it finishes (it plays even if Windows notifications are off)</span></label>
+          <label class="toggle"><input type="checkbox" data-set="notify.badge"><span>Dot on the taskbar icon when there's an answer you haven't seen</span></label>
+          <div class="row"><span>Only if the answer took longer than</span><div class="segmented" data-set="notify.minDurationSec">
             <button data-v="0">0 s</button><button data-v="10">10 s</button><button data-v="30">30 s</button><button data-v="60">1 min</button></div></div>
-          <p class="muted small">No avisa del chat que tienes delante con la ventana activa.</p>
-          <button id="test-notify" class="btn-ghost">Probar aviso</button>
+          <p class="muted small">There are no notifications for the chat in front of you while the window is active.</p>
+          <button id="test-notify" class="btn-ghost">Test notification</button>
         </section>
-        <section data-sec="frases" hidden>
-          <h3>Frases rápidas</h3>
-          <p class="muted">Escribe «/» al principio del mensaje y elige una (Tab o Enter usa la primera).</p>
+        <section data-sec="phrases" hidden>
+          <h3>Quick phrases</h3>
+          <p class="muted">Type “/” at the beginning of the message and choose one (Tab or Enter uses the first).</p>
           <div id="snip-list"></div>
-          <button id="snip-add" class="btn-ghost">＋ Añadir frase</button>
+          <button id="snip-add" class="btn-ghost">＋ Add phrase</button>
         </section>
-        <section data-sec="mascota" hidden>
-          <h3>Mascota</h3>
+        <section data-sec="pet" hidden>
+          <h3>Pet</h3>
           <div class="pet-current">
             <canvas id="settings-pet" width="192" height="208" aria-hidden="true"></canvas>
             <div class="grow">
               <div class="pet-name" id="settings-pet-name"></div>
               <div class="muted small" id="settings-pet-by"></div>
-              <button id="choose-pet" class="btn-primary">Elegir otra mascota…</button>
+              <button id="choose-pet" class="btn-primary">Choose another pet…</button>
             </div>
           </div>
-          <p class="muted small">Vive al pie de la barra lateral y reacciona a lo que hace Hermes: corre cuando trabaja, revisa papeles cuando usa herramientas, espera cuando te necesita y salta al terminar. Si la tocas, te saluda.</p>
-          <label class="toggle"><input type="checkbox" data-set="pet.visible"><span>Mostrar la mascota</span></label>
-          <div class="row"><span>Tamaño</span><div class="segmented" data-set="pet.size">
-            <button data-v="pequena">Pequeña</button><button data-v="normal">Normal</button><button data-v="grande">Grande</button></div></div>
+          <p class="muted small">It lives at the foot of the sidebar and reacts to what Hermes does: it runs while Hermes works, goes over papers while it uses tools, waits when it needs you and jumps when it finishes. If you touch it, it waves.</p>
+          <label class="toggle"><input type="checkbox" data-set="pet.visible"><span>Show the pet</span></label>
+          <div class="row"><span>Size</span><div class="segmented" data-set="pet.size">
+            <button data-v="pequena">Small</button><button data-v="normal">Normal</button><button data-v="grande">Large</button></div></div>
         </section>
-        <section data-sec="ventana" hidden>
-          <h3>Ventana</h3>
-          <label class="toggle"><input type="checkbox" data-set="window.closeToTray"><span>Al cerrar, seguir en la bandeja (junto al reloj)</span></label>
-          <label class="toggle"><input type="checkbox" data-set="window.openAtLogin"><span>Iniciar con Windows (se abre escondida en la bandeja; también en el menú del icono de la bandeja)</span></label>
-          <label class="toggle"><input type="checkbox" data-set="shortcut.enabled"><span>Atajo Ctrl+Alt+H para mostrar u ocultar la app desde cualquier sitio</span></label>
+        <section data-sec="window" hidden>
+          <h3>Window</h3>
+          <label class="toggle"><input type="checkbox" data-set="window.closeToTray"><span>On closing, stay in the tray (next to the clock)</span></label>
+          <label class="toggle"><input type="checkbox" data-set="window.openAtLogin"><span>Start with Windows (it opens hidden in the tray; also in the tray icon's menu)</span></label>
+          <label class="toggle"><input type="checkbox" data-set="shortcut.enabled"><span>Ctrl+Alt+H shortcut to show or hide the app from anywhere</span></label>
         </section>
-        <section data-sec="acerca" hidden>
-          <h3>Acerca de</h3>
+        <section data-sec="about" hidden>
+          <h3>About</h3>
           <p><strong>Pedila</strong> <span id="about-version"></span></p>
-          <p class="muted">Una ventana sencilla para tu Hermes: el de este PC (el mismo que usa Hermes Desktop, con los mismos chats) y el del servidor.</p>
-          <p class="muted small"><b>Pedila</b> (πέδιλα) son las sandalias aladas de Hermes: «las hermosas sandalias, inmortales, de oro, que lo llevaban sobre el mar y sobre la tierra sin límites, tan rápido como los soplos del viento» (Homero, <i>Odisea</i> V, 44-46).</p>
-          <p class="muted small">Cliente no oficial para Hermes Agent; no está hecho ni respaldado por Nous Research. Código bajo licencia MIT.</p>
+          <p class="muted">A simple window for your Hermes: the one on this PC (the same one Hermes Desktop uses, with the same chats) and the one on the server.</p>
+          <p class="muted small"><b>Pedila</b> (πέδιλα) are Hermes's winged sandals: “the beautiful sandals, immortal, golden, that carried him over the sea and over the boundless earth as fast as the breaths of the wind” (Homer, <i>Odyssey</i> 5.44–46).</p>
+          <p class="muted small">Unofficial client for Hermes Agent; not made or endorsed by Nous Research. Code under the MIT license.</p>
           <p class="muted small" id="about-pet"></p>
-          <button id="open-logs" class="btn-ghost">Abrir carpeta de registros</button>
-          <h4>Actualizaciones</h4>
-          <label class="field">Carpeta de actualizaciones (con su version.json)<input id="upd-url" spellcheck="false" placeholder="http://servidor:8185/pedila"></label>
-          <label class="toggle"><input type="checkbox" data-set="updates.auto"><span>Buscar versiones nuevas al abrir y cada 6 horas</span></label>
-          <label class="toggle"><input type="checkbox" data-set="updates.autoInstall"><span>Instalarlas solas cuando no uses Pedila ni el PC: 10 minutos sin tocarlos, sin nada escrito sin enviar y sin Hermes trabajando. Vuelve a abrirse como estaba: delante solo si la tenías delante, y sin quitarte el foco.</span></label>
-          <div class="row-buttons"><button id="upd-save" class="btn-ghost">Guardar dirección</button><button id="upd-check" class="btn-ghost">Buscar actualizaciones</button><button id="upd-install" class="btn-primary" hidden>Actualizar y reiniciar</button><span id="upd-status" class="muted small"></span></div>
+          <button id="open-logs" class="btn-ghost">Open the logs folder</button>
+          <h4>Updates</h4>
+          <label class="field">Updates folder (with its version.json)<input id="upd-url" spellcheck="false" placeholder="http://server:8185/pedila"></label>
+          <label class="toggle"><input type="checkbox" data-set="updates.auto"><span>Look for new versions on opening and every 6 hours</span></label>
+          <label class="toggle"><input type="checkbox" data-set="updates.autoInstall"><span>Install them automatically when you aren't using Pedila or the PC: 10 minutes without touching them, with nothing typed and not sent and Hermes not working. It opens again the way it was: in front only if you had it in front, and without taking the focus.</span></label>
+          <div class="row-buttons"><button id="upd-save" class="btn-ghost">Save address</button><button id="upd-check" class="btn-ghost">Check for updates</button><button id="upd-install" class="btn-primary" hidden>Update and restart</button><span id="upd-status" class="muted small"></span></div>
           <h4>Hermes</h4>
-          <label class="toggle"><input type="checkbox" data-set="hermes.autoUpdate"><span>Actualizar solo el Hermes de este PC cuando haya versión nueva y lleve 10 minutos sin usarse: sin chats trabajando ni con actividad, sin subagentes ni procesos en segundo plano, y tú sin usar Pedila ni el PC</span></label>
+          <label class="toggle"><input type="checkbox" data-set="hermes.autoUpdate"><span>Update this PC's Hermes automatically when there's a new version and it has been unused for 10 minutes: no chats working or active, no subagents or background processes, and you not using Pedila or the PC</span></label>
           <div id="hermes-upd"></div>
-          <p class="muted small">Pedila mira cada 6 horas si hay versión nueva. Un Hermes en Docker (como el de un servidor) no puede actualizarse a sí mismo: se actualiza desde su servidor, y aquí solo se avisa.</p>
+          <p class="muted small">Pedila checks every 6 hours whether there's a new version. A Hermes in Docker (like a server's) can't update itself: it's updated from its server, and here there's only a notice.</p>
         </section>
       </div>
-      <button id="settings-close" class="icon-btn" aria-label="Cerrar">✕</button>
+      <button id="settings-close" class="icon-btn" aria-label="Close">✕</button>
     </div>
   </dialog>
 
   <dialog id="pet-dialog">
     <div class="pet-picker">
       <header class="pp-head">
-        <h2>Elegir mascota</h2>
+        <h2>Choose a pet</h2>
         <div class="segmented" id="pp-tabs">
-          <button data-tab="mine" class="active">Tus mascotas</button>
-          <button data-tab="petdex">Catálogo de Petdex</button>
+          <button data-tab="mine" class="active">Your pets</button>
+          <button data-tab="petdex">Petdex catalog</button>
         </div>
-        <button id="pp-close" class="icon-btn" aria-label="Cerrar">✕</button>
+        <button id="pp-close" class="icon-btn" aria-label="Close">✕</button>
       </header>
       <div class="pp-filters" id="pp-filters" hidden>
-        <input id="pp-search" type="search" placeholder="Buscar por nombre o autor…" autocomplete="off" spellcheck="false">
+        <input id="pp-search" type="search" placeholder="Search by name or author…" autocomplete="off" spellcheck="false">
         <div class="segmented" id="pp-kinds">
-          <button data-kind="" class="active">Todas</button>
-          <button data-kind="character">Personajes</button>
-          <button data-kind="creature">Criaturas</button>
-          <button data-kind="object">Objetos</button>
+          <button data-kind="" class="active">All</button>
+          <button data-kind="character">Characters</button>
+          <button data-kind="creature">Creatures</button>
+          <button data-kind="object">Objects</button>
         </div>
       </div>
       <div class="pp-body" id="pp-body">
         <div class="pp-grid" id="pp-grid"></div>
-        <div class="pp-more" id="pp-more" hidden><button class="btn-ghost" id="pp-more-btn">Ver más</button><span class="muted small" id="pp-count"></span></div>
+        <div class="pp-more" id="pp-more" hidden><button class="btn-ghost" id="pp-more-btn">See more</button><span class="muted small" id="pp-count"></span></div>
         <p class="muted small pp-status" id="pp-status" hidden></p>
       </div>
       <footer class="pp-foot">
         <div class="pp-sel">
           <div class="strip big" id="pp-sel-strip"></div>
           <div>
-            <div class="pet-name" id="pp-sel-name">Elige una</div>
+            <div class="pet-name" id="pp-sel-name">Choose one</div>
             <div class="muted small" id="pp-sel-by"></div>
           </div>
         </div>
-        <span class="muted small pp-credit">Las mascotas son de sus autores en <span class="mono">petdex.dev</span>.</span>
-        <button id="pp-use" class="btn-primary" disabled>Usar esta mascota</button>
+        <span class="muted small pp-credit">The pets belong to their authors on <span class="mono">petdex.dev</span>.</span>
+        <button id="pp-use" class="btn-primary" disabled>Use this pet</button>
       </footer>
     </div>
   </dialog>
@@ -258,22 +260,22 @@
       <h2 id="ask-title"></h2>
       <p id="ask-text" class="muted"></p>
       <input id="ask-input" spellcheck="false">
-      <div class="dialog-buttons"><button id="ask-cancel" class="btn-ghost">Cancelar</button><button id="ask-ok" class="btn-primary">Aceptar</button></div>
+      <div class="dialog-buttons"><button id="ask-cancel" class="btn-ghost">Cancel</button><button id="ask-ok" class="btn-primary">OK</button></div>
     </div>
   </dialog>
 
   <dialog id="archived-dialog">
     <div class="simple-dialog">
-      <header><h2>Chats archivados · <span id="archived-where"></span></h2><button id="archived-close" class="icon-btn" aria-label="Cerrar">✕</button></header>
+      <header><h2>Archived chats · <span id="archived-where"></span></h2><button id="archived-close" class="icon-btn" aria-label="Close">✕</button></header>
       <div id="archived-list" class="sd-body"></div>
     </div>
   </dialog>
 
   <dialog id="usage-dialog">
     <div class="simple-dialog">
-      <header><h2>Tu uso</h2>
-        <div class="segmented" id="usage-tabs"><button data-conn="local">Este PC</button><button data-conn="server">Servidor</button></div>
-        <button id="usage-close" class="icon-btn" aria-label="Cerrar">✕</button></header>
+      <header><h2>Your usage</h2>
+        <div class="segmented" id="usage-tabs"><button data-conn="local">This PC</button><button data-conn="server">Server</button></div>
+        <button id="usage-close" class="icon-btn" aria-label="Close">✕</button></header>
       <div id="usage-body" class="sd-body"></div>
     </div>
   </dialog>

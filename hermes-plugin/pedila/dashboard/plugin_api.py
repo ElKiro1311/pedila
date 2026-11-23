@@ -1,18 +1,18 @@
-"""Pedila: cuotas de las APIs de este Hermes, en /api/plugins/pedila/cuotas.
+"""Pedila: quotas of this Hermes's APIs, at /api/plugins/pedila/cuotas.
 
-Pedila (https://github.com/ElKiro1311/pedila) enseña en su panel cuánto queda de cada API de pago
-conectada a Hermes: saldo, límites, cuándo se reinicia y lo que ha gastado Hermes con ella.
+Pedila (https://github.com/ElKiro1311/pedila) shows in its panel how much is left of each paid API
+connected to Hermes: balance, limits, when it resets and what Hermes has spent with it.
 
-Las claves se quedan aquí dentro: este módulo las pide a Hermes (``resolve_runtime_provider``), las
-usa solo para preguntar al proveedor y devuelve números. Nunca salen en la respuesta ni en un error.
+The keys stay in here: this module asks Hermes for them (``resolve_runtime_provider``), uses them only to
+ask the provider and returns numbers. They never go out in the answer or in an error.
 
-Solo aparecen las APIs que tienen clave. Las que conoce:
-- OpenRouter: saldo de créditos (``/credits``) y límite, gasto y reinicio de la clave (``/key``).
-- Venice: saldos USD, DIEM y créditos incluidos, plan, próximo reinicio del DIEM y límites por modelo
-  (``/api_keys/rate_limits``, vale con una clave de inferencia).
-- OpenCode Go: porcentaje gastado de las ventanas de 5 h, semana y mes y cuándo se reinician
-  (``/zen/go/v1/usage``, el mismo que usa el /usage de Hermes).
-- OpenCode Zen: OpenCode no publica el saldo; solo sale lo que Hermes ha gastado con ella.
+Only the APIs that have a key show up. The ones it knows:
+- OpenRouter: credit balance (``/credits``) and the key's limit, spending and reset (``/key``).
+- Venice: USD, DIEM and included-credit balances, plan, next DIEM reset and limits per model
+  (``/api_keys/rate_limits``, an inference key is enough).
+- OpenCode Go: percentage used of the 5-hour, weekly and monthly windows and when they reset
+  (``/zen/go/v1/usage``, the same one Hermes's /usage uses).
+- OpenCode Zen: OpenCode doesn't publish the balance; only what Hermes has spent with it shows.
 """
 from __future__ import annotations
 
@@ -30,13 +30,13 @@ from fastapi import APIRouter
 router = APIRouter()
 log = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.0.0"
-# Cada cuánto se pregunta de verdad a los proveedores (Pedila pide cada minuto o menos).
+PLUGIN_VERSION = "1.0.1"
+# How often the providers are really asked (Pedila asks every minute or less).
 CACHE_SECONDS = 60
-# Con ?fresh=1 (el botón de actualizar), como mucho una vez cada esto.
+# With ?fresh=1 (the refresh button), once per this at most.
 FRESH_MIN_SECONDS = 10
 TIMEOUT = 10.0
-# Lo que Hermes pone cuando un proveedor propio no tiene clave.
+# What Hermes puts when a provider of one's own has no key.
 PLACEHOLDER_KEYS = {"", "no-key-required", "none", "null", "dummy", "sk-dummy"}
 NAMES = {"openrouter": "OpenRouter", "venice": "Venice", "opencode-go": "OpenCode Go", "opencode-zen": "OpenCode Zen"}
 ORDER = ["openrouter", "venice", "opencode-go", "opencode-zen"]
@@ -54,7 +54,7 @@ def _num(v: Any) -> Optional[float]:
 
 
 def _iso(v: Any) -> Optional[str]:
-    """Una fecha ISO bien formada (con zona) o None."""
+    """A well-formed ISO date (with a time zone) or None."""
     if not isinstance(v, str) or not v.strip():
         return None
     try:
@@ -67,7 +67,7 @@ def _iso(v: Any) -> Optional[str]:
 
 
 def kind_of(base_url: str) -> Optional[str]:
-    """Qué API es, por la dirección a la que Hermes le habla."""
+    """Which API it is, by the address Hermes talks to."""
     try:
         u = urlparse(base_url or "")
     except ValueError:
@@ -96,7 +96,7 @@ def _config() -> dict:
     return cfg if isinstance(cfg, dict) else {}
 
 
-# Las de Hermes que se reconocen por su nombre (sin dirección en config.yaml).
+# Hermes's own, recognized by their name (without an address in config.yaml).
 BUILTIN = {"openrouter": "https://openrouter.ai/api/v1", "opencode-go": "https://opencode.ai/zen/go/v1",
            "opencode-zen": "https://opencode.ai/zen/v1"}
 
@@ -119,9 +119,9 @@ def _models_of(entry: dict) -> list[str]:
 
 
 def _candidates(cfg: dict) -> list[tuple[str, str, list[str]]]:
-    """(nombre para Hermes, dirección, modelos) SOLO de los proveedores que por su dirección configurada
-    son de pago. Se decide sin leer ninguna clave: así no se ejecutan key_cmd, ni se refrescan
-    tokens OAuth, ni se toca nada de los demás proveedores."""
+    """(name for Hermes, address, models) ONLY of the providers that are paid ones by their configured
+    address. It's decided without reading any key: that way no key_cmd is run, no OAuth token is
+    refreshed and nothing of the other providers is touched."""
     out: dict[str, list] = {name: [url, []] for name, url in BUILTIN.items()}
     providers = cfg.get("providers")
     if isinstance(providers, dict):
@@ -142,10 +142,10 @@ def _candidates(cfg: dict) -> list[tuple[str, str, list[str]]]:
     return [(k, v[0], list(dict.fromkeys(v[1]))) for k, v in out.items()]
 
 
-# Leer una clave no debe cambiar nada en Hermes. resolve_runtime_provider elige la clave del pool con
-# CredentialPool.select(), que cuenta la petición, rota el turno (round_robin) y lo guarda en
-# auth.json. Mientras este hilo resuelve, select() hace lo mismo que peek(): devuelve la clave en
-# uso sin contar, rotar, refrescar ni guardar. Los demás hilos no se ven afectados.
+# Reading a key must not change anything in Hermes. resolve_runtime_provider picks the key from the pool with
+# CredentialPool.select(), which counts the request, rotates the turn (round_robin) and stores it in
+# auth.json. While this thread resolves, select() does the same as peek(): it returns the key in use without
+# counting, rotating, refreshing or storing. The other threads aren't affected.
 _tl = threading.local()
 
 
@@ -168,7 +168,7 @@ def _install_peek_guard() -> None:
 
 
 def _clean_key(k: Any) -> Optional[str]:
-    if callable(k):  # key_cmd: Hermes da un objeto que ejecuta la orden al llamarlo
+    if callable(k):  # key_cmd: Hermes gives an object that runs the command when called
         try:
             k = k()
         except Exception:
@@ -180,7 +180,7 @@ def _clean_key(k: Any) -> Optional[str]:
 
 
 def _resolve(name: str) -> Optional[str]:
-    """La clave de ese proveedor si tiene una de verdad; None si no."""
+    """That provider's key if it has a real one; None if not."""
     _install_peek_guard()
     _tl.peek = True
     try:
@@ -194,7 +194,7 @@ def _resolve(name: str) -> Optional[str]:
 
 
 def detect() -> list[dict[str, Any]]:
-    """Las APIs de pago con clave, una por cuenta (dos nombres con la misma clave cuentan una vez)."""
+    """The paid APIs with a key, one per account (two names with the same key count once)."""
     seen: dict[tuple[str, str], dict[str, Any]] = {}
     for name, url, models in _candidates(_config()):
         kind = kind_of(url)
@@ -213,17 +213,17 @@ def detect() -> list[dict[str, Any]]:
 def _get(client, url: str, key: str) -> dict:
     r = client.get(url, headers={"Authorization": f"Bearer {key}", "Accept": "application/json"})
     if r.status_code in (401, 403):
-        raise _Fail("la clave no vale o no tiene permiso para ver esto")
+        raise _Fail("the key isn't valid or isn't allowed to see this")
     if r.status_code == 404:
-        raise _Fail("el proveedor no tiene este dato")
+        raise _Fail("the provider doesn't have this data")
     if r.status_code == 429:
-        raise _Fail("el proveedor pide esperar (demasiadas consultas)")
+        raise _Fail("the provider asks to wait (too many queries)")
     if r.status_code >= 400:
-        raise _Fail(f"el proveedor respondió {r.status_code}")
+        raise _Fail(f"the provider answered {r.status_code}")
     try:
         body = r.json()
     except ValueError:
-        raise _Fail("respuesta ilegible del proveedor") from None
+        raise _Fail("unreadable answer from the provider") from None
     return body if isinstance(body, dict) else {}
 
 
@@ -233,13 +233,13 @@ def _data(body: dict) -> dict:
 
 
 class _Fail(Exception):
-    """Un fallo que se puede enseñar tal cual (sin clave ni dirección con secretos)."""
+    """A failure that can be shown as is (no key and no address with secrets)."""
 
 
 def fetch_openrouter(client, e: dict) -> dict:
     base = e["base"].rstrip("/")
-    # /key vale con cualquier clave (límite, gasto y reinicio); /credits (saldo de la cuenta) puede no
-    # dejarse leer con según qué clave: si falla, se sigue sin saldo.
+    # /key works with any key (limit, spending and reset); /credits (the account's balance) may not let
+    # itself be read with some keys: if it fails, go on without the balance.
     k = _data(_get(client, f"{base}/key", e["key"]))
     try:
         credits = _data(_get(client, f"{base}/credits", e["key"]))
@@ -296,7 +296,7 @@ def fetch_opencode_go(client, e: dict) -> dict:
     usage = _get(client, "https://opencode.ai/zen/go/v1/usage", e["key"]).get("usage")
     usage = usage if isinstance(usage, dict) else {}
     windows = []
-    for key, label in (("rolling", "5 h"), ("weekly", "semana"), ("monthly", "mes")):
+    for key, label in (("rolling", "5 h"), ("weekly", "week"), ("monthly", "month")):
         w = usage.get(key) if isinstance(usage, dict) else None
         if isinstance(w, dict) and _num(w.get("percent")) is not None:
             windows.append({"id": key, "label": label, "percent": max(0.0, min(100.0, _num(w["percent"]))), "resets_at": _iso(w.get("resetsAt"))})
@@ -307,10 +307,10 @@ FETCHERS = {"openrouter": fetch_openrouter, "venice": fetch_venice, "opencode-go
 
 
 def spent_by_kind(now: float) -> dict[str, dict[str, dict[str, float]]]:
-    """Lo que Hermes gastó con cada API (tokens, llamadas, coste estimado): 24 h, 7 y 30 días.
+    """What Hermes spent with each API (tokens, calls, estimated cost): 24 h, 7 and 30 days.
 
-    Sale de ``session_model_usage`` de su state.db (cuenta también resúmenes, títulos y demás
-    tareas auxiliares). Cada fila va al día en que se usó por última vez, así que es aproximado."""
+    It comes from ``session_model_usage`` in its state.db (summaries, titles and other auxiliary tasks
+    count too). Each row goes to the day it was last used, so it's approximate."""
     try:
         from hermes_constants import get_hermes_home
         db = get_hermes_home() / "state.db"
@@ -330,7 +330,7 @@ def spent_by_kind(now: float) -> dict[str, dict[str, dict[str, float]]]:
         finally:
             con.close()
     except Exception as exc:
-        log.debug("pedila: no pude leer el uso de state.db: %s", exc)
+        log.debug("pedila: couldn't read the usage in state.db: %s", exc)
         return {}
     for base, tokens, calls, cost, seen in rows:
         kind = kind_of(base or "")
@@ -345,7 +345,7 @@ def spent_by_kind(now: float) -> dict[str, dict[str, dict[str, float]]]:
     return out
 
 
-# Lo más que se espera a los proveedores en una lectura (el resto sale como «tardó demasiado»).
+# The longest the providers are waited for in one reading (the rest come out as "took too long").
 BUILD_BUDGET_SECONDS = 25
 
 
@@ -362,26 +362,26 @@ def build() -> dict[str, Any]:
     deadline = time.monotonic() + BUILD_BUDGET_SECONDS
     with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=False) as client:
         for e in accounts:
-            # El gasto de state.db va por tipo de API: con dos cuentas del mismo tipo no se sabe de cuál es.
+            # state.db's spending goes by kind of API: with two accounts of the same kind it isn't known whose it is.
             row: dict[str, Any] = {"kind": e["kind"], "name": NAMES[e["kind"]], "hermes_name": e["name"], "ok": True,
                                    "spent": spent.get(e["kind"]) if per_kind[e["kind"]] == 1 else None}
             fetcher = FETCHERS.get(e["kind"])
             if not fetcher:
                 row["no_api"] = True
             elif time.monotonic() > deadline:
-                row.update(ok=False, error="el proveedor tardó demasiado")
+                row.update(ok=False, error="the provider took too long")
             else:
                 try:
                     row.update(fetcher(client, e))
                 except _Fail as exc:
                     row.update(ok=False, error=str(exc))
                 except httpx.TimeoutException:
-                    row.update(ok=False, error="el proveedor tardó demasiado")
+                    row.update(ok=False, error="the provider took too long")
                 except httpx.HTTPError:
-                    row.update(ok=False, error="no pude llegar al proveedor")
-                except Exception as exc:  # nunca el texto: podría llevar la clave
-                    log.warning("pedila: fallo leyendo %s: %s", e["kind"], type(exc).__name__)
-                    row.update(ok=False, error="fallo inesperado leyendo el proveedor")
+                    row.update(ok=False, error="couldn't reach the provider")
+                except Exception as exc:  # never the text: it could carry the key
+                    log.warning("pedila: failure reading %s: %s", e["kind"], type(exc).__name__)
+                    row.update(ok=False, error="unexpected failure reading the provider")
             providers.append(row)
     return {"plugin": "pedila", "version": PLUGIN_VERSION, "fetched_at": datetime.fromtimestamp(now, UTC).isoformat(),
             "providers": providers}
@@ -392,7 +392,7 @@ def cuotas(fresh: int = 0) -> dict[str, Any]:
     body = _cache["body"]
     if body is not None and time.time() - _cache["at"] < (FRESH_MIN_SECONDS if fresh else CACHE_SECONDS):
         return body
-    # Una sola lectura a la vez; mientras dura, las demás peticiones reciben la anterior sin esperar.
+    # One reading at a time; while it lasts, the other requests get the previous one without waiting.
     if not _lock.acquire(blocking=body is None):
         return body
     try:

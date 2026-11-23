@@ -1,17 +1,19 @@
-// Formatos cortos para el panel: tokens (1.2K, 1.09M…) y horas («3:41 p. m.», «hace 25 min»).
-// Sin dependencias, para que las pruebas lo puedan cargar tal cual.
+// Short formats for the panel: tokens (1.2K, 1.09M…) and times ("3:41 PM", "25 min ago").
+// No dependencies other than the language, so that the tests can load it as is.
+
+import { tr, locale } from './i18n.mjs'
 
 const UNITS = ['', 'K', 'M', 'B']
 
-/** Redondeo decimal sin los errores de coma flotante de `x * 100` (1.005 → 1.01). */
+/** Decimal rounding without the floating-point errors of `x * 100` (1.005 → 1.01). */
 function round(v, d) {
   return d ? Number(Math.round(Number(v + 'e' + d)) + 'e-' + d) : Math.round(v)
 }
 
 /**
- * Tokens en corto, con 3 cifras como mucho y sin ceros de sobra:
- * 950 · 1.2K · 12.3K · 123K · 1M · 1.09M · 43.2M · 1.5B. Al pasar de 999.5 se sube de unidad
- * (nunca «1000K»). La B es la de los modelos («27B»): mil millones.
+ * Tokens, short, with 3 digits at most and no extra zeros: 950 · 1.2K · 12.3K · 123K · 1M · 1.09M · 43.2M ·
+ * 1.5B. Past 999.5 it goes up a unit (never "1000K"). The B is the one models use ("27B"): a thousand
+ * million.
  */
 export function kfmt(n) {
   n = Number(n)
@@ -27,17 +29,17 @@ export function kfmt(n) {
   return (s.includes('.') ? s.replace(/\.?0+$/, '') : s) + UNITS[u]
 }
 
-// ── Modelos ──────────────────────────────────────────────────────────────────────────────────
+// ── Models ───────────────────────────────────────────────────────────────────────────────────
 
-/** Tokens de un modelo del resumen de uso: leídos + escritos. */
+/** A model's tokens in the usage summary: read + written. */
 export function tokensOf(m) {
   return (Number(m && m.input) || 0) + (Number(m && m.output) || 0)
 }
 
 /**
- * El nombre de un modelo para enseñarlo. Algunos servidores (llama.cpp) contestan con la ruta del
- * archivo y Hermes la guarda tal cual: «/models/Qwen3-VL-8B-Instruct-Q4_K_M.gguf» se enseña como
- * «Qwen3-VL-8B-Instruct-Q4_K_M». Los nombres con proveedor («deepseek/deepseek-v4.1») no se tocan.
+ * A model's name, to show it. Some servers (llama.cpp) answer with the path of the file and Hermes stores it
+ * as is: "/models/Qwen3-VL-8B-Instruct-Q4_K_M.gguf" is shown as "Qwen3-VL-8B-Instruct-Q4_K_M". Names with a
+ * provider ("deepseek/deepseek-v4.1") aren't touched.
  */
 export function modelName(model) {
   const s = String(model || '')
@@ -45,43 +47,43 @@ export function modelName(model) {
   return f ? f[1] : s
 }
 
-// Las tareas auxiliares de Hermes 0.23 que guarda en session_model_usage: las de auxiliary.* en su
-// config.yaml y las que registran su repaso en segundo plano, /btw, los objetivos y los plugins.
+// The auxiliary tasks of Hermes 0.23 that it stores in session_model_usage: the auxiliary.* ones in its
+// config.yaml and the ones recorded by its background review, /btw, goals and plugins.
 const TASKS = {
-  compression: 'resumir la memoria',
-  title_generation: 'poner títulos',
-  vision: 'ver imágenes',
-  image_generation: 'crear imágenes',
-  approval: 'aprobar órdenes',
-  background_review: 'repasar memoria y skills',
-  side_question: 'preguntas al margen (/btw)',
-  plugin_side_question: 'preguntas de plugins',
-  goal_judge: 'comprobar objetivos',
-  review: 'revisiones',
-  mcp: 'herramientas MCP',
-  memory_query_rewrite: 'buscar en la memoria',
-  curator: 'ordenar skills',
-  tts_audio_tags: 'voz',
-  voice_chat: 'voz',
-  group_router: 'chats de grupo',
+  compression: 'summarizing memory',
+  title_generation: 'writing titles',
+  vision: 'looking at images',
+  image_generation: 'creating images',
+  approval: 'approving commands',
+  background_review: 'reviewing memory and skills',
+  side_question: 'side questions (/btw)',
+  plugin_side_question: 'plugin questions',
+  goal_judge: 'checking goals',
+  review: 'reviews',
+  mcp: 'MCP tools',
+  memory_query_rewrite: 'searching memory',
+  curator: 'sorting skills',
+  tts_audio_tags: 'voice',
+  voice_chat: 'voice',
+  group_router: 'group chats',
   triage_specifier: 'kanban',
   kanban_decomposer: 'kanban',
   kanban_estimator: 'kanban',
-  profile_describer: 'describir perfiles',
-  other: 'otras'
+  profile_describer: 'describing profiles',
+  other: 'other'
 }
 
 /**
- * Una tarea auxiliar de Hermes en palabras: «compression» → «resumir la memoria». Las de plugins
- * llevan su nombre tras «:» («plugin_side_question:<plugin>»); se traducen por la parte de delante.
+ * One of Hermes's auxiliary tasks in words: "compression" → "summarizing memory". Plugin ones carry their
+ * name after ":" ("plugin_side_question:<plugin>"); the part in front is the one translated.
  */
 export function taskName(task) {
   const t = String(task || '')
   const key = t.split(':')[0]
-  return Object.hasOwn(TASKS, key) ? TASKS[key] : t.replace(/_/g, ' ') || 'otras'
+  return Object.hasOwn(TASKS, key) ? tr(TASKS[key]) : t.replace(/_/g, ' ') || tr('other')
 }
 
-/** Lo que un modelo gastó en tareas auxiliares: «resumir la memoria 1.86M · poner títulos 2.3K». */
+/** What a model spent on auxiliary tasks: "summarizing memory 1.86M · writing titles 2.3K". */
 export function tasksLine(tasks) {
   const by = new Map()
   for (const t of Array.isArray(tasks) ? tasks : []) {
@@ -91,8 +93,8 @@ export function tasksLine(tasks) {
   return [...by].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} ${kfmt(n)}`).join(' · ')
 }
 
-// ── Horas ────────────────────────────────────────────────────────────────────────────────────
-// 12 o 24 horas como el reloj de Windows (el proceso principal lo lee del sistema al arrancar).
+// ── Times ────────────────────────────────────────────────────────────────────────────────────
+// 12 or 24 hours like Windows' clock (the main process reads it from the system on startup).
 let hour12 = false
 let timeFmt = null
 let fullFmt = null
@@ -107,38 +109,38 @@ function startOfDay(ms) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
 }
 
-/** Solo la hora: «3:41 p. m.» o «15:41». */
+/** Just the time: "3:41 PM" or "15:41". */
 export function hhmm(ms) {
-  timeFmt = timeFmt || new Intl.DateTimeFormat('es', { hour: 'numeric', minute: '2-digit', hour12 })
+  timeFmt = timeFmt || new Intl.DateTimeFormat(locale(), { hour: 'numeric', minute: '2-digit', hour12 })
   return timeFmt.format(new Date(ms))
 }
 
-/** Fecha y hora enteras, para los textos de ayuda: «15 nov 2026, 3:41 p. m.». */
+/** Full date and time, for the help texts: "Nov 15, 2026, 3:41 PM". */
 export function full(ms) {
-  fullFmt = fullFmt || new Intl.DateTimeFormat('es', { dateStyle: 'medium', timeStyle: 'short', hour12 })
+  fullFmt = fullFmt || new Intl.DateTimeFormat(locale(), { dateStyle: 'medium', timeStyle: 'short', hour12 })
   return fullFmt.format(new Date(ms))
 }
 
-/** El día, si no es hoy: '' (hoy), «ayer», «lun» (esta semana), «12 nov» o «12 nov 2025». */
+/** The day, if it isn't today: '' (today), "yesterday", "Mon" (this week), "Nov 12" or "Nov 12, 2025". */
 export function dayLabel(ms, now = Date.now()) {
   const today = startOfDay(now)
   const day = startOfDay(ms)
   if (day === today) { return '' }
-  // Medio día de margen: con el cambio de hora un día dura 23 o 25 horas.
-  if (day === startOfDay(today - DAY / 2)) { return 'ayer' }
-  if (day > today - 6.5 * DAY && day < today) { return new Intl.DateTimeFormat('es', { weekday: 'short' }).format(new Date(ms)).replace(/\.$/, '') }
+  // Half a day of margin: with daylight saving changes a day lasts 23 or 25 hours.
+  if (day === startOfDay(today - DAY / 2)) { return tr('yesterday') }
+  if (day > today - 6.5 * DAY && day < today) { return new Intl.DateTimeFormat(locale(), { weekday: 'short' }).format(new Date(ms)).replace(/\.$/, '') }
   const opts = { day: 'numeric', month: 'short' }
   if (new Date(ms).getFullYear() !== new Date(now).getFullYear()) { opts.year = 'numeric' }
-  return new Intl.DateTimeFormat('es', opts).format(new Date(ms)).replace(/\./g, '')
+  return new Intl.DateTimeFormat(locale(), opts).format(new Date(ms)).replace(/\./g, '')
 }
 
-/** La hora, con el día si no es hoy: «3:41 p. m.», «ayer, 11:20 p. m.», «lun, 9:05», «12 nov, 9:05». */
+/** The time, with the day if it isn't today: "3:41 PM", "yesterday, 11:20 PM", "Mon, 9:05", "Nov 12, 9:05". */
 export function clock(ms, now = Date.now()) {
   const d = dayLabel(ms, now)
   return d ? `${d}, ${hhmm(ms)}` : hhmm(ms)
 }
 
-/** Un rato en corto: «40 s», «25 min», «1 h 53 min», «3 días». */
+/** A length of time, short: "40 s", "25 min", "1 h 53 min", "3 days". */
 export function span(msLen) {
   const s = Math.max(0, Math.floor(msLen / 1000))
   if (s < 60) { return `${s} s` }
@@ -147,27 +149,27 @@ export function span(msLen) {
   const h = Math.floor(m / 60)
   if (h < 24) { return m % 60 ? `${h} h ${m % 60} min` : `${h} h` }
   const d = Math.floor(h / 24)
-  return d === 1 ? '1 día' : `${d} días`
+  return d === 1 ? tr('1 day') : tr('{0} days', d)
 }
 
-/** Cuánto hace: «hace un momento» (menos de un minuto, o un reloj algo adelantado), «hace 25 min»… */
+/** How long ago: "a moment ago" (less than a minute, or a clock somewhat ahead), "25 min ago"… */
 export function ago(ms, now = Date.now()) {
   const diff = now - ms
-  return diff < MIN ? 'hace un momento' : `hace ${span(diff)}`
+  return diff < MIN ? tr('a moment ago') : tr('{0} ago', span(diff))
 }
 
-/** Dinero en dólares: «$9.91», «$0.093», «$0» (menos de un dólar, con 3 decimales). */
+/** Money in dollars: "$9.91", "$0.093", "$0" (under a dollar, with 3 decimals). */
 export function usd(n) {
   if (typeof n !== 'number' || !Number.isFinite(n)) { return '—' }
   if (n === 0) { return '$0' }
   const a = Math.abs(n)
-  const s = a >= 1000 ? Math.round(a).toLocaleString('es') : a >= 1 ? a.toFixed(2) : a >= 0.001 ? a.toFixed(3) : '<0.001'
+  const s = a >= 1000 ? Math.round(a).toLocaleString(locale()) : a >= 1 ? a.toFixed(2) : a >= 0.001 ? a.toFixed(3) : '<0.001'
   return (n < 0 ? '-$' : '$') + s
 }
 
 /**
- * Cuándo vuelve a empezar un límite de OpenRouter: «daily» a las 00:00 UTC, «weekly» el lunes a
- * las 00:00 UTC y «monthly» el día 1 a las 00:00 UTC. null si no se sabe.
+ * When an OpenRouter limit starts again: "daily" at 00:00 UTC, "weekly" on Monday at 00:00 UTC and "monthly"
+ * on the 1st at 00:00 UTC. null if it isn't known.
  */
 export function nextUtcReset(kind, now = Date.now()) {
   const d = new Date(now)
@@ -178,14 +180,14 @@ export function nextUtcReset(kind, now = Date.now()) {
   return null
 }
 
-/** Un día que viene: «mañana», «el domingo» (dentro de una semana) o «el 7 dic». */
+/** A day to come: "tomorrow", "on Sunday" (within a week) or "on Dec 7". */
 export function dayAhead(ms, now = Date.now()) {
   const today = startOfDay(now)
   const day = startOfDay(ms)
-  if (day <= today) { return 'hoy' }
-  if (day <= startOfDay(today + DAY * 1.5)) { return 'mañana' }
-  if (day < today + 6.5 * DAY) { return 'el ' + new Intl.DateTimeFormat('es', { weekday: 'long' }).format(new Date(ms)) }
+  if (day <= today) { return tr('today') }
+  if (day <= startOfDay(today + DAY * 1.5)) { return tr('tomorrow') }
+  if (day < today + 6.5 * DAY) { return tr('on {0}', new Intl.DateTimeFormat(locale(), { weekday: 'long' }).format(new Date(ms))) }
   const opts = { day: 'numeric', month: 'short' }
   if (new Date(ms).getFullYear() !== new Date(now).getFullYear()) { opts.year = 'numeric' }
-  return 'el ' + new Intl.DateTimeFormat('es', opts).format(new Date(ms)).replace(/\./g, '')
+  return tr('on {0}', new Intl.DateTimeFormat(locale(), opts).format(new Date(ms)).replace(/\./g, ''))
 }

@@ -1,15 +1,16 @@
 'use strict'
-// «Este PC»: el mismo Hermes que usa Hermes Desktop. Igual que su local-gateway.ts:
-//  1. `hermes gateway ensure --json` da el endpoint (api_origin, instance_id…) y arranca el gateway
-//     si no está en marcha;
-//  2. los tickets de un solo uso salen del canal privado de Windows del gateway, que solo atiende al
-//     mismo usuario; como Hermes Desktop, se piden con el Python de Hermes (_session_ticket) desde un
-//     proceso auxiliar que se reutiliza;
-//  3. el WebSocket /api/ws lleva el ticket como subprotocolo; cada petición REST lleva uno propio en
-//     `X-Hermes-Gateway-Ticket` (propósito `native-http`).
+// "This PC": the same Hermes that Hermes Desktop uses. Like its local-gateway.ts:
+// 1. `hermes gateway ensure --json` gives the endpoint (api_origin, instance_id…) and starts the gateway
+// if it isn't running;
+// 2. single-use tickets come out of the gateway's private Windows channel, which only serves the same
+// user; like Hermes Desktop, they're asked for with Hermes's Python (_session_ticket) from a helper
+// process that is reused;
+// 3. the /api/ws WebSocket carries the ticket as a subprotocol; each REST request carries its own in
+// `X-Hermes-Gateway-Ticket` (purpose `native-http`).
 const { execFile, spawn } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
+const { tr } = require('./i18n')
 
 const PROTOCOL = 'hermes-gateway-v1'
 
@@ -95,7 +96,7 @@ class TicketBridge {
     })
     this.child.stderr.on('data', () => {})
     const dead = () => {
-      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('El ayudante de tickets se cerró')) }
+      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error(tr('The ticket helper closed'))) }
       this.pending.clear()
       this.child = null
     }
@@ -109,7 +110,7 @@ class TicketBridge {
     this.idle = setTimeout(() => this.dispose(), 5 * 60 * 1000)
     return new Promise((resolve, reject) => {
       const id = ++this.seq
-      const timer = setTimeout(() => { if (this.pending.delete(id)) { reject(new Error('El ticket tardó demasiado')) } }, 30000)
+      const timer = setTimeout(() => { if (this.pending.delete(id)) { reject(new Error(tr('The ticket took too long'))) } }, 30000)
       this.pending.set(id, { resolve, reject, timer })
       try {
         this.child.stdin.write(JSON.stringify({ id, endpoint, purpose }) + '\n')
@@ -145,12 +146,12 @@ class LocalTransport {
   }
 
   async endpoint(force = false) {
-    // Mientras Hermes se actualiza no se arranca nada suyo: su Python bloquearía archivos que la
-    // actualización tiene que cambiar.
-    if (this.paused) { throw new Error('Hermes se está actualizando') }
+    // While Hermes updates nothing of its own is started: its Python would lock files the update has to
+    // change.
+    if (this.paused) { throw new Error(tr('Hermes is updating')) }
     if (this.ep && !force) { return this.ep }
     if (!this.available()) {
-      const e = new Error('No encuentro Hermes en este PC (falta %LOCALAPPDATA%\\hermes\\bin\\hermes.exe)')
+      const e = new Error(tr("Can't find Hermes on this PC (%LOCALAPPDATA%\\hermes\\bin\\hermes.exe is missing)"))
       e.fatal = true
       e.missing = true
       throw e
@@ -159,11 +160,11 @@ class LocalTransport {
     const line = out.trim().split(/\r?\n/).filter(l => l.startsWith('{')).pop()
     const j = line ? JSON.parse(line) : null
     if (!j || j.state !== 'ready' || !j.endpoint || j.endpoint.runtime_protocol !== 1) {
-      throw new Error(`El gateway de Hermes no está listo (${j ? j.state : 'sin respuesta'})`)
+      throw new Error(tr("The Hermes gateway isn't ready ({0})", j ? j.state : tr('no answer')))
     }
     const ep = j.endpoint
     const origin = new URL(ep.api_origin)
-    if (origin.hostname !== '127.0.0.1' && origin.hostname !== 'localhost') { throw new Error('El gateway local no está en 127.0.0.1') }
+    if (origin.hostname !== '127.0.0.1' && origin.hostname !== 'localhost') { throw new Error(tr("The local gateway isn't on 127.0.0.1")) }
     if (!this.bridge || (this.ep && this.ep.profile_id !== ep.profile_id)) { await this.makeBridge(ep) }
     this.ep = ep
     return ep
@@ -174,7 +175,7 @@ class LocalTransport {
     const out = await run(hermesExe(), ['--print-runtime-command'], 60000)
     const cmd = JSON.parse(out.trim().split(/\r?\n/).pop())
     const python = cmd[0]
-    if (typeof python !== 'string' || !path.isAbsolute(python) || !fs.existsSync(python)) { throw new Error('No encuentro el Python de Hermes') }
+    if (typeof python !== 'string' || !path.isAbsolute(python) || !fs.existsSync(python)) { throw new Error(tr("Can't find Hermes's Python")) }
     const codeArg = cmd.find(a => typeof a === 'string' && a.includes('sys.path.insert(0,')) || ''
     const m = codeArg.match(/sys\.path\.insert\(0, '((?:[^'\\]|\\.)*)'\)/)
     const root = m ? m[1].replace(/\\\\/g, '\\') : path.join(hermesHome(), 'hermes-agent')
@@ -186,7 +187,7 @@ class LocalTransport {
     return this.bridge.mint(ep, purpose)
   }
 
-  /** Para actualizar Hermes: cierra su Python de los tickets y no deja arrancar nada hasta resume(). */
+  /** To update Hermes: closes its tickets Python and lets nothing start until resume(). */
   pause() {
     this.paused = true
     this.dispose()
@@ -194,7 +195,7 @@ class LocalTransport {
     this.ep = null
   }
 
-  /** Tras la actualización: el siguiente endpoint() vuelve a preguntar a Hermes dónde está y con qué Python. */
+  /** After the update: the next endpoint() asks Hermes again where it is and with which Python. */
   resume() {
     this.paused = false
     this.bridge = null
@@ -219,12 +220,12 @@ class LocalTransport {
     return { status: res.status, json }
   }
 
-  /** Lo público de Hermes (/api/status); en el PC va con su ticket, como todo lo demás. */
+  /** What Hermes makes public (/api/status); on the PC it goes with its ticket, like everything else. */
   publicJson(p, opts) {
     return this.fetchJson(p, opts)
   }
 
-  /** Tras una caída del socket: el gateway pudo reiniciarse con otro puerto o instancia. */
+  /** After the socket drops: the gateway may have restarted with another port or instance. */
   invalidate() {
     this.ep = null
   }

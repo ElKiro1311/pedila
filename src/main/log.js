@@ -1,6 +1,6 @@
 'use strict'
-// Registro en %APPDATA%\Pedila\logs\pedila.log (rota a .1 al pasar de 2 MB).
-// Nunca recibe contraseñas, cookies ni tickets: quien llama pasa solo datos seguros.
+// Log in %APPDATA%\Pedila\logs\pedila.log (rotates to .1 when it goes over 2 MB).
+// It never gets passwords, cookies or tickets: whoever calls passes only safe data.
 const fs = require('node:fs')
 const path = require('node:path')
 

@@ -1,38 +1,40 @@
 'use strict'
-// Versiones de Hermes (el de este PC y el del servidor): si hay una nueva y, cuando Hermes sabe
-// actualizarse solo (instalación git, la del instalador oficial), instalarla cuando lleve 10 minutos
-// sin usarse. Un Hermes en Docker (un servidor) lo actualiza su propio servidor: aquí solo se avisa.
+// Hermes versions (this PC's and the server's): whether there's a new one and, when Hermes knows how to
+// update itself (a git installation, the official installer's), installing it after 10 minutes unused. A
+// Hermes in Docker (a server) is updated by its own server: here there's only a notice.
 //
-// «Sin usarse», en todas las miradas de los últimos 10 min:
-//   - /api/status sin turnos en marcha (active_agents 0, gateway_busy falso);
-//   - session.active_list sin chats trabajando y subagent.roster sin subagentes ni procesos en segundo
-//     plano (active_agents no los cuenta, y `hermes update` para el gateway: los mataría);
-//   - ningún chat con actividad (last_active, que Hermes renueva cada minuto mientras trabaja);
-//   - y tú sin usar Pedila ni el PC (userBusy, desde index.js: así no se corta lo que estás escribiendo).
-// Todo se vuelve a comprobar justo antes de actualizar.
+// "Unused", in every look of the last 10 min:
+// - /api/status without turns running (active_agents 0, gateway_busy false);
+// - session.active_list without chats working and subagent.roster without subagents or background
+// processes (active_agents doesn't count them, and `hermes update` stops the gateway: it would kill them);
+// - no chat with activity (last_active, which Hermes renews every minute while it works);
+// - and you not using Pedila or the PC (userBusy, from index.js: that way what you're typing isn't cut
+// off).
+// Everything is checked again right before updating.
 const { EventEmitter } = require('node:events')
 const { spawn, execFile } = require('node:child_process')
 const { newer } = require('./extras')
+const { tr } = require('./i18n')
 
-const POLL_MS = 60 * 1000 // cada minuto: ¿Hermes trabaja?
-const CHECK_MS = 6 * 60 * 60 * 1000 // cada 6 h: ¿hay versión nueva?
-const CHECK_RETRY_MS = 15 * 60 * 1000 // si la comprobación de este PC falló, se repite a los 15 min
-const IDLE_MS = 10 * 60 * 1000 // «sin usarse»
-const RETRY_MS = 6 * 60 * 60 * 1000 // tras un fallo, esa versión no se reintenta en 6 h
-const GITHUB_FAIL_MS = 60 * 60 * 1000 // tras un fallo de GitHub, 1 h sin preguntarle (6 h con 403/429)
+const POLL_MS = 60 * 1000 // every minute: is Hermes working?
+const CHECK_MS = 6 * 60 * 60 * 1000 // every 6 h: is there a new version?
+const CHECK_RETRY_MS = 15 * 60 * 1000 // if this PC's check failed, it's repeated after 15 min
+const IDLE_MS = 10 * 60 * 1000 // "unused"
+const RETRY_MS = 6 * 60 * 60 * 1000 // after a failure, that version isn't retried for 6 h
+const GITHUB_FAIL_MS = 60 * 60 * 1000 // after a GitHub failure, 1 h without asking it (6 h with 403/429)
 const UPDATE_TIMEOUT_MS = 30 * 60 * 1000
 const LATEST_URL = 'https://api.github.com/repos/NousResearch/hermes-agent/releases/latest'
 
 const clean = v => String(v || '').trim().replace(/^v/i, '')
-// «0.23.0+12.gabc1234» (una compilación por delante de su etiqueta) es la misma 0.23.0 para comparar.
+// "0.23.0+12.gabc1234" (a build ahead of its tag) is the same 0.23.0 for comparing.
 const base = v => clean(v).split('+')[0]
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g
 
 /**
- * Lo que dice GET /api/hermes/update/check (null si no se pudo preguntar) → { version, latest,
- * available, canApply, method }. Con una instalación git que se puede actualizar manda Hermes; con
- * lo demás (Docker, sin sesión…) se compara su versión con la última estable publicada. Volver atrás
- * (rollback_to: esta compilación es más nueva que la estable) no cuenta como versión nueva. Pura.
+ * What GET /api/hermes/update/check says (null if it couldn't be asked) → { version, latest, available,
+ * canApply, method }. With a git installation that can be updated, Hermes rules; with anything else (Docker,
+ * not signed in…) its version is compared with the latest stable one published. Going back (rollback_to:
+ * this build is newer than the stable one) doesn't count as a new version. Pure.
  */
 function infoFrom(check, version, latest) {
   const j = check && typeof check === 'object' ? check : null
@@ -46,29 +48,29 @@ function infoFrom(check, version, latest) {
 }
 
 /**
- * ¿Se instala ya? `s` = el estado de esa conexión; `userBusy` = por qué no (lo que dice index.js de ti:
- * '' si no usas Pedila ni el PC). Devuelve 'instalar' o por qué no: 'al-dia' | 'servidor' (no se
- * puede desde aquí) | 'manual' (automático apagado) | 'instalando' | 'fallo-reciente' | 'en-uso' |
- * 'sin-saber' (no se pudo comprobar todo: subagentes, chats…) | 'tu-uso' | 'observando' (aún no
- * lleva 10 min mirando). Pura.
+ * Install it now? `s` = that connection's state; `userBusy` = why not (what index.js says about you: '' if
+ * you aren't using Pedila or the PC). Returns 'install' or why not: 'up-to-date' | 'server' (can't be done
+ * from here) | 'manual' (automatic is off) | 'installing' | 'recent-failure' | 'in-use' | 'unknown' (not
+ * everything could be checked: subagents, chats…) | 'user-busy' | 'watching' (not 10 min watching yet).
+ * Pure.
  */
 function decide(s, { now, auto, userBusy = '' }) {
   const i = s.info
-  if (!i || !i.available) { return 'al-dia' }
-  if (!i.canApply) { return 'servidor' }
+  if (!i || !i.available) { return 'up-to-date' }
+  if (!i.canApply) { return 'server' }
   if (!auto) { return 'manual' }
-  if (s.applying) { return 'instalando' }
+  if (s.applying) { return 'installing' }
   const f = s.lastResult
-  if (f && !f.ok && f.to === i.latest && now - f.at < RETRY_MS) { return 'fallo-reciente' }
-  if (s.busy || (s.lastBusyAt && now - s.lastBusyAt < IDLE_MS)) { return 'en-uso' }
-  if (s.lastActive && now - s.lastActive < IDLE_MS) { return 'en-uso' }
-  if (s.blind) { return 'sin-saber' }
-  if (userBusy) { return 'tu-uso' }
-  if (!s.watchingSince || now - s.watchingSince < IDLE_MS) { return 'observando' }
-  return 'instalar'
+  if (f && !f.ok && f.to === i.latest && now - f.at < RETRY_MS) { return 'recent-failure' }
+  if (s.busy || (s.lastBusyAt && now - s.lastBusyAt < IDLE_MS)) { return 'in-use' }
+  if (s.lastActive && now - s.lastActive < IDLE_MS) { return 'in-use' }
+  if (s.blind) { return 'unknown' }
+  if (userBusy) { return 'user-busy' }
+  if (!s.watchingSince || now - s.watchingSince < IDLE_MS) { return 'watching' }
+  return 'install'
 }
 
-/** La actividad más reciente de una lista de chats de Hermes (last_active en segundos) → ms. Pura. */
+/** The most recent activity in a list of Hermes chats (last_active in seconds) → ms. Pure. */
 function newestActivity(sessions) {
   let max = 0
   for (const r of Array.isArray(sessions) ? sessions : []) {
@@ -78,13 +80,16 @@ function newestActivity(sessions) {
   return max
 }
 
-/** ¿Hay subagentes o procesos en segundo plano según subagent.roster? null = respuesta rara (no se sabe). Pura. */
+/**
+ * Are there subagents or background processes according to subagent.roster? null = an odd answer (not
+ * known). Pure.
+ */
 function rosterBusy(r) {
   if (!r || !Array.isArray(r.sessions)) { return null }
   return r.sessions.some(x => x && (Number(x.subagents) > 0 || Number(x.background) > 0))
 }
 
-/** Lanza `file args` sin ventana; guarda el final de lo que escribe. → { code, tail } */
+/** Launches `file args` without a window; keeps the end of what it writes. → { code, tail } */
 function runCapture(file, args, timeoutMs) {
   return new Promise(resolve => {
     let tail = ''
@@ -93,7 +98,7 @@ function runCapture(file, args, timeoutMs) {
     child.stdout.on('data', keep)
     child.stderr.on('data', keep)
     const timer = setTimeout(() => {
-      keep('\n[Pedila] no terminó en 30 min: lo paro\n')
+      keep('\n[Pedila] not finished in 30 min: stopping it\n')
       execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {})
     }, timeoutMs)
     child.on('error', e => { clearTimeout(timer); resolve({ code: -1, tail: tail + '\n' + e.message }) })
@@ -103,8 +108,8 @@ function runCapture(file, args, timeoutMs) {
 
 class HermesUpdates extends EventEmitter {
   /**
-   * conns: { local, server } · settings · log · hermesExe(): ruta de hermes.exe de este PC ·
-   * userBusy(): por qué no tocar nada ahora por tu parte ('' = no usas Pedila ni el PC).
+   * conns: { local, server } · settings · log · hermesExe(): path of this PC's hermes.exe · userBusy(): why
+   * nothing should be touched now on your side ('' = you aren't using Pedila or the PC).
    */
   constructor({ conns, settings, log, hermesExe, userBusy = () => '', fetchImpl = (...a) => fetch(...a), now = () => Date.now(), run = runCapture }) {
     super()
@@ -139,7 +144,7 @@ class HermesUpdates extends EventEmitter {
     clearInterval(this.timer)
   }
 
-  /** Lo que enseña la pantalla, por conexión. */
+  /** What the screen shows, per connection. */
   view() {
     const out = {}
     for (const id of Object.keys(this.conns)) {
@@ -163,7 +168,7 @@ class HermesUpdates extends EventEmitter {
 
   changed() { this.emit('change', this.view()) }
 
-  /** ¿Hay algo en marcha en ese Hermes (ahora o en los últimos `ms`)? Para la actualización de Pedila. */
+  /** Is there something running in that Hermes (now or in the last `ms`)? For Pedila's update. */
   busyWithin(id, ms, now = this.now()) {
     const s = this.st[id]
     return Boolean(s && (s.busy || (s.lastBusyAt && now - s.lastBusyAt < ms)))
@@ -178,21 +183,21 @@ class HermesUpdates extends EventEmitter {
     this.ticking = true
     try {
       for (const c of Object.values(this.conns)) {
-        await this.tickOne(c).catch(e => this.log.warn(`[hermes ${c.id}] al mirar su versión:`, e.message))
+        await this.tickOne(c).catch(e => this.log.warn(`[hermes ${c.id}] looking up its version:`, e.message))
       }
     } finally {
       this.ticking = false
     }
   }
 
-  /** Se le puede preguntar: el del PC conectado; el del servidor también sin sesión (/api/status es público). */
+  /** It can be asked: the PC's, connected; the server's, also without being signed in (/api/status is public). */
   reachable(c) {
     return c.state === 'ready' || (c.id === 'server' && c.state === 'login')
   }
 
   /**
-   * Una mirada a ese Hermes: ¿trabaja (turnos, chats, subagentes, procesos de fondo)? ¿cuándo tuvo
-   * actividad? → { ok, busy, version, lastActive }. ok=false si no se pudo saber.
+   * One look at that Hermes: is it working (turns, chats, subagents, background processes)? when was it last
+   * active? → { ok, busy, version, lastActive }. ok=false if it couldn't be known.
    */
   async look(c) {
     let status = null
@@ -203,11 +208,12 @@ class HermesUpdates extends EventEmitter {
     if (!status) { return { ok: false } }
     let busy = Number(status.active_agents) > 0 || status.gateway_busy === true
     let lastActive = 0
-    // Sin conexión lista solo se sabe lo de /api/status (chats, subagentes y procesos, no).
+    // Without a ready connection only what /api/status gives is known (chats, subagents and processes
+    // aren't).
     let known = c.state === 'ready'
     if (c.state === 'ready') {
       try {
-        // order=recent: por la última actividad (si no, Hermes ordena por fecha de creación).
+        // order=recent: by last activity (otherwise Hermes sorts by creation date).
         const r = await c.transport.fetchJson('/api/sessions?limit=5&offset=0&min_messages=0&archived=include&order=recent', { timeoutMs: 20000 })
         if (r.status === 200 && r.json) { lastActive = newestActivity(r.json.sessions) } else { known = false }
       } catch { known = false }
@@ -229,8 +235,8 @@ class HermesUpdates extends EventEmitter {
     if (!l.ok) { s.watchingSince = 0; return }
     if (!s.watchingSince) { s.watchingSince = now }
     s.busy = l.busy
-    // Lo que no se pudo saber (subagentes, chats…) frena la actualización de Hermes (mejor esperar
-    // que cortar algo), pero no la de Pedila: reiniciar Pedila no corta nada de Hermes.
+    // What couldn't be known (subagents, chats…) holds Hermes's update back (better to wait than to cut
+    // something off), but not Pedila's: restarting Pedila cuts nothing of Hermes off.
     s.blind = !l.known
     if (s.busy) { s.lastBusyAt = now }
     if (l.lastActive) { s.lastActive = l.lastActive }
@@ -239,8 +245,8 @@ class HermesUpdates extends EventEmitter {
       await this.check(c, force)
     }
     s.why = decide(s, { now, auto: this.settings.data.hermes.autoUpdate, userBusy: c.id === 'local' ? this.userBusy() : '' })
-    if (s.why === 'instalar' && c.id === 'local') {
-      await this.apply(c, 'lleva 10 min sin usarse', { recheck: true })
+    if (s.why === 'install' && c.id === 'local') {
+      await this.apply(c, 'unused for 10 min', { recheck: true })
       return
     }
     this.changed()
@@ -255,8 +261,8 @@ class HermesUpdates extends EventEmitter {
         if (r.status === 200 && r.json && typeof r.json === 'object') { j = r.json }
       } catch {}
     }
-    // El de este PC conectado y sin respuesta: lo de antes se queda y se vuelve a preguntar pronto
-    // (con una respuesta cualquiera se daría por «no se puede actualizar desde aquí» durante 6 h).
+    // This PC's, connected and with no answer: what was there stays and it's asked again soon (with just
+    // any answer it would be taken as "can't be updated from here" for 6 h).
     if (!j && c.id === 'local' && c.state === 'ready') {
       s.checkedAt = this.now()
       s.checkTtl = CHECK_RETRY_MS
@@ -264,18 +270,18 @@ class HermesUpdates extends EventEmitter {
     }
     const own = j && j.install_method === 'git' && j.can_apply === true
     let latest = this.latest.version
-    if (!own) { latest = await this.latestStable(force).catch(e => { this.log.warn('[hermes] no pude leer la última versión publicada:', e.message); return this.latest.version }) }
+    if (!own) { latest = await this.latestStable(force).catch(e => { this.log.warn("[hermes] couldn't read the latest published version:", e.message); return this.latest.version }) }
     s.info = infoFrom(j, s.version, latest)
     s.checkedAt = this.now()
     s.checkTtl = j || c.id !== 'local' ? CHECK_MS : CHECK_RETRY_MS
-    // El aviso, una vez por versión nueva.
+    // The notice, once per new version.
     if (s.info.available && s.said !== s.info.latest) {
       s.said = s.info.latest
-      this.log.info(`[hermes ${c.id}] hay versión nueva: ${s.info.version} → ${s.info.latest || 'lo último'}${s.info.canApply ? '' : ' (la actualiza su servidor)'}`)
+      this.log.info(`[hermes ${c.id}] new version: ${s.info.version} → ${s.info.latest || 'the latest'}${s.info.canApply ? '' : ' (its server updates it)'}`)
     }
   }
 
-  /** La última versión estable de Hermes publicada en GitHub (se recuerda 6 h; tras un fallo, se espera). */
+  /** The latest stable version of Hermes published on GitHub (remembered for 6 h; after a failure, it waits). */
   async latestStable(force = false) {
     const now = this.now()
     const L = this.latest
@@ -284,27 +290,27 @@ class HermesUpdates extends EventEmitter {
     try {
       const res = await this.fetch(LATEST_URL, { headers: { 'User-Agent': 'pedila', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15000) })
       if (!res.ok) {
-        const e = new Error(`GitHub respondió ${res.status}`)
+        const e = new Error(`GitHub answered ${res.status}`)
         e.status = res.status
         throw e
       }
       const j = await res.json()
       const v = clean(j && j.tag_name)
-      if (!/^\d+\.\d+/.test(v)) { throw new Error(`versión rara en GitHub: ${String(j && j.tag_name).slice(0, 40)}`) }
+      if (!/^\d+\.\d+/.test(v)) { throw new Error(`odd version on GitHub: ${String(j && j.tag_name).slice(0, 40)}`) }
       this.latest = { at: now, version: v, failAt: 0, failMs: 0 }
       return v
     } catch (e) {
-      // El límite de GitHub sin clave es de 60 por hora y por IP (lo comparte la propia Pedila): sin insistir.
+      // GitHub's limit without a key is 60 per hour and per IP (Pedila itself shares it): no insisting.
       this.latest = { ...L, failAt: now, failMs: e.status === 403 || e.status === 429 ? CHECK_MS : GITHUB_FAIL_MS }
       throw e
     }
   }
 
   /**
-   * Actualiza el Hermes de este PC con su propia orden (`hermes update`, la misma que lanza el botón
-   * de Hermes). Antes se cierra la conexión de Pedila y se pausa su transporte: en Windows, el Python
-   * de Hermes que Pedila usa para los tickets bloquearía archivos que la actualización cambia.
-   * Con `recheck`, justo antes se vuelve a mirar que nadie lo use.
+   * Updates this PC's Hermes with its own command (`hermes update`, the same one Hermes's button launches).
+   * First Pedila's connection is closed and its transport paused: on Windows, the Hermes Python that Pedila
+   * uses for the tickets would lock files the update changes.
+   * With `recheck`, right before that it looks again that nobody is using it.
    */
   async apply(c, reason, { recheck = false } = {}) {
     const s = this.state(c.id)
@@ -316,8 +322,8 @@ class HermesUpdates extends EventEmitter {
       if (hermes || you) {
         if (l.ok && l.busy) { s.lastBusyAt = this.now() }
         if (l.lastActive) { s.lastActive = Math.max(s.lastActive, l.lastActive) }
-        s.why = hermes ? 'en-uso' : 'tu-uso'
-        this.log.info(`[hermes local] no actualizo todavía: ${hermes ? 'Hermes tiene algo en marcha o no pude comprobarlo' : 'estás usando Pedila o el PC'}`)
+        s.why = hermes ? 'in-use' : 'user-busy'
+        this.log.info(`[hermes local] not updating yet: ${hermes ? "Hermes has something running or it couldn't be checked" : 'Pedila or the PC is in use'}`)
         this.changed()
         return false
       }
@@ -325,8 +331,8 @@ class HermesUpdates extends EventEmitter {
     const from = s.version || s.info.version
     const to = s.info.latest
     s.applying = { at: this.now(), from, to, reason }
-    s.why = 'instalando'
-    this.log.info(`[hermes local] actualizo Hermes ${from} → ${to || 'lo último'} (${reason})`)
+    s.why = 'installing'
+    this.log.info(`[hermes local] updating Hermes ${from} → ${to || 'the latest'} (${reason})`)
     this.changed()
     const wasOn = !c.stopped
     c.stop()
@@ -342,13 +348,13 @@ class HermesUpdates extends EventEmitter {
     }
     const ok = out.code === 0
     const tail = String(out.tail || '').trim().split(/\r?\n/).slice(-12).join('\n')
-    if (ok) { this.log.info(`[hermes local] actualización terminada:\n${tail}`) } else { this.log.warn(`[hermes local] la actualización falló (código ${out.code}):\n${tail}`) }
+    if (ok) { this.log.info(`[hermes local] update finished:\n${tail}`) } else { this.log.warn(`[hermes local] the update failed (code ${out.code}):\n${tail}`) }
     if (c.transport.invalidate) { c.transport.invalidate() }
     c.setState('connecting')
     if (wasOn) { c.start() }
     s.applying = null
-    s.lastResult = { at: this.now(), ok, from, to, error: ok ? '' : (tail.split('\n').filter(Boolean).pop() || `terminó con el código ${out.code}`) }
-    // La versión que quedó se lee en la próxima mirada (con el gateway ya arrancado otra vez).
+    s.lastResult = { at: this.now(), ok, from, to, error: ok ? '' : (tail.split('\n').filter(Boolean).pop() || tr('finished with code {0}', out.code)) }
+    // The resulting version is read in the next look (with the gateway already started again).
     s.checkedAt = 0
     s.watchingSince = 0
     s.why = ''
@@ -356,23 +362,23 @@ class HermesUpdates extends EventEmitter {
     return ok
   }
 
-  /** «Buscar ahora» / «Actualizar ahora» desde la pantalla. */
+  /** "Check now" / "Update now" from the screen. */
   async checkNow(id) {
     const c = this.conns[id]
-    if (!c) { throw new Error('conexión desconocida') }
+    if (!c) { throw new Error(tr('unknown connection')) }
     await this.tickOne(c, true)
     return this.view()[id]
   }
 
   async applyNow(id) {
     const c = this.conns[id]
-    if (!c) { throw new Error('conexión desconocida') }
+    if (!c) { throw new Error(tr('unknown connection')) }
     const s = this.state(id)
     if (!s.info || !s.info.available) { await this.check(c, true) }
-    if (!s.info || !s.info.available) { throw new Error('no hay versión nueva') }
-    if (!s.info.canApply) { throw new Error('este Hermes se actualiza desde su servidor') }
-    // Sin esperar: la pantalla sigue el avance con los avisos.
-    this.apply(c, 'pedido a mano').catch(e => this.log.warn('[hermes local] al actualizar:', e.message))
+    if (!s.info || !s.info.available) { throw new Error(tr("there's no new version")) }
+    if (!s.info.canApply) { throw new Error(tr('this Hermes is updated from its server')) }
+    // Without waiting: the screen follows the progress through the events.
+    this.apply(c, 'asked for by hand').catch(e => this.log.warn('[hermes local] while updating:', e.message))
     return true
   }
 }

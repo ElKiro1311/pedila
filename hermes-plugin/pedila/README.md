@@ -1,20 +1,20 @@
-# Complemento «pedila» para Hermes
+# "pedila" plugin for Hermes
 
-Lo instala la app [Pedila](https://github.com/ElKiro1311/pedila) desde su panel («Cuotas → Activar»).
-Sirve `GET /api/plugins/pedila/cuotas` en la página de Hermes: lo que queda de cada API de pago
-conectada a ese Hermes.
+The [Pedila](https://github.com/ElKiro1311/pedila) app installs it from its panel ("Quotas → Turn on quotas").
+It serves `GET /api/plugins/pedila/cuotas` on Hermes's web page: what's left of each paid API connected to that
+Hermes. (The route keeps its Spanish name, "quotas": the installed versions of the app ask for it.)
 
-| API | Qué da |
+| API | What it gives |
 |---|---|
-| OpenRouter | saldo de créditos; límite, gasto (día, semana, mes) y reinicio de la clave |
-| Venice | saldos USD, DIEM y créditos incluidos; plan; próximo reinicio del DIEM; límites por modelo |
-| OpenCode Go | % gastado de las ventanas de 5 h, semana y mes, y cuándo se reinician |
-| OpenCode Zen | OpenCode no publica el saldo: solo lo que Hermes ha gastado con ella |
+| OpenRouter | credit balance; the key's limit, spending (day, week, month) and reset |
+| Venice | USD, DIEM and included-credit balances; plan; next DIEM reset; limits per model |
+| OpenCode Go | % used of the 5-hour, weekly and monthly windows, and when they reset |
+| OpenCode Zen | OpenCode doesn't publish the balance: only what Hermes has spent with it |
 
-Además, para cada una, lo que Hermes gastó en 24 h, 7 y 30 días (tokens, llamadas y coste
-estimado), sacado de su propio registro.
+Also, for each one, what Hermes spent in 24 h, 7 and 30 days (tokens, calls and estimated cost), taken from its
+own records.
 
-Solo salen las APIs que tienen clave. Las claves no salen de Hermes: el complemento las usa para
-preguntar al proveedor y devuelve números. No añade herramientas, ganchos ni texto al prompt.
+Only the APIs that have a key show up. The keys don't leave Hermes: the plugin uses them to ask the provider and
+returns numbers. It adds no tools, hooks or prompt text.
 
-A mano: `hermes plugins install ElKiro1311/pedila/hermes-plugin/pedila --enable`.
+By hand: `hermes plugins install ElKiro1311/pedila/hermes-plugin/pedila --enable`.

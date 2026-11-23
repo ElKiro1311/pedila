@@ -1,13 +1,15 @@
-// Mascotas de Petdex: hojas de cuadros de 192×208.
-//  - Actual (Codex, 8 columnas × 9 filas): idle, running-right, running-left, waving, jumping,
-//    failed, waiting, running, review.
-//  - Antigua (9 columnas × 8 filas): idle, wave, run, failed, review, jump, extra1, extra2.
-// El número de cuadros de cada fila se cuenta mirando la transparencia; la cuadrícula se deduce
-// de la hoja (gridOf).
+// Petdex pets: sheets of 192×208 frames.
+// - Current (Codex, 8 columns × 9 rows): idle, running-right, running-left, waving, jumping, failed,
+// waiting, running, review.
+// - Old (9 columns × 8 rows): idle, wave, run, failed, review, jump, extra1, extra2.
+// The number of frames of each row is counted by looking at the transparency; the grid is worked out from
+// the sheet (gridOf).
+import { tr } from './i18n.mjs'
+
 export const STATES = ['idle', 'running-right', 'running-left', 'waving', 'jumping', 'failed', 'waiting', 'running', 'review']
 const CODEX_ROWS = STATES
 const LEGACY_ROWS = ['idle', 'wave', 'run', 'failed', 'review', 'jump', 'extra1', 'extra2']
-// Para cada estado, los nombres de fila que valen, por orden de preferencia.
+// For each state, the row names that will do, in order of preference.
 const ALIASES = {
   idle: ['idle'],
   waving: ['waving', 'wave'],
@@ -26,10 +28,9 @@ const PER_FRAME = { idle: 230, waiting: 240, review: 200, running: 170, 'running
 const sheets = new Map()
 
 /**
- * La cuadrícula de una hoja. Lo normal son cuadros de 192×208 (8×9, o 8×11 con filas de más, o
- * 9×8 en las antiguas). Algunas hojas de Petdex tienen otro tamaño de cuadro (1856×2272, por
- * ejemplo): entonces vale la cuadrícula de 8×9 o 9×8 cuya proporción es la de 192:208, como hace
- * la web de Petdex al escalar la hoja entera.
+ * A sheet's grid. Normally frames are 192×208 (8×9, or 8×11 with extra rows, or 9×8 in the old ones). Some
+ * Petdex sheets have another frame size (1856×2272, for example): then the 8×9 or 9×8 grid whose proportion
+ * is 192:208 will do, as Petdex's website does by scaling the whole sheet.
  */
 export function gridOf(w, h) {
   if (w % FW === 0 && h % FH === 0 && w / FW >= 4 && h / FH >= 8) { return { fw: FW, fh: FH, cols: w / FW, rows: h / FH } }
@@ -41,7 +42,7 @@ export function gridOf(w, h) {
   return null
 }
 
-/** Carga una hoja y cuenta sus cuadros. Rechaza las que no tienen la geometría de Petdex. */
+/** Loads a sheet and counts its frames. Refuses the ones without Petdex's geometry. */
 export function loadSheet(url) {
   if (!sheets.has(url)) {
     const p = new Promise((resolve, reject) => {
@@ -49,12 +50,12 @@ export function loadSheet(url) {
       img.onload = () => {
         const grid = gridOf(img.width, img.height)
         if (!grid) {
-          reject(new Error(`no tiene el formato de Petdex (${img.width}×${img.height})`))
+          reject(new Error(tr("doesn't have the Petdex format ({0}×{1})", img.width, img.height)))
           return
         }
         resolve({ img, ...grid, names: grid.rows >= 9 ? CODEX_ROWS : LEGACY_ROWS, counts: countFrames(img, grid) })
       }
-      img.onerror = () => reject(new Error('no pude cargar la mascota'))
+      img.onerror = () => reject(new Error(tr("couldn't load the pet")))
       img.src = url
     })
     p.catch(() => sheets.delete(url))
@@ -97,7 +98,7 @@ export class Pet {
     this.running = false
   }
 
-  /** Carga (o cambia) la hoja. Si falla, se queda con la anterior y lanza el error. */
+  /** Loads (or changes) the sheet. If it fails, it keeps the previous one and throws the error. */
   async load(url) {
     const sheet = await loadSheet(url)
     this.sheet = sheet
@@ -108,14 +109,14 @@ export class Pet {
     return sheet
   }
 
-  /** Estado de fondo (lo que hace Hermes ahora); las animaciones de un momento vuelven a él. */
+  /** Background state (what Hermes is doing now); momentary animations come back to it. */
   setBase(state) {
     if (!STATES.includes(state)) { state = 'idle' }
     this.base = state
     if (this.loops === Infinity && this.state !== state) { this.play(state) }
   }
 
-  /** Animación de un momento (saludar, saltar, fallar) durante `loops` vueltas. */
+  /** A momentary animation (waving, jumping, failing) for `loops` rounds. */
   flash(state, loops = 2) {
     this.play(state, loops)
   }

@@ -1,6 +1,6 @@
 'use strict'
-// Ajustes: el archivo con BOM, el diseño (orden y lo escondido) y los ajustes de las versiones con
-// Claude Code y consolas (0.10–0.13), que se limpian solos al abrir esta.
+// Settings: the file with a BOM, the layout (order and what is hidden) and the settings of the versions
+// with Claude Code and consoles (0.10–0.13), which clean themselves when this one opens.
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -8,7 +8,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { Settings, sanitize, defaultLayout } = require('../src/main/settings')
 
-test('ajustes: un settings.json guardado con BOM se lee igual (no se pierde)', () => {
+test("settings: a settings.json saved with a BOM is read the same (it isn't lost)", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pedila-bom-'))
   try {
     fs.writeFileSync(path.join(dir, 'settings.json'), '\uFEFF' + JSON.stringify({ look: { palette: 'olivo', theme: 'dark' }, layout: { swap: true } }))
@@ -19,7 +19,7 @@ test('ajustes: un settings.json guardado con BOM se lee igual (no se pierde)', (
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('diseño: orden completo, nombres conocidos y siempre algo a la vista', () => {
+test('layout: full order, known names and always something in sight', () => {
   const l = sanitize({ layout: { conns: ['server', 'raro', 'server'], connsHidden: ['local', 'server'], cards: ['cuotas'], cardsChats: ['cuotas', 'x'], swap: true, show: { model: false, raro: false } } }).layout
   assert.deepEqual(l.conns, ['server', 'local'])
   assert.deepEqual(l.connsHidden, [])
@@ -33,7 +33,7 @@ test('diseño: orden completo, nombres conocidos y siempre algo a la vista', () 
   assert.deepEqual(sanitize({}).layout, defaultLayout())
 })
 
-test('ajustes de la 0.13 (con Claude Code y consolas): se quedan solo los de Hermes', () => {
+test("settings from 0.13 (with Claude Code and consoles): only Hermes's stay", () => {
   const old = {
     lastConnection: 'claude',
     look: { palette: 'mensajera', theme: 'system', accent: 'tema', textSize: 100 },
@@ -59,7 +59,7 @@ test('ajustes de la 0.13 (con Claude Code y consolas): se quedan solo los de Her
   assert.deepEqual(s.layout.cardsChats, ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones'])
   for (const k of ['modes', 'modesHidden', 'cardsTerms']) { assert.equal(s.layout[k], undefined, k) }
   assert.equal(s.layout.show.dir, undefined)
-  // Guardado y vuelto a leer, igual (nada de lo viejo vuelve).
+  // Saved and read again, the same (nothing of the old comes back).
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pedila-0140-'))
   try {
     fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(old))
@@ -74,12 +74,12 @@ test('ajustes de la 0.13 (con Claude Code y consolas): se quedan solo los de Her
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('esfuerzo de los chats nuevos: «muy a fondo» y «al máximo» se recuerdan al volver a abrir', () => {
+test('effort of new chats: "very deep" and "maximum" are remembered when it opens again', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pedila-esfuerzo-'))
   try {
     for (const v of ['xhigh', 'max', 'high', '']) {
       new Settings(dir).patch({ chat: { reasoning: v } })
-      assert.equal(new Settings(dir).load().chat.reasoning, v, v || '(el de Hermes)')
+      assert.equal(new Settings(dir).load().chat.reasoning, v, v || "(Hermes's)")
     }
     assert.equal(sanitize({ chat: { reasoning: 'ultra' } }).chat.reasoning, '')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }

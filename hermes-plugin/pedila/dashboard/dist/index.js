@@ -1,1 +1,1 @@
-// Pedila no añade nada a la página de Hermes: su complemento solo sirve /api/plugins/pedila/cuotas.
+// Pedila adds nothing to Hermes's page: its plugin only serves /api/plugins/pedila/cuotas.

@@ -1,7 +1,9 @@
-// Herramientas como en Claude Code: qué hizo cada una (título, lo que se le pasó, cuántas líneas
-// cambió) y el resumen de un grupo de herramientas seguidas («Ejecutó 2 órdenes, leyó a.png»).
-// Sirve para Claude Code y para Hermes: cada uno llama a sus herramientas de otra forma.
-// Sin DOM: se prueba con node.
+// Tools as in Claude Code: what each one did (title, what it was given, how many lines it changed) and the
+// summary of a group of consecutive tools ("Ran 2 commands, read a.png").
+// It works for Claude Code and for Hermes: each one calls its tools another way.
+// No DOM: tested with node.
+
+import { tr } from './i18n.mjs'
 
 const str = v => (typeof v === 'string' ? v : '')
 const baseName = p => { const s = str(p).replace(/[\\/]+$/, ''); return s.split(/[\\/]/).pop() || s }
@@ -9,7 +11,7 @@ const oneLine = (s, n = 70) => { const t = str(s).replace(/\s+/g, ' ').trim(); r
 const lines = s => (str(s) ? str(s).replace(/\n$/, '').split('\n').length : 0)
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1)
 
-// Nombre de la herramienta (Claude Code o Hermes) → qué clase de cosa hace.
+// Name of the tool (Claude Code or Hermes) → what kind of thing it does.
 const KINDS = {
   run: ['bash', 'powershell', 'bashoutput', 'killshell', 'killbash', 'terminal', 'execute_code', 'process', 'shell', 'run_command'],
   read: ['read', 'notebookread', 'read_file', 'view_file', 'file_read'],
@@ -31,9 +33,9 @@ export function toolKind(name) {
   return 'other'
 }
 
-/** «mcp__servidor__herramienta» → «herramienta (servidor)»; «skill_view» → «skill view». */
+/** "mcp__server__tool" → "tool (server)"; "skill_view" → "skill view". */
 export function prettyName(name) {
-  const n = str(name) || 'herramienta'
+  const n = str(name) || tr('tool')
   const m = /^mcp__(.+?)__(.+)$/.exec(n)
   if (m) { return `${m[2].replace(/[_-]+/g, ' ')} (${m[1].replace(/^plugin_/, '').replace(/_+/g, ' ')})` }
   return n.replace(/_/g, ' ')
@@ -41,7 +43,7 @@ export function prettyName(name) {
 
 const pathOf = i => str(i.file_path || i.path || i.notebook_path || i.filename || i.target_file)
 
-/** Diferencias de un Edit/patch: «- viejo» / «+ nuevo», y cuántas líneas entran y salen. */
+/** Differences of an Edit/patch: "- old" / "+ new", and how many lines go in and out. */
 function diffOf(i) {
   const pairs = Array.isArray(i.edits) ? i.edits : [{ old_string: i.old_string, new_string: i.new_string }]
   const out = []
@@ -55,7 +57,8 @@ function diffOf(i) {
     if (out.length) { out.push('…') }
     const ol = o ? o.split('\n') : []
     const nl = n ? n.split('\n') : []
-    // Lo igual al principio y al final no cambia: va como contexto (como mucho 2 líneas a cada lado).
+    // What is the same at the beginning and the end doesn't change: it goes as context (2 lines at most on
+    // each side).
     let a = 0
     while (a < ol.length && a < nl.length && ol[a] === nl[a]) { a++ }
     let z = 0
@@ -73,7 +76,7 @@ function diffOf(i) {
   return out.length ? { text: out.join('\n'), add, del } : null
 }
 
-/** Cuenta + y − de un diff ya dibujado (el «inline_diff» de Hermes). */
+/** Counts + and − in a diff that's already drawn (Hermes's "inline_diff"). */
 export function diffStats(text) {
   let add = 0
   let del = 0
@@ -86,8 +89,8 @@ export function diffStats(text) {
 const TODO_MARK = { completed: '☑', in_progress: '◐', pending: '☐', cancelled: '☒' }
 
 /**
- * Qué hizo una herramienta, para dibujarla: { kind, title, subject, box: {lang, text} | null, add, del }.
- * `b`: { name, input (objeto), args (resumen corto), diff (texto, opcional) }.
+ * What a tool did, to draw it: { kind, title, subject, box: {lang, text} | null, add, del }.
+ * `b`: { name, input (object), args (short summary), diff (text, optional) }.
  */
 export function describeTool(b) {
   const name = str(b && b.name)
@@ -103,65 +106,65 @@ export function describeTool(b) {
   if (kind === 'run') {
     const cmd = str(i.command || i.cmd || i.code || i.script) || short
     subject = oneLine(cmd, 60)
-    title = desc || (subject ? `Ejecutó ${subject}` : 'Ejecutó una orden')
+    title = desc || (subject ? tr('Ran {0}', subject) : tr('Ran a command'))
     if (cmd) { box = { lang: i.code && !i.command ? 'code' : 'cmd', text: cmd } }
   } else if (kind === 'read') {
     const p = pathOf(i) || short
     subject = baseName(p)
-    title = subject ? `Leyó ${subject}` : 'Leyó un archivo'
-    if (p) { box = { lang: 'path', text: p + (i.offset || i.limit ? ` (líneas ${i.offset || 1}${i.limit ? '–' + ((Number(i.offset) || 1) + Number(i.limit) - 1) : '…'})` : '') } }
+    title = subject ? tr('Read {0}', subject) : tr('Read a file')
+    if (p) { box = { lang: 'path', text: p + (i.offset || i.limit ? tr(' (lines {0}{1})', i.offset || 1, i.limit ? '–' + ((Number(i.offset) || 1) + Number(i.limit) - 1) : '…') : '') } }
   } else if (kind === 'write') {
     const p = pathOf(i) || short
     subject = baseName(p)
-    title = subject ? `Creó ${subject}` : 'Creó un archivo'
+    title = subject ? tr('Created {0}', subject) : tr('Created a file')
     const content = str(i.content || i.text || i.file_text)
     add = lines(content)
     if (content) { box = { lang: 'code', text: content, path: p } }
   } else if (kind === 'edit') {
     const p = pathOf(i) || short
     subject = baseName(p)
-    title = subject ? `Editó ${subject}` : 'Editó un archivo'
+    title = subject ? tr('Edited {0}', subject) : tr('Edited a file')
     const d = diffOf(i)
     if (d) { box = { lang: 'diff', text: d.text, path: p }; add = d.add; del = d.del }
   } else if (kind === 'search') {
     const pat = str(i.pattern || i.query || i.regex || i.glob || i.name) || short
     subject = oneLine(pat, 50)
-    title = subject ? `Buscó «${subject}»` : 'Buscó en los archivos'
+    title = subject ? tr('Searched for “{0}”', subject) : tr('Searched the files')
     const where = str(i.path || i.target || i.directory)
-    if (pat) { box = { lang: 'text', text: pat + (where ? `\nen ${where}` : '') } }
+    if (pat) { box = { lang: 'text', text: pat + (where ? tr('\nin {0}', where) : '') } }
   } else if (kind === 'web') {
     const q = str(i.query || i.q) || short
     subject = oneLine(q, 60)
-    title = subject ? `Buscó en internet «${subject}»` : 'Buscó en internet'
+    title = subject ? tr('Searched the web for “{0}”', subject) : tr('Searched the web')
   } else if (kind === 'fetch') {
     const urls = Array.isArray(i.urls) ? i.urls.map(str).filter(Boolean) : [str(i.url || i.href)].filter(Boolean)
     let host = ''
     try { host = urls[0] ? new URL(urls[0]).host : '' } catch { host = oneLine(urls[0], 50) }
     subject = host || oneLine(short, 50)
-    title = /^browser_/.test(name.toLowerCase()) ? `Navegador: ${prettyName(name.slice(8))}${subject ? ' · ' + subject : ''}` : (subject ? `Abrió ${subject}` : 'Abrió una página')
+    title = /^browser_/.test(name.toLowerCase()) ? tr('Browser: {0}{1}', prettyName(name.slice(8)), subject ? ' · ' + subject : '') : (subject ? tr('Opened {0}', subject) : tr('Opened a page'))
     if (urls.length) { box = { lang: 'text', text: urls.join('\n') } } else if (i.prompt) { box = { lang: 'text', text: str(i.prompt) } }
   } else if (kind === 'agent') {
     const what = oneLine(i.description || i.goal || i.task || i.prompt || short, 90)
     subject = what
-    title = what ? `Agente: ${what}` : 'Lanzó un agente'
+    title = what ? tr('Agent: {0}', what) : tr('Launched an agent')
     const prompt = str(i.prompt || i.context || i.goal || i.task)
     if (prompt) { box = { lang: 'text', text: prompt } }
   } else if (kind === 'todo') {
-    title = 'Actualizó la lista de tareas'
+    title = tr('Updated the task list')
     const todos = Array.isArray(i.todos) ? i.todos : []
     if (todos.length) { box = { lang: 'text', text: todos.map(t => `${TODO_MARK[t && t.status] || '☐'} ${str(t && (t.content || t.activeForm))}`).join('\n') } }
   } else if (kind === 'image') {
     const n = name.toLowerCase()
     subject = oneLine(i.prompt || i.question || i.image_url || i.path || short, 70)
-    title = n === 'image_generate' ? 'Generó una imagen' : n === 'computer_use' ? `Usó el escritorio${subject ? ' · ' + subject : ''}` : 'Miró una imagen'
+    title = n === 'image_generate' ? tr('Generated an image') : n === 'computer_use' ? tr('Used the desktop{0}', subject ? ' · ' + subject : '') : tr('Looked at an image')
     if (i.prompt || i.question) { box = { lang: 'text', text: str(i.prompt || i.question) } }
   } else {
     subject = prettyName(name)
-    title = desc || `Usó ${subject}${short ? ' · ' + oneLine(short, 60) : ''}`
+    title = desc || tr('Used {0}{1}', subject, short ? ' · ' + oneLine(short, 60) : '')
     const keys = Object.keys(i).filter(k => k !== 'description')
     if (keys.length) { try { box = { lang: 'json', text: JSON.stringify(Object.fromEntries(keys.map(k => [k, i[k]])), null, 2) } } catch {} }
   }
-  // Hermes manda el cambio ya dibujado (inline_diff): manda sobre el calculado.
+  // Hermes sends the change already drawn (inline_diff): it wins over the calculated one.
   if (b && str(b.diff)) {
     const st = diffStats(b.diff)
     box = { lang: 'diff', text: str(b.diff), path: box && box.path }
@@ -171,24 +174,24 @@ export function describeTool(b) {
   return { kind, title, subject, box, add, del }
 }
 
-// Cómo se cuenta cada clase en el resumen (en pasado y mientras está en marcha).
+// How each kind is told in the summary (in the past, and while it's running).
 const PHRASE = {
-  run: [n => (n === 1 ? 'ejecutó una orden' : `ejecutó ${n} órdenes`), n => (n === 1 ? 'ejecutando una orden' : `ejecutando ${n} órdenes`)],
-  read: [(n, s) => (n === 1 ? (s ? `leyó ${s}` : 'leyó un archivo') : `leyó ${n} archivos`), (n, s) => (n === 1 ? (s ? `leyendo ${s}` : 'leyendo un archivo') : `leyendo ${n} archivos`)],
-  write: [(n, s) => (n === 1 ? (s ? `creó ${s}` : 'creó un archivo') : `creó ${n} archivos`), (n, s) => (n === 1 ? (s ? `creando ${s}` : 'creando un archivo') : `creando ${n} archivos`)],
-  edit: [(n, s) => (n === 1 ? (s ? `editó ${s}` : 'editó un archivo') : `editó ${n} archivos`), (n, s) => (n === 1 ? (s ? `editando ${s}` : 'editando un archivo') : `editando ${n} archivos`)],
-  search: [n => (n === 1 ? 'hizo una búsqueda' : `hizo ${n} búsquedas`), n => (n === 1 ? 'buscando' : `haciendo ${n} búsquedas`)],
-  web: [n => (n === 1 ? 'buscó en internet' : `buscó en internet ${n} veces`), () => 'buscando en internet'],
-  fetch: [n => (n === 1 ? 'abrió una página' : `abrió ${n} páginas`), n => (n === 1 ? 'abriendo una página' : `abriendo ${n} páginas`)],
-  agent: [n => (n === 1 ? 'lanzó un agente' : `lanzó ${n} agentes`), n => (n === 1 ? 'con un agente' : `con ${n} agentes`)],
-  todo: [() => 'actualizó las tareas', () => 'actualizando las tareas'],
-  image: [n => (n === 1 ? 'usó una imagen' : `usó ${n} imágenes`), () => 'con una imagen']
+  run: [n => (n === 1 ? tr('ran a command') : tr('ran {0} commands', n)), n => (n === 1 ? tr('running a command') : tr('running {0} commands', n))],
+  read: [(n, s) => (n === 1 ? (s ? tr('read {0}', s) : tr('read a file')) : tr('read {0} files', n)), (n, s) => (n === 1 ? (s ? tr('reading {0}', s) : tr('reading a file')) : tr('reading {0} files', n))],
+  write: [(n, s) => (n === 1 ? (s ? tr('created {0}', s) : tr('created a file')) : tr('created {0} files', n)), (n, s) => (n === 1 ? (s ? tr('creating {0}', s) : tr('creating a file')) : tr('creating {0} files', n))],
+  edit: [(n, s) => (n === 1 ? (s ? tr('edited {0}', s) : tr('edited a file')) : tr('edited {0} files', n)), (n, s) => (n === 1 ? (s ? tr('editing {0}', s) : tr('editing a file')) : tr('editing {0} files', n))],
+  search: [n => (n === 1 ? tr('made a search') : tr('made {0} searches', n)), n => (n === 1 ? tr('searching') : tr('making {0} searches', n))],
+  web: [n => (n === 1 ? tr('searched the web') : tr('searched the web {0} times', n)), () => tr('searching the web')],
+  fetch: [n => (n === 1 ? tr('opened a page') : tr('opened {0} pages', n)), n => (n === 1 ? tr('opening a page') : tr('opening {0} pages', n))],
+  agent: [n => (n === 1 ? tr('launched an agent') : tr('launched {0} agents', n)), n => (n === 1 ? tr('with an agent') : tr('with {0} agents', n))],
+  todo: [() => tr('updated the tasks'), () => tr('updating the tasks')],
+  image: [n => (n === 1 ? tr('used an image') : tr('used {0} images', n)), () => tr('with an image')]
 }
 const ORDER = ['run', 'read', 'write', 'edit', 'search', 'web', 'fetch', 'agent', 'image', 'todo', 'other']
 
 /**
- * Resumen de herramientas seguidas: { text, add, del, failed, running }.
- * Una sola herramienta: su título (la descripción que puso Claude, si la hay).
+ * Summary of consecutive tools: { text, add, del, failed, running }.
+ * A single tool: its title (the description Claude gave, if any).
  */
 export function groupSummary(tools) {
   const list = (Array.isArray(tools) ? tools : []).filter(Boolean)
@@ -214,17 +217,17 @@ export function groupSummary(tools) {
     if (!xs) { continue }
     if (k === 'other') {
       const names = [...new Set(xs.map(x => x.d.subject))]
-      parts.push(names.length > 2 ? `usó ${names.slice(0, 2).join(', ')} y ${names.length - 2} más` : `usó ${names.join(' y ')}`)
+      parts.push(names.length > 2 ? tr('used {0} and {1} more', names.slice(0, 2).join(', '), names.length - 2) : tr('used {0}', names.join(tr(' and '))))
       continue
     }
     const subjects = [...new Set(xs.map(x => x.d.subject).filter(Boolean))]
     const busy = xs.some(x => !x.t.done)
-    // Archivos: los distintos que se ven; si alguno aún no trae su ruta, se cuentan las llamadas.
+    // Files: the different ones that are seen; if one doesn't bring its path yet, the calls are counted.
     const n = ['read', 'write', 'edit'].includes(k) ? (xs.every(x => x.d.subject) ? subjects.length : xs.length) : xs.length
     parts.push(PHRASE[k][busy ? 1 : 0](n, subjects.length === 1 ? subjects[0] : ''))
   }
   return { text: cap(parts.join(', ')), add, del, failed, running }
 }
 
-/** «1 falló» / «2 fallaron». */
-export function failedText(n) { return n === 1 ? '1 falló' : `${n} fallaron` }
+/** "1 failed" / "2 failed". */
+export function failedText(n) { return n === 1 ? tr('1 failed') : tr('{0} failed', n) }

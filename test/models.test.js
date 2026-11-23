@@ -1,43 +1,44 @@
 'use strict'
-// «Modelos más usados»: de más a menos tokens (no por número de chats), con las estadísticas del
-// propio Hermes cuando las tiene; y las versiones x.y.z-beta del actualizador.
+// "Most used models": from most to fewest tokens (not by number of chats), with Hermes's own statistics
+// when it has them; and the updater's x.y.z-beta versions.
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-test('uso: los modelos van de más a menos tokens, no por número de chats', () => {
+test('usage: models go from most to fewest tokens, not by number of chats', () => {
   const { usageStats } = require('../src/main/extras')
   const now = new Date(2026, 10, 16, 15, 0, 0).getTime()
   const rows = [
-    { startedAt: now - 1e3, inputTokens: 100, outputTokens: 10, model: 'muchos-chats' },
-    { startedAt: now - 2e3, inputTokens: 100, outputTokens: 10, model: 'muchos-chats' },
-    { startedAt: now - 3e3, inputTokens: 100, outputTokens: 10, model: 'muchos-chats' },
-    { startedAt: now - 4e3, inputTokens: 90000, outputTokens: 5000, model: 'un-chat-largo' },
+    { startedAt: now - 1e3, inputTokens: 100, outputTokens: 10, model: 'many-chats' },
+    { startedAt: now - 2e3, inputTokens: 100, outputTokens: 10, model: 'many-chats' },
+    { startedAt: now - 3e3, inputTokens: 100, outputTokens: 10, model: 'many-chats' },
+    { startedAt: now - 4e3, inputTokens: 90000, outputTokens: 5000, model: 'one-long-chat' },
     { startedAt: now - 5e3, inputTokens: 7, outputTokens: 0, model: '' },
     { startedAt: now - 6e3, inputTokens: 3, outputTokens: 0, model: 'unknown' }
   ]
   const u = usageStats(rows, now)
   assert.deepEqual(u.models, [
-    { model: 'un-chat-largo', input: 90000, output: 5000, tasks: [] },
-    { model: 'muchos-chats', input: 300, output: 30, tasks: [] },
-    { model: 'desconocido', input: 10, output: 0, tasks: [] }
+    { model: 'one-long-chat', input: 90000, output: 5000, tasks: [] },
+    { model: 'many-chats', input: 300, output: 30, tasks: [] },
+    { model: 'unknown', input: 10, output: 0, tasks: [] }
   ])
-  // Empate de tokens: por nombre, para que el orden no baile entre recargas.
+  // A tie in tokens: by name, so that the order doesn't dance between reloads.
   const tie = usageStats([{ startedAt: now, inputTokens: 5, model: 'b' }, { startedAt: now, inputTokens: 5, model: 'a' }], now)
   assert.deepEqual(tie.models.map(m => m.model), ['a', 'b'])
-  // Nombres que chocarían con Object: siguen siendo modelos y el resumen pasa por IPC (se clona).
+  // Names that would clash with Object: they're still models and the summary goes through IPC (it's
+  // cloned).
   const odd = usageStats(['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty'].map((model, i) => ({ startedAt: now, inputTokens: 10 + i, model })), now)
   assert.deepEqual(odd.models.map(m => m.model), ['hasOwnProperty', 'valueOf', 'toString', '__proto__', 'constructor'])
   assert.deepEqual(structuredClone(odd).models, odd.models)
   assert.equal(Object.prototype.input, undefined)
 })
 
-test('uso: tokens por modelo de las estadísticas de Hermes (/api/analytics/usage)', () => {
+test("usage: tokens per model from Hermes's statistics (/api/analytics/usage)", () => {
   const { modelUsageFrom } = require('../src/main/extras')
-  // Como lo devuelve Hermes 0.23: totales con lo auxiliar dentro y su desglose en aux_tasks.
+  // As Hermes 0.23 returns it: totals with the auxiliary part inside and its breakdown in aux_tasks.
   const j = {
     by_model: [
       {
-        model: 'modelo-de-agente', input_tokens: 3000000, output_tokens: 1000000, sessions: 4,
+        model: 'agent-model', input_tokens: 3000000, output_tokens: 1000000, sessions: 4,
         aux_tasks: [
           { task: 'compression', input_tokens: 1000000, output_tokens: 800000 },
           { task: 'approval', input_tokens: 50000, output_tokens: 300 },
@@ -45,14 +46,14 @@ test('uso: tokens por modelo de las estadísticas de Hermes (/api/analytics/usag
         ]
       },
       {
-        model: 'modelo-auxiliar', input_tokens: 420000, output_tokens: 480000, sessions: 0,
+        model: 'auxiliary-model', input_tokens: 420000, output_tokens: 480000, sessions: 0,
         aux_tasks: [
           { task: 'compression', input_tokens: 400000, output_tokens: 470000, billing_provider: 'a' },
           { task: 'compression', input_tokens: 20000, output_tokens: 10000, billing_provider: 'b' },
           { task: 'vacia', input_tokens: 0, output_tokens: 0 }
         ]
       },
-      { model: 'modelo-de-chat', input_tokens: 940000, output_tokens: 40000, sessions: 11 },
+      { model: 'chat-model', input_tokens: 940000, output_tokens: 40000, sessions: 11 },
       { model: 'unknown', input_tokens: 5, output_tokens: -3 },
       { model: null, input_tokens: 'x', output_tokens: 2 },
       null,
@@ -61,25 +62,26 @@ test('uso: tokens por modelo de las estadísticas de Hermes (/api/analytics/usag
   }
   const m = modelUsageFrom(j)
   assert.deepEqual(m.map(x => [x.model, x.input + x.output]), [
-    ['modelo-de-agente', 4000000],
-    ['modelo-de-chat', 980000],
-    ['modelo-auxiliar', 900000],
-    ['desconocido', 7]
+    ['agent-model', 4000000],
+    ['chat-model', 980000],
+    ['auxiliary-model', 900000],
+    ['unknown', 7]
   ])
   assert.deepEqual(m[0].tasks, [
     { task: 'compression', tokens: 1800000 },
     { task: 'approval', tokens: 50300 },
     { task: 'title_generation', tokens: 2080 }
   ])
-  // La misma tarea con dos proveedores se junta; la que no gastó nada no sale.
+  // The same task with two providers is joined; the one that spent nothing doesn't show.
   assert.deepEqual(m[2].tasks, [{ task: 'compression', tokens: 900000 }])
   assert.deepEqual(m[1].tasks, [])
-  // Sin lista (Hermes sin estadísticas o respuesta rara): null, y el panel usa la lista de chats.
+  // Without the list (a Hermes without statistics or an odd answer): null, and the panel uses the chat
+  // list.
   for (const bad of [null, undefined, {}, { by_model: 'no' }, 'texto', 42]) { assert.equal(modelUsageFrom(bad), null) }
   assert.deepEqual(modelUsageFrom({ by_model: [] }), [])
 })
 
-test('uso: las estadísticas por modelo: una consulta a la vez, 5 min, y sin esperar al refrescar', async () => {
+test('usage: the statistics by model: one query at a time, 5 min, and no waiting on refresh', async () => {
   const { Connection } = require('../src/main/connection')
   const log = { info() {}, warn() {}, error() {} }
   const ok = { status: 200, json: { by_model: [{ model: 'a', input_tokens: 10, output_tokens: 1 }] } }
@@ -97,15 +99,15 @@ test('uso: las estadísticas por modelo: una consulta a la vez, 5 min, y sin esp
         return a
       }
     }
-    const c = new Connection({ id: 'local', name: 'Este PC', transport, log })
+    const c = new Connection({ id: 'local', name: 'This PC', transport, log })
     c.state = 'ready'
     return { c, calls }
   }
   const t0 = 1_000_000_000
   const min = 60000
 
-  // Vale: se guarda 5 min, y dos peticiones a la vez comparten la consulta. Pasados los 5 min se
-  // devuelve lo guardado al momento y se pide otra por detrás.
+  // Good: kept for 5 min, and two requests at once share the query. After 5 min what is stored is returned
+  // right away and another one is asked for behind the scenes.
   {
     const { c, calls } = make([ok, ok2])
     const [a, b] = await Promise.all([c.modelUsage(t0), c.modelUsage(t0)])
@@ -121,7 +123,7 @@ test('uso: las estadísticas por modelo: una consulta a la vez, 5 min, y sin esp
     assert.deepEqual(await c.modelUsage(t0 + 6 * min + 1000), want2)
     assert.equal(calls.length, 2)
   }
-  // Hermes sin estadísticas (404, o un 200 sin la lista): null durante 30 min.
+  // A Hermes without statistics (404, or a 200 without the list): null for 30 min.
   {
     const { c, calls } = make([{ status: 404, json: null }, { status: 200, json: { otra: 'forma' } }, ok])
     assert.equal(await c.modelUsage(t0), null)
@@ -134,20 +136,20 @@ test('uso: las estadísticas por modelo: una consulta a la vez, 5 min, y sin esp
     assert.deepEqual(await c.modelUsage(t0 + 62 * min), want)
     assert.equal(calls.length, 3)
   }
-  // Un fallo pasajero (500, red) no se guarda, y no se reintenta en 2 min.
+  // A passing failure (500, network) isn't stored, and isn't retried for 2 min.
   {
-    const { c, calls } = make([{ status: 500, json: null }, new Error('red caída'), ok])
+    const { c, calls } = make([{ status: 500, json: null }, new Error('network down'), ok])
     assert.equal(await c.modelUsage(t0), null)
     assert.equal(await c.modelUsage(t0 + 1 * min), null)
     assert.equal(calls.length, 1)
-    await assert.rejects(c.modelUsage(t0 + 3 * min), /red caída/)
+    await assert.rejects(c.modelUsage(t0 + 3 * min), /network down/)
     assert.equal(calls.length, 2)
     assert.equal(await c.modelUsage(t0 + 4 * min), null)
     assert.equal(calls.length, 2)
     assert.deepEqual(await c.modelUsage(t0 + 6 * min), want)
     assert.equal(calls.length, 3)
   }
-  // Con un valor bueno, un refresco que falla no lo tira: se sigue enseñando el guardado.
+  // With a good value, a refresh that fails doesn't throw it away: the stored one is still shown.
   {
     const { c, calls } = make([ok, { status: 503, json: null }, new Error('timeout'), ok2])
     const a = await c.modelUsage(t0)
@@ -165,7 +167,8 @@ test('uso: las estadísticas por modelo: una consulta a la vez, 5 min, y sin esp
     assert.deepEqual(await c.modelUsage(t0 + 12 * min + 1000), want2)
     assert.equal(calls.length, 4)
   }
-  // Al perder la conexión se olvida todo (también la pausa): otro servidor u otra sesión.
+  // When the connection is lost everything is forgotten (the pause too): another server or another
+  // session.
   {
     const { c, calls } = make([{ status: 500, json: null }, ok])
     assert.equal(await c.modelUsage(t0), null)
@@ -174,7 +177,7 @@ test('uso: las estadísticas por modelo: una consulta a la vez, 5 min, y sin esp
     assert.deepEqual(await c.modelUsage(t0 + 1000), want)
     assert.equal(calls.length, 2)
   }
-  // Si la conexión cae durante la consulta, la respuesta es de antes: se devuelve, pero no se guarda.
+  // If the connection drops during the query, the answer is from before: it's returned, but not stored.
   {
     const { c, calls } = make([])
     let release
@@ -196,7 +199,7 @@ test('uso: las estadísticas por modelo: una consulta a la vez, 5 min, y sin esp
   }
 })
 
-test('formatos: nombres de modelo, tareas auxiliares y tokens', async () => {
+test('formats: model names, auxiliary tasks and tokens', async () => {
   const f = await import('../src/shell/fmt.mjs')
   assert.equal(f.tokensOf({ input: 1000, output: 90 }), 1090)
   assert.equal(f.tokensOf({ input: '5', output: null }), 5)
@@ -206,25 +209,25 @@ test('formatos: nombres de modelo, tareas auxiliares y tokens', async () => {
   assert.equal(f.modelName('proveedor/modelo-v1.5-flash'), 'proveedor/modelo-v1.5-flash')
   assert.equal(f.modelName('qwen3-32b'), 'qwen3-32b')
   assert.equal(f.modelName(null), '')
-  assert.equal(f.taskName('compression'), 'resumir la memoria')
-  assert.equal(f.taskName('side_question'), 'preguntas al margen (/btw)')
-  assert.equal(f.taskName('plugin_side_question:mi-plugin'), 'preguntas de plugins')
-  assert.equal(f.taskName('other'), 'otras')
-  assert.equal(f.taskName('algo_nuevo'), 'algo nuevo')
+  assert.equal(f.taskName('compression'), 'summarizing memory')
+  assert.equal(f.taskName('side_question'), 'side questions (/btw)')
+  assert.equal(f.taskName('plugin_side_question:mi-plugin'), 'plugin questions')
+  assert.equal(f.taskName('other'), 'other')
+  assert.equal(f.taskName('something_new'), 'something new')
   assert.equal(f.taskName('toString'), 'toString')
-  assert.equal(f.taskName(''), 'otras')
+  assert.equal(f.taskName(''), 'other')
   assert.equal(f.tasksLine([
     { task: 'title_generation', tokens: 2450 },
     { task: 'compression', tokens: 1500000 },
     { task: 'voice_chat', tokens: 600 },
     { task: 'tts_audio_tags', tokens: 500 },
     { task: 'vision', tokens: 0 }
-  ]), 'resumir la memoria 1.5M · poner títulos 2.45K · voz 1.1K')
+  ]), 'summarizing memory 1.5M · writing titles 2.45K · voice 1.1K')
   assert.equal(f.tasksLine(undefined), '')
   assert.equal(f.tasksLine([]), '')
 })
 
-test('actualizaciones: versiones x.y.z con -alfa / -beta', () => {
+test('updates: x.y.z versions with -alfa / -beta', () => {
   const { newer } = require('../src/main/extras')
   assert.equal(newer('0.8.0-beta', '0.7.0'), true)
   assert.equal(newer('0.7.0', '0.8.0-beta'), false)
@@ -236,7 +239,7 @@ test('actualizaciones: versiones x.y.z con -alfa / -beta', () => {
   assert.equal(newer('0.10.0-beta', '0.9.3'), true)
   assert.equal(newer('v0.7.1', '0.7.0'), true)
   assert.equal(newer('0.7.0', '0.7.0'), false)
-  // Sufijos campo a campo, los numéricos como números (SemVer §11).
+  // Suffixes field by field, the numeric ones as numbers (SemVer §11).
   assert.equal(newer('0.8.0-beta.10', '0.8.0-beta.9'), true)
   assert.equal(newer('0.8.0-beta.9', '0.8.0-beta.10'), false)
   assert.equal(newer('0.8.0-beta.2', '0.8.0-beta'), true)
@@ -244,33 +247,33 @@ test('actualizaciones: versiones x.y.z con -alfa / -beta', () => {
   assert.equal(newer('0.8.0-10', '0.8.0-9'), true)
   assert.equal(newer('0.8.0-beta', '0.8.0-9'), true)
   assert.equal(newer('0.8.0-rc.1', '0.8.0-beta.11'), true)
-  // Lo de tras «+» no cuenta.
+  // What comes after "+" doesn't count.
   assert.equal(newer('0.8.0+build.5', '0.8.0'), false)
   assert.equal(newer('0.8.1+x', '0.8.0'), true)
-  // Una errata en version.json sigue siendo esa beta: no se ofrece otra vez tras instalarla.
+  // A typo in version.json is still that beta: it isn't offered again after installing it.
   for (const typo of ['0.8.0beta', '0.8.0.beta', '0.8.0 beta', '0.8.0_beta', '0.8.0–beta', ' 0.8.0-beta ']) {
     assert.equal(newer(typo, '0.8.0-beta'), false, typo)
   }
-  // …pero una más nueva con errata sí se ofrece.
+  // …but a newer one with a typo is offered.
   assert.equal(newer('0.9.0beta', '0.8.0-beta'), true)
   assert.equal(newer('0.8.0 beta.2', '0.8.0-beta'), true)
-  // Versiones raras: ni ofertas falsas ni excepciones.
+  // Odd versions: no false offers and no exceptions.
   for (const odd of ['', 'abc', '-beta', '0', '0.7', '0.8.0-beta.']) { assert.equal(newer(odd, '0.8.0-beta'), false, odd) }
   assert.equal(newer('1.0', '0.8.0-beta'), true)
   assert.equal(newer('1.0.0.1', '1.0.0'), true)
 })
 
-test('uso: al cambiar la dirección del servidor se olvidan sus estadísticas por modelo', async () => {
+test("usage: changing the server's address forgets its statistics by model", async () => {
   const { Connection } = require('../src/main/connection')
   const log = { info() {}, warn() {}, error() {} }
   const answers = [
-    { status: 200, json: { by_model: [{ model: 'de-A', input_tokens: 5, output_tokens: 0 }] } },
-    { status: 200, json: { by_model: [{ model: 'de-B', input_tokens: 7, output_tokens: 0 }] } }
+    { status: 200, json: { by_model: [{ model: 'from-A', input_tokens: 5, output_tokens: 0 }] } },
+    { status: 200, json: { by_model: [{ model: 'from-B', input_tokens: 7, output_tokens: 0 }] } }
   ]
-  const c = new Connection({ id: 'server', name: 'Servidor', transport: { fetchJson: async () => answers.shift() }, log })
+  const c = new Connection({ id: 'server', name: 'Server', transport: { fetchJson: async () => answers.shift() }, log })
   c.state = 'ready'
-  assert.deepEqual((await c.modelUsage(1000)).map(m => m.model), ['de-A'])
-  // Con el socket abierto, la nueva dirección no pasa por setState: index.js llama a forgetModelStats().
+  assert.deepEqual((await c.modelUsage(1000)).map(m => m.model), ['from-A'])
+  // With the socket open, the new address doesn't go through setState: index.js calls forgetModelStats().
   c.forgetModelStats()
-  assert.deepEqual((await c.modelUsage(2000)).map(m => m.model), ['de-B'])
+  assert.deepEqual((await c.modelUsage(2000)).map(m => m.model), ['from-B'])
 })

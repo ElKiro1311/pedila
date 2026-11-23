@@ -1,21 +1,22 @@
 'use strict'
-// Una conexión con un Hermes («Este PC» o «Servidor»). Habla los dos protocolos del gateway:
-//  - canónico (gateway.ready trae session_authority: true; Hermes 0.23 en el PC): create con
-//    request_id, submit con submission_id, y parar/permisos/preguntas con execution_generation;
-//    los permisos y preguntas llegan como eventos approval.request / clarify.request;
-//  - clásico (Hermes 0.22 en el servidor): los permisos y preguntas llegan como peticiones del
-//    servidor ('approval', 'clarify') que se contestan en la misma petición.
-// Hacia la interfaz todo sale con un formato único ({kind, conn, sid, …}) y con el id GUARDADO del
-// chat (el de la lista), aunque por el socket viaje el id vivo.
+// One connection with a Hermes ("This PC" or "Server"). It speaks the gateway's two protocols:
+// - canonical (gateway.ready brings session_authority: true; Hermes 0.23 on the PC): create with
+// request_id, submit with submission_id, and stop/permissions/questions with execution_generation;
+// permissions and questions arrive as approval.request / clarify.request events;
+// - classic (Hermes 0.22 on the server): permissions and questions arrive as requests from the server
+// ('approval', 'clarify') that are answered in the request itself.
+// Towards the interface everything goes out in a single format ({kind, conn, sid, …}) and with the chat's
+// STORED id (the one in the list), even though the live id travels on the socket.
 const { EventEmitter } = require('node:events')
 const crypto = require('node:crypto')
 const { RpcSocket } = require('./rpc')
 const { modelUsageFrom } = require('./extras')
+const { tr } = require('./i18n')
 
 const BACKOFF = [1000, 2000, 5000, 10000, 20000, 30000]
-// Las estadísticas por modelo de Hermes: el último año, refrescadas cada 5 min como mucho (a
-// Hermes le cuesta calcularlas); si ese Hermes no las tiene, no se vuelven a pedir en 30 min, y
-// tras un fallo pasajero, en 2 min.
+// Hermes's statistics by model: the last year, refreshed every 5 min at most (working them out costs
+// Hermes); if that Hermes doesn't have them, they aren't asked for again for 30 min, and after a passing
+// failure, for 2 min.
 const MODEL_STATS_DAYS = 365
 const MODEL_STATS_TTL = 5 * 60000
 const MODEL_STATS_MISSING_TTL = 30 * 60000
@@ -25,13 +26,13 @@ const COLS = 100
 const str = v => (typeof v === 'string' ? v : '')
 const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 
-// El complemento de Hermes que lee las cuotas (carpeta hermes-plugin/pedila de este repositorio).
+// The Hermes plugin that reads the quotas (the hermes-plugin/pedila folder of this repository).
 const QUOTA_PLUGIN = 'pedila'
 const QUOTA_PLUGIN_SOURCE = 'ElKiro1311/pedila/hermes-plugin/pedila'
 const QUOTA_KINDS = ['openrouter', 'venice', 'opencode-go', 'opencode-zen']
 const INSTALL_TIMEOUT = 180000
 
-/** ¿Qué API de pago es, por su dirección? (las mismas reglas que el complemento). */
+/** Which paid API it is, by its address? (the same rules as the plugin). */
 function paidKindOf(u) {
   try {
     const p = new URL(String(u || ''))
@@ -46,7 +47,7 @@ function paidKindOf(u) {
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const isoOf = v => (typeof v === 'string' && v && Number.isFinite(Date.parse(v)) ? v : null)
 
-/** La respuesta del complemento, limpia: solo los campos y tipos que la pantalla sabe pintar. */
+/** The plugin's answer, cleaned up: only the fields and types the screen knows how to paint. */
 function quotaData(j) {
   const spentOf = s => {
     if (!s || typeof s !== 'object') { return null }
@@ -54,7 +55,7 @@ function quotaData(j) {
     return { day: one(s.day), week: one(s.week), month: one(s.month) }
   }
   const providers = (Array.isArray(j.providers) ? j.providers : []).filter(p => p && QUOTA_KINDS.includes(p.kind)).slice(0, 12).map(p => {
-    const o = { kind: p.kind, name: cut(str(p.name) || p.kind, 40), ok: p.ok !== false, error: p.ok === false ? cut(str(p.error) || 'no se pudo leer', 200) : '', noApi: Boolean(p.no_api), spent: spentOf(p.spent) }
+    const o = { kind: p.kind, name: cut(str(p.name) || p.kind, 40), ok: p.ok !== false, error: p.ok === false ? cut(str(p.error) || tr("couldn't be read"), 200) : '', noApi: Boolean(p.no_api), spent: spentOf(p.spent) }
     if (p.kind === 'openrouter') {
       const kl = p.key_limit && typeof p.key_limit === 'object' ? p.key_limit : null
       const ku = p.key_usage && typeof p.key_usage === 'object' ? p.key_usage : {}
@@ -80,7 +81,7 @@ function quotaData(j) {
   return { version: cut(str(j.version), 20), fetchedAt: isoOf(j.fetched_at), providers }
 }
 
-/** ¿La dirección del proveedor está en tu red (o en esta máquina)? Entonces el modelo es local. */
+/** Is the provider's address on your network (or on this machine)? Then the model is local. */
 function isLocalUrl(u) {
   try {
     const h = new URL(String(u || '')).hostname.toLowerCase().replace(/^\[|\]$/g, '')
@@ -96,7 +97,7 @@ function isLocalUrl(u) {
 function contentText(c) {
   if (typeof c === 'string') { return c }
   if (Array.isArray(c)) {
-    return c.map(p => (typeof p === 'string' ? p : p && p.type === 'text' ? str(p.text) : p && /image/.test(p.type || '') ? '[imagen]' : '')).filter(Boolean).join('\n')
+    return c.map(p => (typeof p === 'string' ? p : p && p.type === 'text' ? str(p.text) : p && /image/.test(p.type || '') ? tr('[image]') : '')).filter(Boolean).join('\n')
   }
   if (c && typeof c === 'object' && typeof c.text === 'string') { return c.text }
   return ''
@@ -112,11 +113,14 @@ function argsSummary(args, argsText) {
   return cut(str(argsText).replace(/\s+/g, ' ').trim(), 140)
 }
 
-// ── Lista de tareas de Hermes (su herramienta todo_list, como la de Claude Code) ────────────────
+// ── Hermes's task list (its todo_list tool, like Claude Code's) ─────────────────────────────────
 const TODO_TOOLS = new Set(['todo_list', 'todo'])
 const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled']
 
-/** {todos, revision} limpio para la interfaz, o null (una lista vacía sin revisión = no hay plan). */
+/**
+ * {todos, revision} cleaned up for the interface, or null (an empty list without a revision = there's no
+ * plan).
+ */
 function todoSnapshot(v) {
   if (!v || typeof v !== 'object' || !Array.isArray(v.todos)) { return null }
   const todos = v.todos.filter(t => t && typeof t === 'object').slice(0, 256).map(t => ({
@@ -131,7 +135,7 @@ function todoSnapshot(v) {
   return { todos, revision }
 }
 
-/** ¿Es una llamada a la lista de tareas? También a través de `tool_call`, el puente del buscador de herramientas. */
+/** Is it a call to the task list? Also through `tool_call`, the tool finder's bridge. */
 function isTodoCall(c) {
   const fn = c && c.function ? c.function : c || {}
   const name = str(fn.name || (c && c.name))
@@ -148,8 +152,8 @@ function isTodoCall(c) {
 }
 
 /**
- * La lista de tareas de un chat guardado: el resultado más reciente de una llamada a la herramienta
- * (como hace Hermes al reanudar). Un resultado suelto sin su llamada no cuenta.
+ * The task list of a stored chat: the most recent result of a call to the tool (as Hermes does on resuming).
+ * A loose result without its call doesn't count.
  */
 function todoStateOf(rows) {
   const ids = new Set()
@@ -159,7 +163,7 @@ function todoStateOf(rows) {
   }
   if (!ids.size) { return null }
   const newest = [...rows].filter(r => r && r.role === 'tool' && ids.has(r.tool_call_id)).sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0))
-  // Como Hermes: manda el resultado legible más nuevo, aunque sea una lista vacía (entonces, sin plan).
+  // As Hermes does: the newest readable result wins, even if it's an empty list (then, no plan).
   for (const r of newest) {
     const text = contentText(r.content)
     if (!text.includes('"todos"') || text.length > 512000) { continue }
@@ -176,17 +180,17 @@ function toolCallsOf(row) {
     const fn = c && c.function ? c.function : c || {}
     let args = fn.arguments ?? c.args
     if (typeof args === 'string') { try { args = JSON.parse(args) } catch { args = { _: args } } }
-    return { id: c.id || c.tool_call_id || '', name: str(fn.name || c.name) || 'herramienta', args: argsSummary(args), input: boundInput(args) }
+    return { id: c.id || c.tool_call_id || '', name: str(fn.name || c.name) || tr('tool'), args: argsSummary(args), input: boundInput(args) }
   })
 }
 
-// ── Detalle de las herramientas (como en Claude Code: qué se le pasó y qué devolvió) ─────────
-const MAX_FIELD = 6000 // cada texto que se le pasó a una herramienta
-const MAX_OUTPUT = 8000 // lo que devolvió
+// ── Tool details (as in Claude Code: what it was given and what it returned) ─────────────────
+const MAX_FIELD = 6000 // each text given to a tool
+const MAX_OUTPUT = 8000 // what it returned
 
-/** Copia acotada de lo que se le pasó a una herramienta (textos largos recortados, sin ciclos). */
+/** A bounded copy of what a tool was given (long texts cut, no cycles). */
 function boundInput(v, depth = 0, max = MAX_FIELD) {
-  if (typeof v === 'string') { return v.length > max ? v.slice(0, max) + '\n… (recortado)' : v }
+  if (typeof v === 'string') { return v.length > max ? v.slice(0, max) + tr('\n… (cut short)') : v }
   if (v === null || typeof v === 'number' || typeof v === 'boolean') { return v }
   if (depth > 4) { return '…' }
   if (Array.isArray(v)) { return v.slice(0, 60).map(x => boundInput(x, depth + 1, max)) }
@@ -199,22 +203,23 @@ function boundInput(v, depth = 0, max = MAX_FIELD) {
 }
 
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g
-const capText = s => (s.length > MAX_OUTPUT ? s.slice(0, MAX_OUTPUT) + '\n… (recortado)' : s)
+const capText = s => (s.length > MAX_OUTPUT ? s.slice(0, MAX_OUTPUT) + tr('\n… (cut short)') : s)
 
 /**
- * Lo que devolvió una herramienta de Hermes, para leerlo: { text, error }.
- * Hermes guarda los resultados como JSON; el de la terminal trae output, exit_code y error.
- * El fallo se decide como en Hermes (agent/display.py _detect_tool_failure), solo por su forma.
+ * What a Hermes tool returned, to be read: { text, error }.
+ * Hermes stores results as JSON; the terminal's brings output, exit_code and error.
+ * Failure is decided as in Hermes (agent/display.py _detect_tool_failure), only by its shape.
  */
-// Las mismas reglas que Hermes (agent/display.py _detect_tool_failure y
-// agent/tool_result_classification.py): fallo por la forma del JSON o, si no es JSON, por el texto.
+// The same rules as Hermes (agent/display.py _detect_tool_failure and
+// agent/tool_result_classification.py): a failure by the shape of the JSON or, if it isn't JSON, by the
+// text.
 const FAILURE_MARKER = /"(?:error|failed)"(?!\s*:\s*(?:null|false|0|""|\[\]|\{\})\s*(?:[,}\]]|$))/gi
 function hermesFailed(name, raw, data) {
   if (data && typeof data === 'object' && !Array.isArray(data)) {
-    // Un archivo escrito o un parche aplicado de verdad nunca es un fallo.
+    // A file that was written or a patch that was really applied is never a failure.
     if (name === 'write_file' && !data.error && 'bytes_written' in data) { return false }
     if (name === 'patch' && !data.error && data.success === true) { return false }
-    // Una negativa del arnés (llamada repetida) no es un fallo.
+    // A refusal by the harness (a repeated call) isn't a failure.
     if (data.guardrail_refusal === true) { return false }
     if (data.user_summary) { return true }
     if (name === 'terminal') { const ec = data.exit_code; return !(ec === undefined || ec === null || ec === 0) }
@@ -234,7 +239,7 @@ function hermesFailed(name, raw, data) {
   return false
 }
 
-/** De un JSON cortado por Hermes ({"output": "<json recortado>", "truncated": true}), el texto de dentro. */
+/** From a JSON cut short by Hermes ({"output": "<cut json>", "truncated": true}), the text inside. */
 function innerText(s) {
   const m = /"(?:output|stdout|content|result|error)"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(s)
   if (!m) { return s }
@@ -249,13 +254,13 @@ function hermesToolOutput(name, result, isError) {
   let text = raw
   if (data && typeof data === 'object' && !Array.isArray(data)) {
     if (data.truncated === true && (typeof data.output === 'string' || typeof data.error === 'string')) {
-      // Recortado por Hermes: lo de dentro suele ser otro JSON; se saca su texto.
-      text = innerText(str(data.output || data.error)) + '\n… (Hermes lo recortó)'
+      // Cut short by Hermes: what's inside is usually another JSON; its text is taken out.
+      text = innerText(str(data.output || data.error)) + tr('\n… (cut short by Hermes)')
     } else if (typeof data.output === 'string' || typeof data.stdout === 'string') {
       const bits = [str(data.output || data.stdout)]
       if (str(data.stderr)) { bits.push(str(data.stderr)) }
       if (data.error) { bits.push('Error: ' + (typeof data.error === 'string' ? data.error : JSON.stringify(data.error))) }
-      if (data.exit_code !== undefined && data.exit_code !== null && data.exit_code !== 0) { bits.push(`(terminó con el código ${data.exit_code})`) }
+      if (data.exit_code !== undefined && data.exit_code !== null && data.exit_code !== 0) { bits.push(tr('(finished with code {0})', data.exit_code)) }
       text = bits.filter(Boolean).join('\n')
     } else if (data.user_summary) {
       text = str(data.user_summary)
@@ -264,7 +269,7 @@ function hermesToolOutput(name, result, isError) {
     } else if (typeof data.content === 'string') {
       text = data.content
     } else if (typeof data.result === 'string') {
-      // Herramientas MCP: {"result": texto}.
+      // MCP tools: {"result": text}.
       text = data.result
     } else {
       try { text = JSON.stringify(data, null, 2) } catch {}
@@ -273,27 +278,27 @@ function hermesToolOutput(name, result, isError) {
   return { text: capText(text.replace(ANSI, '')), error }
 }
 
-/** Imágenes que vienen dentro de un mensaje (partes image_url con data:): [{url, name}]. */
+/** Images that come inside a message (image_url parts with data:): [{url, name}]. */
 function contentImages(c) {
   if (!Array.isArray(c)) { return [] }
   const out = []
   for (const p of c) {
     const url = p && (p.type === 'image_url' ? str(p.image_url && (p.image_url.url || p.image_url)) : p.type === 'image' && p.source && p.source.type === 'base64' ? `data:${str(p.source.media_type) || 'image/png'};base64,${str(p.source.data)}` : '')
-    if (/^data:image\/(png|jpe?g|gif|webp);base64,/.test(url) && url.length < 6 * 1024 * 1024) { out.push({ url, name: 'imagen' }) }
+    if (/^data:image\/(png|jpe?g|gif|webp);base64,/.test(url) && url.length < 6 * 1024 * 1024) { out.push({ url, name: tr('image') }) }
     if (out.length >= 6) { break }
   }
   return out
 }
 
-// Filas de «usuario» que en realidad escribe Hermes (resúmenes de memoria, avisos de procesos o de
-// subagentes): se enseñan como una nota plegable, no como un mensaje tuyo.
-const NOTE_KINDS = { internal_notification: 'Aviso de Hermes', process_complete: 'Terminó un proceso', async_delegation_complete: 'Terminó un subagente', model_switch: 'Cambio de modelo' }
-// Marcas de agent/context_compressor.py: al compactar, Hermes junta el resumen con un mensaje tuyo
-// en la misma fila (delante, o con el mensaje de antes como «PRIOR CONTEXT»).
+// "User" rows that Hermes really writes (memory summaries, notices of processes or subagents): they're
+// shown as a collapsible note, not as a message of yours.
+const NOTE_KINDS = { internal_notification: 'Hermes notice', process_complete: 'A process finished', async_delegation_complete: 'A subagent finished', model_switch: 'Model change' }
+// Marks from agent/context_compressor.py: when compacting, Hermes joins the summary with a message of
+// yours in the same row (in front, or with the message from before as "PRIOR CONTEXT").
 const SUMMARY_END = '--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---'
 const PRIOR_HEAD = '[PRIOR CONTEXT — for reference only; not a new message]'
 const PRIOR_DELIM = '[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]'
-/** { summary, message } si la fila trae un resumen de compactación; null si no. */
+/** { summary, message } if the row brings a compaction summary; null if not. */
 function splitCompaction(raw) {
   const i = raw.indexOf(SUMMARY_END)
   if (i >= 0) { return { summary: raw.slice(0, i).trim(), message: raw.slice(i + SUMMARY_END.length).trim() } }
@@ -302,13 +307,13 @@ function splitCompaction(raw) {
   if (/^\[CONTEXT COMPACTION/.test(raw)) { return { summary: raw, message: '' } }
   return null
 }
-const compactionNote = (r, text) => ({ role: 'note', kind: 'compaction', title: 'Hermes resumió la conversación anterior para que quepa', text, ts: r.timestamp || null })
+const compactionNote = (r, text) => ({ role: 'note', kind: 'compaction', title: tr('Hermes summarized the earlier conversation so that it fits'), text, ts: r.timestamp || null })
 function noteOf(r, text) {
-  if (NOTE_KINDS[r.display_kind]) { return { role: 'note', kind: r.display_kind, title: NOTE_KINDS[r.display_kind], text, ts: r.timestamp || null } }
+  if (NOTE_KINDS[r.display_kind]) { return { role: 'note', kind: r.display_kind, title: tr(NOTE_KINDS[r.display_kind]), text, ts: r.timestamp || null } }
   return null
 }
 
-/** Filas guardadas de /api/sessions/{id}/messages → turnos para la interfaz. */
+/** Stored rows of /api/sessions/{id}/messages → turns for the interface. */
 const MAX_TRANSCRIPT_IMAGES = 8 * 1024 * 1024
 function normalizeTranscript(rows) {
   const out = []
@@ -322,13 +327,13 @@ function normalizeTranscript(rows) {
       const raw = contentText(r.content)
       const note = raw.trim() ? noteOf(r, raw) : null
       if (note) { out.push(note); continue }
-      // Lo que se enseña es display_content si Hermes lo da (como Hermes Desktop): el mensaje tuyo
-      // sin los envoltorios (resumen de compactación, «OUT-OF-BAND USER MESSAGE»…).
+      // What is shown is display_content if Hermes gives it (like Hermes Desktop): your message without
+      // the wrapping (compaction summary, "OUT-OF-BAND USER MESSAGE"…).
       const hasDisplay = r.display_content !== undefined && r.display_content !== null
       const comp = splitCompaction(raw)
       if (comp && comp.summary) { out.push(compactionNote(r, comp.summary)) }
       const text = hasDisplay ? contentText(r.display_content) : comp ? comp.message : raw
-      // Imágenes: con un tope para toda la conversación (son base64 y viajan a la pantalla).
+      // Images: with a cap for the whole conversation (they're base64 and travel to the screen).
       let images = contentImages(hasDisplay ? r.display_content : r.content)
       const bytes = images.reduce((n, x) => n + x.url.length, 0)
       if (imageBytes + bytes > MAX_TRANSCRIPT_IMAGES) { images = [] } else { imageBytes += bytes }
@@ -360,12 +365,12 @@ function normalizeTranscript(rows) {
 function sessionRow(r) {
   return {
     id: r.id,
-    title: str(r.title) || str(r.preview).slice(0, 60) || 'Chat sin título',
+    title: str(r.title) || str(r.preview).slice(0, 60) || tr('Untitled chat'),
     preview: cut(str(r.preview).replace(/\s+/g, ' ').trim(), 120),
     lastActive: r.last_active || r.last_activity_at || r.started_at || null,
     messages: r.message_count || 0,
     model: str(r.model),
-    // `is_active` = el chat está cargado en el gateway (no que esté respondiendo ahora).
+    // `is_active` = the chat is loaded in the gateway (not that it's answering now).
     active: Boolean(r.is_active),
     source: str(r.source),
     pinned: Boolean(r.pinned),
@@ -396,10 +401,10 @@ class Connection extends EventEmitter {
     this.prompts = new Map() // key → { kind, sid, liveId, promptId?, serverRequestId?, generation? }
     this.turnStart = new Map()
     this.version = null
-    this.modelStats = null // { at, models } de la última consulta de modelUsage()
+    this.modelStats = null // { at, models } of the last modelUsage() query
     this.modelStatsPending = null
-    this.modelStatsFailAt = null // cuándo falló la última (fallo pasajero); null si no falló
-    this.modelStatsEpoch = 0 // sube al perder la conexión: lo que llegue de antes ya no vale
+    this.modelStatsFailAt = null // when the last one failed (a passing failure); null if it didn't
+    this.modelStatsEpoch = 0 // goes up when the connection is lost: whatever arrives from before is no longer good
   }
 
   ui(evt) {
@@ -408,11 +413,11 @@ class Connection extends EventEmitter {
 
   setState(state, detail = '') {
     if (state === this.state && detail === this.detail) { return }
-    // Al reconectar puede ser otro servidor, otra sesión o un Hermes reiniciado: estadísticas nuevas.
+    // On reconnecting it may be another server, another session or a restarted Hermes: new statistics.
     if (state !== 'ready') { this.forgetModelStats() }
     this.state = state
     this.detail = detail
-    this.log.info(`[${this.id}] estado ${state}${detail ? ' · ' + detail : ''}`)
+    this.log.info(`[${this.id}] state ${state}${detail ? ' · ' + detail : ''}`)
     this.ui({ kind: 'conn', state, detail })
     this.emit('state', state)
   }
@@ -430,7 +435,7 @@ class Connection extends EventEmitter {
     this.transport.dispose()
   }
 
-  /** Reintento inmediato (tras iniciar sesión o al pulsar «Reintentar»). */
+  /** Immediate retry (after signing in or on "Try again"). */
   retryNow() {
     clearTimeout(this.retryTimer)
     this.attempt = 0
@@ -439,8 +444,8 @@ class Connection extends EventEmitter {
 
   async connect() {
     if (this.stopped || this.connecting || this.socket) { return }
-    // Sin Hermes en este equipo: se mira en silencio (sin pasar por «conectando», que haría
-    // reaparecer la pestaña un momento cada minuto).
+    // No Hermes on this computer: it's looked for quietly (without going through "connecting", which would
+    // make the tab show up for a moment every minute).
     if (this.state === 'missing' && this.transport.available && !this.transport.available()) {
       clearTimeout(this.retryTimer)
       this.retryTimer = setTimeout(() => this.connect(), 60000)
@@ -463,26 +468,26 @@ class Connection extends EventEmitter {
       for (const key of [...this.prompts.keys()]) { this.dropPrompt(key) }
       try { await sock.request('client.capabilities', { server_requests: true }, 15000) } catch {}
       this.attempt = 0
-      this.setState('ready', this.canonical ? 'protocolo nuevo' : 'protocolo clásico')
+      this.setState('ready', this.canonical ? 'new protocol' : 'classic protocol')
       this.ui({ kind: 'reconnected' })
-      // Los chats que siguen trabajando se vuelven a seguir enseguida (al abrir o actualizar Pedila):
-      // si se quedaran sin nadie mirando, a los 5 min Hermes cortaría sus tareas en segundo plano.
-      this.reattachRunning().catch(e => this.log.warn(`[${this.id}] al reengancharme:`, e.message))
+      // Chats that are still working are followed again right away (on opening or updating Pedila): with
+      // nobody watching, Hermes would cut off their background tasks after 5 min.
+      this.reattachRunning().catch(e => this.log.warn(`[${this.id}] when reattaching:`, e.message))
     } catch (e) {
       if (e.needLogin) {
         this.setState('login', e.message)
       } else if (e.setup) {
         this.setState('setup', e.message)
       } else if (e.missing) {
-        // Este equipo no tiene ese Hermes: la pestaña se oculta. Se mira de nuevo cada minuto por si
-        // se instala con Pedila abierta.
+        // This computer doesn't have that Hermes: the tab is hidden. It's looked for again every minute in
+        // case it gets installed with Pedila open.
         this.setState('missing', e.message)
         clearTimeout(this.retryTimer)
         this.retryTimer = setTimeout(() => this.connect(), 60000)
       } else if (e.fatal) {
         this.setState('error', e.message)
       } else {
-        this.log.warn(`[${this.id}] no conecta: ${e.message}`)
+        this.log.warn(`[${this.id}] can't connect: ${e.message}`)
         this.setState('offline', e.message)
         this.transport.invalidate()
         this.scheduleRetry()
@@ -495,11 +500,11 @@ class Connection extends EventEmitter {
   onClose(sock, info) {
     if (sock !== this.socket) { return }
     this.socket = null
-    this.log.warn(`[${this.id}] socket cerrado ${info.code} ${info.reason}`)
+    this.log.warn(`[${this.id}] socket closed ${info.code} ${info.reason}`)
     for (const [sid] of this.turnStart) { this.ui({ kind: 'turn-lost', sid }) }
     this.turnStart.clear()
     if (this.stopped) { return }
-    this.setState('offline', 'Se cortó la conexión; reconectando…')
+    this.setState('offline', tr('The connection dropped; reconnecting…'))
     this.transport.invalidate()
     this.scheduleRetry(true)
   }
@@ -512,11 +517,11 @@ class Connection extends EventEmitter {
 
   waitReady(ms = 25000) {
     if (this.state === 'ready' && this.socket) { return Promise.resolve() }
-    if (this.state === 'login') { return Promise.reject(Object.assign(new Error(this.detail || 'Hay que iniciar sesión'), { needLogin: true })) }
+    if (this.state === 'login') { return Promise.reject(Object.assign(new Error(this.detail || tr('You need to sign in')), { needLogin: true })) }
     if (this.state === 'error' || this.state === 'setup') { return Promise.reject(new Error(this.detail)) }
     if (!this.connecting && !this.socket) { this.retryNow() }
     return new Promise((resolve, reject) => {
-      const t = setTimeout(() => { this.off('state', on); reject(new Error(`Sin conexión con ${this.name}${this.detail ? ': ' + this.detail : ''}`)) }, ms)
+      const t = setTimeout(() => { this.off('state', on); reject(new Error(tr('Not connected to {0}{1}', this.name, this.detail ? ': ' + this.detail : ''))) }, ms)
       const on = s => {
         if (s === 'ready') { clearTimeout(t); this.off('state', on); resolve() }
         if (s === 'login' || s === 'error' || s === 'setup') { clearTimeout(t); this.off('state', on); reject(Object.assign(new Error(this.detail), { needLogin: s === 'login' })) }
@@ -530,7 +535,7 @@ class Connection extends EventEmitter {
     return this.socket.request(method, params, timeoutMs)
   }
 
-  // ── Eventos del gateway ────────────────────────────────────────────────────────────────────
+  // ── Gateway events ─────────────────────────────────────────────────────────────────────────
 
   storedOf(liveId, payload) {
     return this.liveToStored.get(liveId) || (payload && str(payload.stored_session_id)) || liveId
@@ -598,8 +603,8 @@ class Connection extends EventEmitter {
         this.ui({ kind: 'tool', sid, phase: 'progress', id: str(p.tool_id), name: str(p.name), percent: typeof p.percent === 'number' ? p.percent : null, message: str(p.message) })
         break
       case 'tool.complete': {
-        // Lo que devolvió (result, o result_text en modo «verbose»), si falló, el cambio de un
-        // archivo ya dibujado (inline_diff) y la imagen que produjo o miró (image_path).
+        // What it returned (result, or result_text in "verbose" mode), whether it failed, a file's change
+        // already drawn (inline_diff) and the image it produced or looked at (image_path).
         const name = str(p.name || p.tool_name)
         const o = hermesToolOutput(name, p.result !== undefined ? p.result : p.result_text, typeof p.is_error === 'boolean' ? p.is_error : null)
         this.ui({
@@ -616,7 +621,7 @@ class Connection extends EventEmitter {
         break
       }
       case 'todo.updated': {
-        // La lista entera tras cada cambio; la revisión deja descartar los avisos atrasados.
+        // The whole list after each change; the revision lets late events be discarded.
         const st = todoSnapshot(p)
         if (st) { this.ui({ kind: 'todos', sid, ...st }) }
         break
@@ -626,7 +631,8 @@ class Connection extends EventEmitter {
       case 'subagent.progress':
       case 'subagent.tool':
       case 'subagent.complete':
-        // Los subagentes (delegate_task); su razonamiento y su texto letra a letra no hacen falta aquí.
+        // The subagents (delegate_task); their reasoning and their text letter by letter aren't needed
+        // here.
         this.ui({
           kind: 'subagent', sid, phase: type.slice(9),
           id: str(p.subagent_id) || `t${Number(p.task_index) || 0}`,
@@ -654,7 +660,7 @@ class Connection extends EventEmitter {
         if (str(p.title)) { this.ui({ kind: 'title', sid, title: p.title }) }
         break
       case 'error':
-        this.ui({ kind: 'error', sid, message: str(p.message) || 'Error de Hermes' })
+        this.ui({ kind: 'error', sid, message: str(p.message) || tr('Hermes error') })
         break
       case 'approval.request':
         this.addPrompt(`c:${p.prompt_id}`, { kind: 'approval', sid, liveId, promptId: str(p.prompt_id), generation: typeof p.execution_generation === 'number' ? p.execution_generation : gen, command: str(p.command), description: str(p.description), choices: Array.isArray(p.choices) ? p.choices : ['once', 'deny'] })
@@ -690,8 +696,8 @@ class Connection extends EventEmitter {
       }
       return
     }
-    // Lo demás (sudo, secretos, tutoriales, vista previa…) no existe en esta app: se rechaza al
-    // momento para que Hermes no se quede esperando hasta su plazo.
+    // The rest (sudo, secrets, tutorials, preview…) doesn't exist in this app: it's refused right away so
+    // that Hermes doesn't wait until its deadline.
     sock.respondError(rq.id, -32601, 'not supported by Pedila')
   }
 
@@ -708,14 +714,14 @@ class Connection extends EventEmitter {
     this.ui({ kind: 'prompt-done', key, sid: pr.sid })
   }
 
-  // ── Acciones ───────────────────────────────────────────────────────────────────────────────
+  // ── Actions ────────────────────────────────────────────────────────────────────────────────
 
-  /** Todos los chats (de 100 en 100: el gateway no admite más por página). */
+  /** All the chats (100 at a time: the gateway doesn't take more per page). */
   async allSessions(max = 1000, archived = 'exclude') {
     const rows = []
     for (let off = 0; off < max; off += 100) {
       const r = await this.transport.fetchJson(`/api/sessions?limit=100&offset=${off}&min_messages=1&archived=${archived}`)
-      if (r.status !== 200 || !r.json) { throw new Error(`No pude leer la lista de chats (${r.status})`) }
+      if (r.status !== 200 || !r.json) { throw new Error(tr("Couldn't read the chat list ({0})", r.status)) }
       const page = r.json.sessions || []
       rows.push(...page)
       if (page.length < 100) { break }
@@ -728,20 +734,20 @@ class Connection extends EventEmitter {
   }
 
   /**
-   * Los tokens de cada modelo según las estadísticas del propio Hermes (GET /api/analytics/usage,
-   * las de la página de uso de Hermes Desktop): cuentan todos sus chats y también lo que gastan
-   * sus tareas auxiliares (resumir la memoria, poner títulos, ver imágenes…), que la lista de chats
-   * no trae. null si este Hermes no las da: entonces el panel suma la lista de chats.
-   * Solo se espera la primera vez. Con un valor bueno guardado se devuelve ese al momento y, si
-   * tiene más de 5 min, se pide otro por detrás; si ese falla, se sigue con el guardado (así el
-   * orden no salta a las cifras de la lista de chats por un fallo suelto).
+   * Each model's tokens according to Hermes's own statistics (GET /api/analytics/usage, the ones of Hermes
+   * Desktop's usage page): they count all its chats and also what its auxiliary tasks spend (summarizing
+   * memory, writing titles, looking at images…), which the chat list doesn't bring. null if this Hermes
+   * doesn't give them: the panel then adds up the chat list.
+   * Only the first time is waited for. With a good stored value, that one is returned right away and, if
+   * it's more than 5 min old, another one is asked for behind the scenes; if that fails, the stored one goes
+   * on (so the order doesn't jump to the chat list's figures because of one stray failure).
    */
   async modelUsage(now = Date.now()) {
     const c = this.modelStats
     const fresh = Boolean(c) && now - c.at < (c.models ? MODEL_STATS_TTL : MODEL_STATS_MISSING_TTL)
     const resting = this.modelStatsFailAt !== null && now - this.modelStatsFailAt < MODEL_STATS_FAIL_PAUSE
     if (!fresh && !resting && !this.modelStatsPending) {
-      // Una sola consulta a la vez (el panel y «Ver todo» pueden pedirla juntos).
+      // A single query at a time (the panel and "See all" may ask for it together).
       const p = this.loadModelStats(this.modelStatsEpoch, now)
       const clear = () => { if (this.modelStatsPending === p) { this.modelStatsPending = null } }
       p.then(clear, clear)
@@ -753,8 +759,8 @@ class Connection extends EventEmitter {
   }
 
   /**
-   * Olvida las estadísticas por modelo, la consulta en curso y la pausa: al perder la conexión o al
-   * cambiar la dirección del servidor (con el socket abierto, eso no pasa por setState).
+   * Forgets the statistics by model, the query in progress and the pause: when the connection is lost or the
+   * server's address changes (with the socket open, that doesn't go through setState).
    */
   forgetModelStats() {
     this.modelStats = null
@@ -772,37 +778,37 @@ class Connection extends EventEmitter {
       throw e
     }
     const models = r.status === 200 ? modelUsageFrom(r.json) : null
-    // Si la conexión cayó mientras tanto, la respuesta es de antes: no se guarda.
+    // If the connection dropped meanwhile, the answer is from before: it isn't stored.
     if (epoch !== this.modelStatsEpoch) { return models }
     if (models || r.status === 200 || [404, 405, 422].includes(r.status)) {
-      // Lo que vale, o «este Hermes no las tiene» (404, 405, 422 o un 200 sin la lista).
+      // What is good, or "this Hermes doesn't have them" (404, 405, 422 or a 200 without the list).
       this.modelStats = { at: now, models }
       this.modelStatsFailAt = null
     } else {
-      // Un fallo pasajero (5xx…): se sigue con lo guardado y no se reintenta en 2 min.
+      // A passing failure (5xx…): go on with what's stored and don't retry for 2 min.
       this.modelStatsFailAt = now
     }
     return models
   }
 
   /**
-   * Los chats en los que Hermes está trabajando ahora mismo, los empezara quien los empezara
-   * (Pedila, Hermes Desktop…), sin engancharse a ellos: `session.active_list`, lo mismo que lee
-   * la barra lateral de Hermes Desktop. En el protocolo clásico `id` es el del socket y el
-   * guardado va en `session_key`; en el nuevo los dos son el guardado.
+   * The chats Hermes is working in right now, whoever started them (Pedila, Hermes Desktop…), without
+   * attaching to them: `session.active_list`, the same thing Hermes Desktop's sidebar reads. In the classic
+   * protocol `id` is the socket's and the stored one goes in `session_key`; in the new one both are the
+   * stored one.
    */
   async activeList() {
     const r = await this.rpc('session.active_list', {}, 5000)
     return (Array.isArray(r && r.sessions) ? r.sessions : []).map(x => ({
-      // Primero el chat que esta ventana ya tiene enganchado a ese id (tras una compresión o con
-      // un chat de varios tramos, el id de Hermes puede no ser el de la fila de la lista).
+      // First the chat this window already has attached to that id (after a compaction or with a chat of
+      // several stretches, Hermes's id may not be the one of the list's row).
       id: this.liveToStored.get(str(x && x.id)) || str(x && x.session_key) || str(x && x.id),
       status: str(x && x.status),
       title: str(x && x.title)
     })).filter(x => x.id && ['working', 'waiting', 'starting'].includes(x.status))
   }
 
-  /** Se engancha a los chats en los que Hermes está trabajando ahora (los empezara quien los empezara). */
+  /** Attaches to the chats Hermes is working in now (whoever started them). */
   async reattachRunning() {
     const list = await this.activeList()
     for (const x of list) {
@@ -810,9 +816,9 @@ class Connection extends EventEmitter {
       if (this.live.has(x.id)) { continue }
       try {
         await this.attach(x.id)
-        this.log.info(`[${this.id}] sigo el chat ${x.id.slice(0, 12)} («${x.title.slice(0, 40)}»), que estaba trabajando`)
+        this.log.info(`[${this.id}] following the chat ${x.id.slice(0, 12)} ("${x.title.slice(0, 40)}"), which was working`)
       } catch (e) {
-        this.log.warn(`[${this.id}] no pude seguir el chat ${x.id.slice(0, 12)}:`, e.message)
+        this.log.warn(`[${this.id}] couldn't follow the chat ${x.id.slice(0, 12)}:`, e.message)
       }
     }
   }
@@ -822,8 +828,8 @@ class Connection extends EventEmitter {
   }
 
   /**
-   * Los subagentes que siguen vivos en un chat enganchado (subagent.list, los dos protocolos), para
-   * cerrar en el panel los que ya no existen aunque su aviso de fin no llegara. null si no se puede saber.
+   * The subagents still alive in an attached chat (subagent.list, both protocols), to close in the panel the
+   * ones that no longer exist even if their end event didn't arrive. null if it can't be known.
    */
   async subagents(sid) {
     const rec = this.live.get(sid)
@@ -838,17 +844,17 @@ class Connection extends EventEmitter {
     }))
   }
 
-  /** Búsqueda en el texto de todos los chats (la del propio gateway). */
+  /** Search in the text of all the chats (the gateway's own). */
   async search(q) {
     const r = await this.transport.fetchJson(`/api/sessions/search?q=${encodeURIComponent(q)}`)
-    if (r.status !== 200 || !r.json) { throw new Error(`No pude buscar (${r.status})`) }
+    if (r.status !== 200 || !r.json) { throw new Error(tr("Couldn't search ({0})", r.status)) }
     return (r.json.results || []).map(x => ({ id: str(x.session_id), snippet: cut(str(x.snippet).replace(/>>>|<<</g, '').replace(/\s+/g, ' ').trim(), 160), role: str(x.role), lastActive: x.last_active || x.session_started || null, model: str(x.model) })).filter(x => x.id)
   }
 
   /**
-   * Cambios protegidos sobre un chat guardado (como Hermes Desktop): primero se lee
-   * /mutation-snapshot (revisión y generación) y el cambio lleva esa identidad; sin ella, el
-   * gateway responde 409 y no cambia nada.
+   * Protected changes to a stored chat (like Hermes Desktop): first /mutation-snapshot is read (revision and
+   * generation) and the change carries that identity; without it, the gateway answers 409 and changes
+   * nothing.
    */
   async mutate(sid, method, payload = {}) {
     const base = `/api/sessions/${encodeURIComponent(sid)}`
@@ -866,7 +872,7 @@ class Connection extends EventEmitter {
       : await this.transport.fetchJson(base, { method, body: { ...payload, ...identity } })
     if (r.status >= 300) {
       const why = r.json && (r.json.detail || r.json.error || r.json.message)
-      throw new Error(`Hermes no aceptó el cambio (${r.status}${why ? ': ' + (typeof why === 'string' ? why : JSON.stringify(why)).slice(0, 120) : ''})`)
+      throw new Error(tr("Hermes didn't accept the change ({0}{1})", r.status, why ? ': ' + (typeof why === 'string' ? why : JSON.stringify(why)).slice(0, 120) : ''))
     }
     if (method === 'DELETE') {
       const live = this.live.get(sid)
@@ -880,49 +886,51 @@ class Connection extends EventEmitter {
   setArchived(sid, archived) { return this.mutate(sid, 'PATCH', archived ? { archived, pinned: false } : { archived }) }
   remove(sid) { return this.mutate(sid, 'DELETE') }
 
-  /** Sube una imagen para el próximo mensaje de ese chat (image.attach_bytes, en los dos protocolos). */
+  /** Uploads an image for that chat's next message (image.attach_bytes, in both protocols). */
   async attachImage(sid, base64, filename) {
     const rec = await this.attach(sid)
     const r = await this.socket.request('image.attach_bytes', { session_id: rec.liveId, content_base64: base64, filename }, 120000)
     return { path: str(r && r.path), mime: str(r && (r.mime || r.mime_type)) }
   }
 
-  /** Una imagen que Hermes nombró con «MEDIA:<ruta>» (image_generate, capturas…). La ruta es del equipo
-   *  donde corre Hermes, así que se pide a su gateway: GET /api/media solo sirve imágenes de sus carpetas
-   *  de medios (images, screenshots, cache) y la devuelve como data URL. */
+  /**
+   * An image Hermes named with "MEDIA:<path>" (image_generate, screenshots…). The path belongs to the
+   * machine where Hermes runs, so it's asked from its gateway: GET /api/media only serves images from its
+   * media folders (images, screenshots, cache) and returns it as a data URL.
+   */
   async media(file) {
     const r = await this.transport.fetchJson(`/api/media?path=${encodeURIComponent(file)}`)
     const url = r.json && r.json.data_url
     if (r.status !== 200 || typeof url !== 'string' || !/^data:image\/(png|jpeg|gif|webp|bmp);base64,/.test(url)) {
-      throw new Error(r.status === 403 ? 'la imagen está fuera de las carpetas de Hermes' : r.status === 404 ? 'la imagen ya no existe' : `no pude traer la imagen (${r.status})`)
+      throw new Error(r.status === 403 ? tr("the image is outside Hermes's folders") : r.status === 404 ? tr('the image no longer exists') : tr("couldn't fetch the image ({0})", r.status))
     }
     return url
   }
 
   /**
-   * Lo que queda de las APIs de pago de este Hermes (OpenRouter, Venice, OpenCode), leído por el
-   * complemento «pedila» que corre dentro de Hermes: las claves no salen de allí, solo llegan números.
-   * { state: 'ok', data } · { state: 'missing' } si el complemento no está (o no está activado).
+   * What's left of this Hermes's paid APIs (OpenRouter, Venice, OpenCode), read by the "pedila" plugin that
+   * runs inside Hermes: the keys don't leave it, only numbers arrive.
+   * { state: 'ok', data } · { state: 'missing' } if the plugin isn't there (or isn't turned on).
    */
   async quotas(fresh = false) {
     const r = await this.transport.fetchJson(`/api/plugins/${QUOTA_PLUGIN}/cuotas${fresh ? '?fresh=1' : ''}`)
     if ([403, 404, 405].includes(r.status) || (r.status === 200 && !(r.json && r.json.plugin === QUOTA_PLUGIN))) { return { state: 'missing' } }
-    if (r.status !== 200 || !r.json || !Array.isArray(r.json.providers)) { throw new Error(`Hermes no dio las cuotas (${r.status})`) }
+    if (r.status !== 200 || !r.json || !Array.isArray(r.json.providers)) { throw new Error(tr("Hermes didn't give the quotas ({0})", r.status)) }
     return { state: 'ok', data: quotaData(r.json) }
   }
 
   /**
-   * Instala y activa el complemento «pedila» en este Hermes con su propia ruta de instalación
-   * (la del botón «Instalar» de su página de complementos), sin reiniciarlo. Si el análisis de
-   * seguridad de Hermes pone una pega, se devuelve para que la persona decida (`force` = instalar igual).
+   * Installs and turns on the "pedila" plugin in this Hermes with its own install route (the one of the
+   * "Install" button on its plugins page), without restarting it. If Hermes's security scan raises an
+   * objection, it's returned for the person to decide (`force` = install anyway).
    */
   async installQuotaPlugin(force = false) {
-    // Instalar clona el repositorio y lo analiza: puede tardar bastante más que una consulta.
+    // Installing clones the repository and scans it: it may take quite a bit longer than a query.
     const r = await this.transport.fetchJson('/api/dashboard/agent-plugins/install', { method: 'POST', body: { identifier: QUOTA_PLUGIN_SOURCE, enable: true, force: Boolean(force) }, timeoutMs: INSTALL_TIMEOUT })
     const j = r.json || {}
     if (r.status === 200 && j.ok) { return { ok: true, restart: Boolean(j.restart_required) } }
     const detail = str(j.detail) || str(j.error)
-    // El análisis de seguridad de Hermes paró la instalación (la ruta lo devuelve como 400 con el informe).
+    // Hermes's security scan stopped the installation (the route returns it as a 400 with the report).
     if (j.scan_blocked || /security scan blocked/i.test(detail)) {
       const report = str(j.scan_verdict) || detail
       const lines = Array.isArray(j.scan_findings)
@@ -934,22 +942,22 @@ class Connection extends EventEmitter {
         findings: lines.map(x => x.trim()).filter(x => x && !/^review the findings|scanning can be configured/i.test(x)).slice(0, 12).map(x => cut(x, 300))
       }
     }
-    // Ya estaba instalado (por ejemplo, de un intento anterior) pero sin activar: se activa.
+    // It was already installed (for example, from an earlier attempt) but not turned on: it's turned on.
     if (/already exists|already installed/i.test(detail)) {
       const e = await this.transport.fetchJson(`/api/dashboard/agent-plugins/${QUOTA_PLUGIN}/enable`, { method: 'POST', body: {} })
       if (e.status === 200) { return { ok: true, restart: Boolean(e.json && e.json.restart_required) } }
-      throw new Error(cut(str(e.json && (e.json.detail || e.json.error)) || `Hermes no lo activó (${e.status})`, 300))
+      throw new Error(cut(str(e.json && (e.json.detail || e.json.error)) || tr("Hermes didn't turn it on ({0})", e.status), 300))
     }
-    if (r.status === 404 || r.status === 405) { throw new Error('este Hermes no sabe instalar complementos desde fuera (actualízalo)') }
-    throw new Error(cut(detail || `Hermes respondió ${r.status}`, 300))
+    if (r.status === 404 || r.status === 405) { throw new Error(tr("this Hermes can't install plugins from outside (update it)")) }
+    throw new Error(cut(detail || tr('Hermes answered {0}', r.status), 300))
   }
 
   async transcript(sid) {
     const r = await this.transport.fetchJson(`/api/sessions/${encodeURIComponent(sid)}/messages?limit=400&order=latest`)
     if (r.status === 404) { return [] }
-    if (r.status !== 200 || !r.json) { throw new Error(`No pude leer el chat (${r.status})`) }
+    if (r.status !== 200 || !r.json) { throw new Error(tr("Couldn't read the chat ({0})", r.status)) }
     const rows = Array.isArray(r.json.messages) ? r.json.messages : []
-    // Su lista de tareas, si Hermes hizo una (para el panel, aunque el chat ya no esté en marcha).
+    // Its task list, if Hermes made one (for the panel, even if the chat is no longer running).
     const todos = todoStateOf(rows)
     if (todos) { this.ui({ kind: 'todos', sid, history: true, ...todos }) }
     return normalizeTranscript(rows)
@@ -967,14 +975,14 @@ class Connection extends EventEmitter {
     const curProvider = str(r && r.provider)
     const cur = providers.find(pv => pv.id.toLowerCase() === curProvider.toLowerCase())
     return {
-      // Las APIs de pago que ese Hermes tiene puestas (para ofrecer activar sus cuotas).
+      // The paid APIs that Hermes has set (to offer turning their quotas on).
       paid: [...new Set(providers.map(pv => pv.paid).filter(Boolean))],
       current: { model: str(r && r.model), provider: curProvider, local: Boolean(cur && cur.local) },
       providers: [...providers.filter(pv => pv.local), ...providers.filter(pv => !pv.local)]
     }
   }
 
-  /** Engancha el chat al socket (resume) para poder escribir y recibir sus eventos en vivo. */
+  /** Attaches the chat to the socket (resume) to be able to write and to get its live events. */
   async attach(sid) {
     await this.waitReady()
     const rec = this.live.get(sid)
@@ -987,16 +995,16 @@ class Connection extends EventEmitter {
       running: Boolean(snap && (snap.running || (snap.info && snap.info.running)))
     })
     if (snap && snap.stored_session_id && snap.stored_session_id !== sid) { this.liveToStored.set(liveId, sid) }
-    // Permisos y preguntas que ya estaban esperando (protocolo nuevo: van en el snapshot).
+    // Permissions and questions that were already waiting (new protocol: they're in the snapshot).
     for (const pr of Array.isArray(snap && snap.prompts) ? snap.prompts : []) {
       this.onEvent({ type: `${pr.kind}.request`, session_id: liveId, payload: pr })
     }
-    // Protocolo clásico: las peticiones que seguían abiertas vuelven dentro de la respuesta
-    // (`open_requests`), igual que las reentrega json-rpc-channel.ts de Hermes Desktop.
+    // Classic protocol: the requests that were still open come back inside the answer (`open_requests`),
+    // as Hermes Desktop's json-rpc-channel.ts hands them over again.
     for (const rq of Array.isArray(snap && snap.open_requests) ? snap.open_requests : []) {
       if (rq && rq.id !== undefined && typeof rq.method === 'string') { this.onServerRequest(this.socket, { id: rq.id, method: rq.method, params: rq.params || {} }) }
     }
-    // La lista de tareas que tenía el chat (los dos protocolos la mandan al reanudar).
+    // The chat's task list (both protocols send it on resuming).
     const todos = todoSnapshot(snap && snap.todo_state)
     if (todos) { this.ui({ kind: 'todos', sid, ...todos }) }
     this.ui({ kind: 'running', sid, running: out.running })
@@ -1023,23 +1031,22 @@ class Connection extends EventEmitter {
     const params = this.canonical
       ? { session_id: rec.liveId, text, submission_id: crypto.randomUUID() }
       : { session_id: rec.liveId, text }
-    // Protocolo nuevo: las imágenes subidas van nombradas en el envío; en el clásico ya quedaron en cola.
+    // New protocol: uploaded images are named in the submit; in the classic one they were already queued.
     const files = attachments.filter(a => a && a.path && a.mime)
     if (this.canonical && files.length) { params.attachments = files.map(a => ({ path: a.path, mime: a.mime })) }
     return this.socket.request('prompt.submit', params, 120000)
   }
 
   /**
-   * Cambiar el modelo o el razonamiento de un chat ya empezado, con las órdenes del propio Hermes
-   * (`/model <modelo> --provider <p> --session` y `/reasoning <nivel>`) por slash.exec. Hermes las
-   * rechaza mientras el chat está respondiendo.
+   * Changing the model or the reasoning of a chat already started, with Hermes's own commands (`/model
+   * <model> --provider <p> --session` and `/reasoning <level>`) through slash.exec. Hermes refuses them
+   * while the chat is answering.
    */
   async setChatOptions(sid, { model, provider, reasoning, confirm } = {}) {
     const rec = await this.attach(sid)
-    // Protocolo nuevo: `session.mutate` (operation 'model' / 'reasoning'), lo mismo que el selector de
-    // Hermes Desktop; ahí `slash.exec /model` está rechazado. Un modelo que Hermes quiere que confirmes
-    // (coste, privacidad, contexto grande) vuelve como { needsConfirm, confirm, message } y se repite
-    // con ese `confirm`.
+    // New protocol: `session.mutate` (operation 'model' / 'reasoning'), the same as Hermes Desktop's
+    // picker; there `slash.exec /model` is refused. A model Hermes wants you to confirm (cost, privacy,
+    // large context) comes back as { needsConfirm, confirm, message } and is repeated with that `confirm`.
     if (this.canonical) {
       if (model !== undefined) {
         const payload = model === null ? { model: 'reset' } : { model, ...(provider ? { provider } : {}) }
@@ -1058,11 +1065,11 @@ class Connection extends EventEmitter {
       try {
         r = await this.rpc('slash.exec', { session_id: rec.liveId, command }, 60000)
       } catch (e) {
-        if (/32601|method not found|unknown method|unsupported/i.test(e.message || '')) { throw new Error('Este Hermes no deja cambiarlo en un chat ya empezado (empieza uno nuevo).') }
-        if (/busy|in progress|running/i.test(e.message || '')) { throw new Error('Hermes está respondiendo en este chat: cámbialo cuando termine.') }
+        if (/32601|method not found|unknown method|unsupported/i.test(e.message || '')) { throw new Error(tr("This Hermes doesn't let you change it in a chat that has already started (start a new one).")) }
+        if (/busy|in progress|running/i.test(e.message || '')) { throw new Error(tr('Hermes is answering in this chat: change it when it finishes.')) }
         throw e
       }
-      if (r && (r.type === 'error' || r.error)) { throw new Error(str(r.message || r.output || r.error) || 'Hermes no aceptó el cambio') }
+      if (r && (r.type === 'error' || r.error)) { throw new Error(str(r.message || r.output || r.error) || tr("Hermes didn't accept the change")) }
       return r
     }
     if (model !== undefined) { await run(model === null ? '/model reset --session' : `/model ${model}${provider ? ' --provider ' + provider : ''} --session`) }
@@ -1072,14 +1079,14 @@ class Connection extends EventEmitter {
   }
 
   /**
-   * Un cambio de la configuración de un chat por `session.mutate`, con las vallas de Hermes (la
-   * revisión y la generación de ahora, de /mutation-snapshot). Si otro cambio se coló entre medias,
-   * se repite una vez con las nuevas.
+   * A change to a chat's configuration through `session.mutate`, with Hermes's fences (the current revision
+   * and generation, from /mutation-snapshot). If another change slipped in between, it's repeated once with
+   * the new ones.
    */
   async policyMutate(sid, rec, operation, payload) {
     for (let attempt = 0; ; attempt++) {
       const snap = await this.transport.fetchJson(`/api/sessions/${encodeURIComponent(sid)}/mutation-snapshot`)
-      if (snap.status !== 200 || !snap.json || snap.json.exists === false) { throw new Error('No encuentro ese chat en Hermes') }
+      if (snap.status !== 200 || !snap.json || snap.json.exists === false) { throw new Error(tr("Can't find that chat in Hermes")) }
       try {
         return await this.rpc('session.mutate', {
           session_id: rec.liveId,
@@ -1092,7 +1099,7 @@ class Connection extends EventEmitter {
       } catch (e) {
         const why = `${e.message || ''} ${JSON.stringify(e.data || {})}`
         if (attempt === 0 && /revision_conflict|stale_generation/i.test(why)) { continue }
-        if (/busy|lease|turn_active|in_progress/i.test(why)) { throw new Error('Hermes está respondiendo en este chat: cámbialo cuando termine.') }
+        if (/busy|lease|turn_active|in_progress/i.test(why)) { throw new Error(tr('Hermes is answering in this chat: change it when it finishes.')) }
         throw e
       }
     }
@@ -1105,7 +1112,7 @@ class Connection extends EventEmitter {
     if (!rec || !this.socket) { return { ok: false } }
     const params = { session_id: rec.liveId }
     if (this.canonical) {
-      if (typeof rec.generation !== 'number') { throw new Error('Todavía no sé qué turno parar; prueba otra vez en un segundo') }
+      if (typeof rec.generation !== 'number') { throw new Error(tr("The turn to stop isn't known yet; try again in a second")) }
       params.execution_generation = rec.generation
     }
     return this.socket.request('session.interrupt', params, 30000)
@@ -1114,8 +1121,8 @@ class Connection extends EventEmitter {
   async answer(key, value) {
     const pr = this.prompts.get(key)
     if (!pr) { return { ok: false, gone: true } }
-    if (pr.kind === 'approval' && !(Array.isArray(pr.choices) ? pr.choices : ['once', 'deny']).includes(value)) { throw new Error('respuesta de permiso no válida') }
-    if (pr.kind === 'clarify' && !(typeof value === 'string' || (value && typeof value === 'object'))) { throw new Error('respuesta no válida') }
+    if (pr.kind === 'approval' && !(Array.isArray(pr.choices) ? pr.choices : ['once', 'deny']).includes(value)) { throw new Error(tr('invalid permission answer')) }
+    if (pr.kind === 'clarify' && !(typeof value === 'string' || (value && typeof value === 'object'))) { throw new Error(tr('invalid answer')) }
     if (pr.serverRequestId !== undefined) {
       const result = pr.kind === 'approval' ? { choice: value } : { answers: value, outcome: 'submitted' }
       pr.sock.respond(pr.serverRequestId, result)

@@ -1,6 +1,6 @@
 'use strict'
-// Cifrado con safeStorage (DPAPI en Windows), API asíncrona: la síncrona está obsoleta en
-// Electron 45 y desaparece en la 46.
+// Encryption with safeStorage (DPAPI on Windows), asynchronous API: the synchronous one is obsolete in
+// Electron 45 and goes away in 46.
 const { safeStorage } = require('electron')
 
 async function encrypt(obj) {

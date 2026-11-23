@@ -1,25 +1,30 @@
 'use strict'
-// Ajustes en %APPDATA%\Pedila\settings.json. Guardado atómico (tmp + rename); al cargar se
-// quitan las claves desconocidas, los valores se ajustan a su rango y un archivo ilegible se
-// renombra a .broken y se usan los valores por defecto.
+// Settings in %APPDATA%\Pedila\settings.json. Atomic saving (tmp + rename); on loading, unknown keys are
+// removed, values are brought into their range and an unreadable file is renamed to .broken and the
+// defaults are used.
 const fs = require('node:fs')
 const path = require('node:path')
+const { tr } = require('./i18n')
 
-// 'tema' = el color del tema elegido; los demás lo sustituyen.
+// 'tema' = the chosen theme's color; the others replace it. (These names are saved in settings.json: they
+// stay in Spanish.)
 const ACCENTS = ['tema', 'oro', 'violeta', 'turquesa', 'ambar', 'rosa', 'azul']
-// Paletas de color; cada una tiene modo claro y oscuro. «clasico» es la de las versiones 0.x anteriores.
+// Color palettes; each one has a light and a dark mode. "clasico" is the one of the earlier 0.x versions.
 const PALETTES = ['mensajera', 'clasico', 'egeo', 'anfora', 'olivo', 'claude']
-// Modo: el del sistema, oscuro o claro.
+// Mode: the system's, dark or light.
 const THEMES = ['system', 'dark', 'light']
+// 'auto' = the system's language. Settings saved before 0.16 have none: those versions were only in Spanish.
+const LANGUAGES = ['auto', 'en', 'es']
 const PET_SIZES = ['pequena', 'normal', 'grande']
-// La mascota que trae la app: Pedila, la mensajera (dibujo propio); las demás se eligen del catálogo de Petdex.
+// The pet the app brings: Pedila, the messenger (drawn for it); the others are chosen from the Petdex
+// catalog.
 const DEFAULT_PET = 'pedila'
 const SLUG = /^[a-z0-9][a-z0-9-]{0,100}$/
-// Anchos que se pueden dar a la lista de chats y al panel derecho (la pantalla usa los mismos).
+// Widths the chat list and the right panel can have (the screen uses the same ones).
 const SIDE_WIDTH = [240, 520]
 const PANEL_WIDTH = [240, 680]
 
-// Lo que se puede ordenar u ocultar (la pantalla usa los mismos nombres).
+// What can be ordered or hidden (the screen uses the same names).
 const LAYOUT_CONNS = ['local', 'server']
 const LAYOUT_CARDS = ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones']
 const LAYOUT_SHOW = ['attach', 'model', 'reason', 'readonly', 'hint', 'suggestions', 'search', 'version', 'usageButton']
@@ -29,14 +34,17 @@ function defaultLayout() {
     conns: LAYOUT_CONNS.slice(),
     connsHidden: [],
     cards: LAYOUT_CARDS.slice(),
-    // Las tarjetas que se ven (el orden lo da `cards`).
+    // The cards that are shown (`cards` gives the order).
     cardsChats: LAYOUT_CARDS.slice(),
     swap: false,
     show: Object.fromEntries(LAYOUT_SHOW.map(k => [k, true]))
   }
 }
 
-/** Una lista con solo nombres conocidos, sin repetir y, si es un orden, con todos (los que falten al final). */
+/**
+ * A list with only known names, no repeats and, if it's an order, with all of them (the missing ones at the
+ * end).
+ */
 function idList(v, known, complete) {
   const out = Array.isArray(v) ? [...new Set(v.filter(x => known.includes(x)))] : []
   if (complete) { for (const k of known) { if (!out.includes(k)) { out.push(k) } } }
@@ -54,7 +62,7 @@ function sanitizeLayout(raw) {
     swap: bool(raw.swap, false),
     show: {}
   }
-  // Siempre queda al menos una conexión a la vista.
+  // At least one connection always stays in sight.
   if (l.connsHidden.length >= LAYOUT_CONNS.length) { l.connsHidden = [] }
   const show = isObj(raw.show) ? raw.show : {}
   for (const k of LAYOUT_SHOW) { l.show[k] = bool(show[k], true) }
@@ -64,33 +72,35 @@ function sanitizeLayout(raw) {
 function defaults() {
   return {
     schema: 1,
+    language: 'auto',
     look: { palette: 'mensajera', theme: 'system', accent: 'tema', textSize: 100 },
-    // Direcciones del `hermes dashboard` de tu servidor (se rellenan en Ajustes → Servidor).
+    // Addresses of your server's `hermes dashboard` (filled in in Settings → Server).
     server: { urls: [], enabled: true },
     local: { enabled: true },
     lastConnection: 'local',
     models: { local: null, server: null },
     notify: { enabled: true, done: true, needs: true, failed: true, minDurationSec: 10, sound: true, chime: true, badge: true },
-    // Nivel de razonamiento de los chats nuevos: '' = el que tenga Hermes.
+    // Reasoning level of new chats: '' = the one Hermes has.
     chat: { reasoning: '' },
-    // Frases rápidas que se insertan escribiendo «/» al principio.
+    // Quick phrases inserted by typing "/" at the beginning.
     snippets: [
-      { name: 'Resume', text: 'Resúmeme lo anterior en 5 puntos cortos.' },
-      { name: 'Explica fácil', text: 'Explícamelo como si no supiera nada del tema, paso a paso.' },
-      { name: 'Revisa', text: 'Revisa lo que hiciste y dime si algo puede fallar.' }
+      { name: tr('Summarize'), text: tr('Sum up what came before in 5 short points.') },
+      { name: tr('Explain simply'), text: tr('Explain it to me as if I knew nothing about it, step by step.') },
+      { name: tr('Review'), text: tr('Go over what you did and tell me whether anything could fail.') }
     ],
     shortcut: { enabled: true },
-    // Dirección de una carpeta con version.json para buscar versiones nuevas ('' = no buscar).
-    // autoInstall: instalarlas solas cuando Pedila lleve 10 min sin usarse (y Hermes sin trabajar).
+    // Address of a folder with version.json to look for new versions ('' = don't look).
+    // autoInstall: install them by itself when Pedila has been unused for 10 min (and Hermes isn't
+    // working).
     updates: { url: '', auto: true, autoInstall: true },
-    // Hermes: actualizarlo solo (las instalaciones que Hermes sabe actualizar) tras 10 min sin uso.
+    // Hermes: update it by itself (the installations Hermes knows how to update) after 10 min unused.
     hermes: { autoUpdate: true },
     pet: { visible: true, size: 'normal', slug: DEFAULT_PET },
-    // sidePanel: el panel derecho con el uso y los parámetros. sideWidth / panelWidth: el ancho de la
-    // lista de chats y del panel en píxeles, ajustado arrastrando su raya (null = el de siempre).
+    // sidePanel: the right panel with usage and parameters. sideWidth / panelWidth: the width of the chat
+    // list and of the panel in pixels, adjusted by dragging their line (null = the default).
     window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false, sidePanel: true, sideWidth: null, panelWidth: null },
-    // Diseño: orden y visibilidad de las pestañas, las tarjetas del panel y los botones;
-    // swap = lista de chats a la derecha y panel a la izquierda.
+    // Layout: order and visibility of the tabs, the panel's cards and the buttons; swap = chat list on the
+    // right and panel on the left.
     layout: defaultLayout(),
     secrets: { server: null }
   }
@@ -112,8 +122,10 @@ function sanitize(raw) {
   const d = defaults()
   if (!isObj(raw)) { return d }
   const s = d
+  s.language = pick(raw.language, LANGUAGES, raw.language === undefined ? 'es' : 'auto')
   const look = isObj(raw.look) ? raw.look : {}
-  // Ajustes de antes de la 0.5 (sin paleta): pasan al tema y la mascota nuevos, como una instalación nueva.
+  // Settings from before 0.5 (without a palette): they move to the new theme and pet, like a new
+  // installation.
   const upgrade = isObj(raw.look) && look.palette === undefined
   s.look.palette = pick(look.palette, PALETTES, d.look.palette)
   s.look.theme = pick(look.theme, THEMES, d.look.theme)
@@ -134,7 +146,7 @@ function sanitize(raw) {
   const n = isObj(raw.notify) ? raw.notify : {}
   for (const k of ['enabled', 'done', 'needs', 'failed', 'sound', 'chime', 'badge']) { s.notify[k] = bool(n[k], d.notify[k]) }
   const chat = isObj(raw.chat) ? raw.chat : {}
-  // Los mismos niveles que ofrece el botón 🧠 (Hermes los admite todos).
+  // The same levels the 🧠 button offers (Hermes takes them all).
   s.chat.reasoning = pick(chat.reasoning, ['', 'low', 'medium', 'high', 'xhigh', 'max'], '')
   if (Array.isArray(raw.snippets)) {
     s.snippets = raw.snippets.filter(x => isObj(x) && typeof x.name === 'string' && typeof x.text === 'string' && x.name.trim() && x.text.trim())
@@ -175,7 +187,7 @@ class Settings {
 
   load() {
     try {
-      // Sin el BOM que ponen algunos editores (Bloc de notas, PowerShell 5): si no, se perderían los ajustes.
+      // Without the BOM some editors add (Notepad, PowerShell 5): otherwise the settings would be lost.
       this.data = sanitize(JSON.parse(fs.readFileSync(this.file, 'utf8').replace(/^﻿/, '')))
     } catch (e) {
       if (e.code !== 'ENOENT') {
@@ -193,7 +205,7 @@ class Settings {
     fs.renameSync(tmp, this.file)
   }
 
-  /** Aplica un parche parcial de la interfaz (nunca toca `secrets`). */
+  /** Applies a partial patch from the interface (never touches `secrets`). */
   patch(partial) {
     if (!isObj(partial)) { return this.data }
     const next = JSON.parse(JSON.stringify(this.data))
@@ -201,6 +213,7 @@ class Settings {
       if (isObj(partial[key])) { next[key] = { ...next[key], ...partial[key] } }
     }
     if (partial.lastConnection !== undefined) { next.lastConnection = partial.lastConnection }
+    if (partial.language !== undefined) { next.language = partial.language }
     if (Array.isArray(partial.snippets)) { next.snippets = partial.snippets }
     next.secrets = this.data.secrets
     this.data = sanitize(next)
@@ -208,11 +221,11 @@ class Settings {
     return this.data
   }
 
-  /** Lo que la interfaz puede ver (sin secretos). */
+  /** What the interface can see (no secrets). */
   publicView() {
     const { secrets, ...rest } = this.data
     return { ...JSON.parse(JSON.stringify(rest)), serverSignedIn: Boolean(secrets.server) }
   }
 }
 
-module.exports = { Settings, sanitize, defaults, defaultLayout, LAYOUT_CARDS, ACCENTS, PALETTES, THEMES, PET_SIZES, DEFAULT_PET, SLUG, SIDE_WIDTH, PANEL_WIDTH }
+module.exports = { Settings, sanitize, defaults, defaultLayout, LAYOUT_CARDS, ACCENTS, PALETTES, THEMES, LANGUAGES, PET_SIZES, DEFAULT_PET, SLUG, SIDE_WIDTH, PANEL_WIDTH }
