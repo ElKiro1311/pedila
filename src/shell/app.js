@@ -2462,7 +2462,7 @@ function quotaBlock(p, conn = S.active) {
     if (!p.windows.length) {
       line(tr("OpenCode didn't report your plan's usage."))
     } else {
-      big(`${Math.round(100 - Math.max(0, ...p.windows.map(w => w.percent)))} %`, tr("What's left of the most used window"))
+      big(tr('{0}%', Math.round(100 - Math.max(0, ...p.windows.map(w => w.percent)))), tr("What's left of the most used window"))
     }
     const label = { rolling: tr('5-hour window'), weekly: tr('Week'), monthly: tr('Month') }
     for (const w of p.windows) {
