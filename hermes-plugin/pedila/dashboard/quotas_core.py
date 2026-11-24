@@ -21,6 +21,11 @@ What it gives of each paid API with a key:
   when it agrees with OpenCode's whole number; if it doesn't (the account is used from somewhere else too, or
   OpenCode changed its limits since), the whole number is all there is.
 - OpenCode Zen: OpenCode doesn't publish the balance; only what Hermes has spent with it shows.
+- DeepSeek: the account's balance (``/user/balance``), granted and topped up, and whether it's enough to use the API.
+- Openference: credit balance, plan and, with a paid plan, what has been used of its windows and when they reset.
+  Its documentation has no address for this: it's the one its own web page uses (``/api/user/me``), which takes the
+  API key too. That answer also has personal data and a key: only the numbers and the plan's name are taken from
+  it. The free models and until when they're free come from its public catalog (``/v1/models``, without a key).
 """
 from __future__ import annotations
 
@@ -37,9 +42,10 @@ from urllib.parse import urlparse
 
 log = logging.getLogger("hermes_dashboard_plugin_pedila")
 
-PLUGIN_VERSION = "1.2.0"
-NAMES = {"openrouter": "OpenRouter", "venice": "Venice", "opencode-go": "OpenCode Go", "opencode-zen": "OpenCode Zen"}
-ORDER = ["openrouter", "venice", "opencode-go", "opencode-zen"]
+PLUGIN_VERSION = "1.3.0"
+NAMES = {"openrouter": "OpenRouter", "venice": "Venice", "opencode-go": "OpenCode Go", "opencode-zen": "OpenCode Zen",
+         "deepseek": "DeepSeek", "openference": "Openference"}
+ORDER = ["openrouter", "venice", "opencode-go", "opencode-zen", "deepseek", "openference"]
 # The longest one reading takes, with all its queries (the ones left come out as "took too long"): Pedila waits 30 s.
 BUILD_BUDGET_SECONDS = 20
 REQUEST_SECONDS = 10
@@ -47,6 +53,7 @@ CONNECT_SECONDS = 5
 
 GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage"
 GO_MODELS_URL = "https://opencode.ai/zen/go/v1/models"
+OPENFERENCE_MODELS_URL = "https://api.openference.com/v1/models"
 # (id, name, share of the usage included in the month): https://opencode.ai/docs/go/ "Usage limits".
 GO_WINDOWS = (("rolling", "5 h", 0.2), ("weekly", "week", 0.5), ("monthly", "month", 1.0))
 GO_ROLLING_SECONDS = 5 * 3600
@@ -67,6 +74,7 @@ MAX_KEYS = 6
 PLACEHOLDER_KEYS = {"", "no-key-required", "none", "null", "dummy", "sk-dummy"}
 
 _catalog: dict[str, Any] = {"at": 0.0, "failed_at": 0.0, "models": None}
+_free: dict[str, Any] = {"at": 0.0, "failed_at": 0.0, "models": None}
 
 
 class _Fail(Exception):
@@ -117,6 +125,10 @@ def kind_of(base_url: str) -> Optional[str]:
         return "venice"
     if host == "opencode.ai" or host.endswith(".opencode.ai"):
         return "opencode-go" if "/go" in path else "opencode-zen"
+    if host == "api.deepseek.com":
+        return "deepseek"
+    if host == "api.openference.com":
+        return "openference"
     return None
 
 
@@ -135,7 +147,7 @@ def _config() -> dict:
 
 # Hermes's own, recognized by their name (without an address in config.yaml).
 BUILTIN = {"openrouter": "https://openrouter.ai/api/v1", "opencode-go": "https://opencode.ai/zen/go/v1",
-           "opencode-zen": "https://opencode.ai/zen/v1"}
+           "opencode-zen": "https://opencode.ai/zen/v1", "deepseek": "https://api.deepseek.com/v1"}
 
 
 def _url_of(entry: dict) -> str:
@@ -177,7 +189,9 @@ def _candidates(cfg: dict) -> list[tuple[str, str, list[str], bool]]:
     for key, pv in blocks:
         url = _url_of(pv) or BUILTIN.get(key.lower(), "")
         if _enabled(pv) and kind_of(url):
-            out.setdefault(key, [url, [], False])[1].extend(_models_of(pv))
+            slot = out.setdefault(key, [url, [], False])
+            slot[0] = url  # one of Hermes's own names may be at another API's address
+            slot[1].extend(_models_of(pv))
     for name, pv in listed:
         if _enabled(pv) and name.strip().lower() not in off and kind_of(_url_of(pv)):
             out.setdefault(name, [_url_of(pv), [], False])[1].extend(_models_of(pv))
@@ -463,6 +477,106 @@ def fetch_venice(client, e: dict) -> dict:
         "next_epoch": _iso(d.get("nextEpochBegins")),
         "key_expires": _iso(d.get("keyExpiration")),
         "model_limits": limits[:12],
+    }
+
+
+def fetch_deepseek(client, e: dict) -> dict:
+    u = urlparse(e["base"])
+    body = _get(client, f"{u.scheme}://{u.netloc}/user/balance", e["key"])
+    balances = []
+    for b in body.get("balance_infos") if isinstance(body.get("balance_infos"), list) else []:
+        if not isinstance(b, dict) or _num(b.get("total_balance")) is None:
+            continue
+        cur = b.get("currency")
+        balances.append({"currency": cur if cur in ("USD", "CNY") else "", "total": _num(b["total_balance"]),
+                         "granted": _num(b.get("granted_balance")), "topped_up": _num(b.get("topped_up_balance"))})
+    if not balances:
+        raise _Fail("unreadable answer from the provider")
+    avail = body.get("is_available")
+    return {"balances": balances[:4], "available": avail if isinstance(avail, bool) else None}
+
+
+# ── Openference ─────────────────────────────────────────────────────────────────────────────────
+
+def _dict(v: Any) -> dict:
+    return v if isinstance(v, dict) else {}
+
+
+def _first(*vs: Any) -> Optional[float]:
+    return next((x for x in map(_num, vs) if x is not None), None)
+
+
+def openference_windows(me: dict) -> list[dict[str, Any]]:
+    """What has been used of the plan: the token plans' percentages (``limits.allowance``) or, with one of the old
+    request plans, the count against its limit. Without a plan there's none."""
+    limits, plan = _dict(me.get("limits")), _dict(me.get("plan"))
+    al = limits.get("allowance")
+    hours = _num(plan.get("windowHours"))
+    hours = hours if hours and hours > 0 else 5
+    rows: list[tuple[str, Optional[float], Any, Optional[float], Optional[float], str]] = []
+    if isinstance(al, dict):
+        for wid, f in (("rolling", "window"), ("weekly", "weekly"), ("monthly", "monthly")):
+            rows.append((wid, _num(al.get(f + "Percent")), al.get(f + "ResetAt"), None, None, ""))
+    else:
+        for wid, used, limit, reset, unit in (
+                ("rolling", _first(limits.get("windowQuotaUsed"), limits.get("windowRequests")),
+                 _first(limits.get("windowLimit"), plan.get("requestsPerWindow")), limits.get("windowResetAt"), "requests"),
+                ("weekly", _first(limits.get("weekQuotaUsed"), limits.get("weekRequests")),
+                 _first(limits.get("requestsPerWeek"), plan.get("requestsPerWeek")), limits.get("weeklyResetAt"), "requests"),
+                ("weekly-tokens", _first(limits.get("weekTokens")),
+                 _first(limits.get("tokensPerWeek"), plan.get("tokensPerWeek")), limits.get("weeklyResetAt"), "tokens")):
+            if used is not None and limit and limit > 0:
+                rows.append((wid, used / limit * 100, reset, used, limit, unit))
+    return [{"id": wid, "percent": max(0.0, min(100.0, p)), "resets_at": _iso_at(_epoch(at)), "hours": hours if wid == "rolling" else None,
+             "used": used, "limit": limit, "unit": unit} for wid, p, at, used, limit, unit in rows if p is not None]
+
+
+def openference_free(client, now: float) -> Optional[list[dict[str, Any]]]:
+    """The free models and the last day they're free (remembered for 1 h; after a failure, 5 min without asking).
+    None if it could never be read."""
+    c = _free
+    if c["models"] is not None and now - c["at"] < CATALOG_TTL:
+        return c["models"]
+    if c["failed_at"] and now - c["failed_at"] < CATALOG_RETRY:
+        return c["models"]
+    try:
+        r = client.get(OPENFERENCE_MODELS_URL, headers={"Accept": "application/json"})  # public: no key needed
+        if r.status_code != 200:
+            raise _Fail(f"it answered {r.status_code}")
+        body = r.json()
+        rows = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            raise _Fail("unreadable catalog")
+        models = []
+        for m in rows:
+            if isinstance(m, dict) and m.get("is_free") is True and isinstance(m.get("id"), str) and m["id"].strip():
+                until = m.get("free_until")
+                ok = isinstance(until, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", until) and _day_of(until)
+                models.append({"model": m["id"].strip()[:80], "until": until if ok else None})
+        c.update(at=now, failed_at=0.0, models=models[:12])
+    except Exception as exc:
+        log.info("pedila: couldn't read Openference's catalog (%s)", type(exc).__name__)
+        c["failed_at"] = now
+    return c["models"]
+
+
+def fetch_openference(client, e: dict) -> dict:
+    u = urlparse(e["base"])
+    # The answer has the person's name and e-mail address, and a key: nothing but what's below comes out of it.
+    me = _get(client, f"{u.scheme}://{u.netloc}/api/user/me", e["key"])
+    credits, plan, usage = _dict(me.get("credits")), _dict(me.get("plan")), _dict(me.get("usage"))
+    if not credits and not plan and not usage:
+        raise _Fail("unreadable answer from the provider")
+    name, status = plan.get("name"), me.get("status")
+    return {
+        "balance": _num(credits.get("balanceUsd")), "credits_total": _num(credits.get("totalPurchasedUsd")),
+        "plan_name": name.strip()[:30] if isinstance(name, str) else None,
+        "subscribed": bool(me.get("planId")) or isinstance(_dict(me.get("limits")).get("allowance"), dict),
+        "expires_at": _iso_at(_epoch(me.get("planExpiresAt"))),
+        "active": status == "active" if isinstance(status, str) else None,
+        "windows": openference_windows(me),
+        "account_usage": {k: _num(usage.get(f)) for k, f in (("requests", "totalRequests"), ("tokens", "totalTokens"), ("cost", "totalCost"))},
+        "free_models": openference_free(client, time.time()),
     }
 
 
@@ -789,7 +903,8 @@ def go_decimals(accounts: list[dict], rows: list[dict], catalog: Optional[dict],
         row.update(plan=est["plan"], unpriced=est["unpriced"], catalog=bool(catalog))
 
 
-FETCHERS = {"openrouter": fetch_openrouter, "venice": fetch_venice, "opencode-go": fetch_opencode_go}
+FETCHERS = {"openrouter": fetch_openrouter, "venice": fetch_venice, "opencode-go": fetch_opencode_go,
+            "deepseek": fetch_deepseek, "openference": fetch_openference}
 
 
 # ── What Hermes spent, from its own records ─────────────────────────────────────────────────────

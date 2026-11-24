@@ -10,6 +10,8 @@ Hermes. (The route keeps its Spanish name, "quotas": the installed versions of t
 | Venice | USD, DIEM and included-credit balances; plan; next DIEM reset; limits per model |
 | OpenCode Go | % used of the 5-hour, weekly and monthly windows, and when they reset; with decimals if they can be worked out (see below) |
 | OpenCode Zen | OpenCode doesn't publish the balance: only what Hermes has spent with it |
+| DeepSeek | balance (granted and topped up) and whether it's enough to use the API |
+| Openference | credit balance and plan; with a paid plan, % used of its windows and when they reset; the free models and until when they're free |
 
 A provider may have several keys (`hermes auth add`, Hermes's credential pool): each one comes out as a quota of its
 own, with which one Hermes uses now and which ones are resting until their limit resets. They're called after
@@ -22,6 +24,10 @@ week 50%. They're only given when they agree with OpenCode's whole number (they 
 from somewhere else, or if OpenCode changes its limits). Hermes doesn't record which key each thing was spent with:
 with several, they're only worked out in the 5-hour window of one while the others are idle, and what Hermes
 spent is said once, for all of them.
+
+Openference doesn't document an address for its balance: the plugin asks the one its own web page uses
+(`/api/user/me`), which takes the API key too and might change without notice. That answer also has personal data:
+only the numbers and the plan's name are taken from it.
 
 `plugin_api.py` is the fixed part (the one Hermes loads once); the calculation is in `quotas_core.py`, which
 is loaded again by itself when it changes: a new version of the plugin takes effect without restarting Hermes

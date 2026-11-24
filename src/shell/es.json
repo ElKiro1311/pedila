@@ -636,7 +636,6 @@
  "Theme": "Tema",
  "There are no archived chats.": "No hay chats archivados.",
  "There are no notifications for the chat in front of you while the window is active.": "No avisa del chat que tienes delante con la ventana activa.",
- "There's a new quotas plugin: if an API has several keys in Hermes, it shows each one's quota.": "Hay un complemento de cuotas nuevo: si una API tiene varias claves en Hermes, enseña la cuota de cada una.",
  "There's a new version of Pedila ({0}). ": "Hay una versión nueva de Pedila ({0}). ",
  "There's a new version: {0}.": "Hay una versión nueva: {0}.",
  "there's no new version": "no hay versión nueva",
@@ -818,5 +817,19 @@
  "🗄 See archived chats": "🗄 Ver chats archivados",
  "🗑 Delete…": "🗑 Borrar…",
  "🧠 Effort": "🧠 Esfuerzo",
- "🧠 Hermes's default": "🧠 el de Hermes"
+ "🧠 Hermes's default": "🧠 el de Hermes",
+ "There's a new quotas plugin: it also reads DeepSeek and Openference, and it shows each key's quota if an API has several.": "Hay un complemento de cuotas nuevo: también lee DeepSeek y Openference, y enseña la cuota de cada clave si una API tiene varias.",
+ "Balance you have left on DeepSeek": "Saldo que te queda en DeepSeek",
+ "CNY balance": "Saldo CNY",
+ "Granted: {0} · topped up: {1}": "Regalado: {0} · recargado: {1}",
+ "Not enough balance: DeepSeek doesn't answer until you top up (platform.deepseek.com).": "Sin saldo suficiente: DeepSeek no responde hasta que recargues (platform.deepseek.com).",
+ "Credit balance you have left on Openference": "Saldo de créditos que te queda en Openference",
+ "{0}-hour window": "Ventana de {0} h",
+ "Week (tokens)": "Semana (tokens)",
+ "Openference says that the account isn't active.": "Openference dice que la cuenta no está activa.",
+ "Without a plan or credits, only the free models answer. Openference limits them per day, but it only says so when the limit is reached.": "Sin plan ni créditos solo responden los modelos gratis. Openference los limita por día, pero solo lo dice al llegar al límite.",
+ "Free models ({0})": "Modelos gratis ({0})",
+ "{0}: free until {1}": "{0}: gratis hasta el {1}",
+ "This account, in all: {0} requests · {1} tokens": "Esta cuenta, en total: {0} peticiones · {1} tokens",
+ "until {0}": "hasta el {0}"
 }

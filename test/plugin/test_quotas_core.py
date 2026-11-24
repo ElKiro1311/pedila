@@ -581,6 +581,116 @@ class Build(unittest.TestCase):
 Build.usage_original = FakeClient.usage
 
 
+class NewProviders(unittest.TestCase):
+    """DeepSeek and Openference."""
+    ME = {"userId": 7, "status": "active", "planId": None, "email": "someone@example.com", "firstName": "Some", "apiKey": "sk-of-of-the-account",
+          "planExpiresAt": None, "usage": {"totalRequests": 8, "totalTokens": 25529, "totalCost": 0},
+          "credits": {"balanceUsd": 0, "totalPurchasedUsd": 0},
+          "plan": {"name": "Promo", "windowHours": None, "requestsPerWeek": None, "requestsPerWindow": None, "tokensPerWeek": None},
+          "limits": {"windowLimit": None, "windowRequests": 0, "weekTokens": 25009, "requestsPerWeek": None, "tokensPerWeek": None,
+                     "windowResetAt": None, "weeklyResetAt": None, "allowance": None}}
+    MODELS = {"data": [{"id": "Free-1", "is_free": True, "free_until": "2026-12-04"}, {"id": "Free-2", "is_free": True, "free_until": "soon"},
+                       {"id": "Paid"}, {"id": "Odd", "is_free": "yes"}, None, {"is_free": True}]}
+
+    def setUp(self):
+        core._free.update(at=0.0, failed_at=0.0, models=None)
+        self.calls = []
+
+    def client(self, routes):
+        def get(url, headers=None, timeout=None):
+            self.calls.append((url, dict(headers or {})))
+            r = routes.get(url, (404, {}))
+            if isinstance(r, Exception):
+                raise r
+            return _Resp(*r)
+        return types.SimpleNamespace(get=get)
+
+    def test_addresses(self):
+        for url, kind in (("https://api.deepseek.com", "deepseek"), ("https://api.deepseek.com/anthropic", "deepseek"), ("http://api.deepseek.com/v1", None),
+                          ("https://api.deepseek.com.evil.example/v1", None), ("https://api.openference.com/v1", "openference"),
+                          ("https://api.openference.com/", "openference"), ("https://openference.com.example", None)):
+            self.assertEqual(core.kind_of(url), kind, url)
+
+    def test_deepseek(self):
+        url = "https://api.deepseek.com/user/balance"
+        e = {"base": "https://api.deepseek.com/v1", "key": "sk-deepseek-key"}
+        body = {"is_available": False, "balance_infos": [{"currency": "USD", "total_balance": "0.00", "granted_balance": "0.00", "topped_up_balance": "0.00"},
+                                                         {"currency": "EUR", "total_balance": "1.50"}, {"currency": "CNY", "total_balance": "x"}, None]}
+        self.assertEqual(core.fetch_deepseek(self.client({url: (200, body)}), e), {"available": False, "balances": [
+            {"currency": "USD", "total": 0.0, "granted": 0.0, "topped_up": 0.0}, {"currency": "", "total": 1.5, "granted": None, "topped_up": None}]})
+        self.assertEqual(self.calls[0][1]["Authorization"], "Bearer sk-deepseek-key")
+        for bad in ((200, {}), (200, {"balance_infos": "x"}), (401, {}), (500, {})):
+            with self.assertRaises(core._Fail):
+                core.fetch_deepseek(self.client({url: bad}), e)
+
+    def test_openference_without_a_plan(self):
+        e = {"base": "https://api.openference.com/v1", "key": "sk-openference-key"}
+        out = core.fetch_openference(self.client({"https://api.openference.com/api/user/me": (200, self.ME), core.OPENFERENCE_MODELS_URL: (200, self.MODELS)}), e)
+        self.assertEqual(out, {"balance": 0.0, "credits_total": 0.0, "plan_name": "Promo", "subscribed": False, "expires_at": None, "active": True,
+                               "windows": [], "account_usage": {"requests": 8.0, "tokens": 25529.0, "cost": 0.0},
+                               "free_models": [{"model": "Free-1", "until": "2026-12-04"}, {"model": "Free-2", "until": None}]})
+        text = json.dumps(out)
+        for private in ("someone", "Some", "sk-", "userId"):
+            self.assertNotIn(private, text)
+        # The catalog is asked for WITHOUT the key, and remembered.
+        heads = dict(self.calls)
+        self.assertNotIn("Authorization", heads[core.OPENFERENCE_MODELS_URL])
+        self.assertEqual(heads["https://api.openference.com/api/user/me"]["Authorization"], "Bearer sk-openference-key")
+        self.calls.clear()
+        core.fetch_openference(self.client({"https://api.openference.com/api/user/me": (200, self.ME)}), e)
+        self.assertEqual([u for u, _h in self.calls], ["https://api.openference.com/api/user/me"])
+
+    def test_openference_without_the_catalog(self):
+        e = {"base": "https://api.openference.com/v1", "key": "sk-openference-key"}
+        for broken in ((500, {}), (200, ValueError("no json")), (200, []), OSError("down")):
+            core._free.update(at=0.0, failed_at=0.0, models=None)
+            out = core.fetch_openference(self.client({"https://api.openference.com/api/user/me": (200, self.ME), core.OPENFERENCE_MODELS_URL: broken}), e)
+            self.assertIsNone(out["free_models"])
+            self.assertEqual(out["balance"], 0.0)
+        for bad in ((401, {}), (200, {}), (200, {"plan": "x", "credits": 3})):
+            with self.assertRaises(core._Fail):
+                core.fetch_openference(self.client({"https://api.openference.com/api/user/me": bad}), e)
+
+    def test_openference_plans(self):
+        w = core.openference_windows
+        self.assertEqual(w({}), [])
+        self.assertEqual(w({"limits": "x", "plan": 3}), [])
+        # A token plan: percentages. The reset may come as a date or as a number, and 0 is "not known".
+        got = w({"plan": {"windowHours": None}, "limits": {"allowance": {"windowPercent": 34, "weeklyPercent": 148.2, "monthlyPercent": None,
+                 "windowResetAt": "2026-11-24T19:00:00.000Z", "weeklyResetAt": 1795960800000, "monthlyResetAt": 0}}})
+        self.assertEqual([(x["id"], x["percent"], x["hours"], x["limit"]) for x in got], [("rolling", 34.0, 5, None), ("weekly", 100.0, None, None)])
+        self.assertEqual(got[0]["resets_at"], "2026-11-24T19:00:00+00:00")
+        self.assertEqual(got[1]["resets_at"], datetime.fromtimestamp(1795960800, UTC).isoformat())
+        # One of the old request plans: count against limit.
+        got = w({"plan": {"windowHours": 4, "requestsPerWeek": 1000}, "limits": {"windowLimit": 200, "windowQuotaUsed": 50, "windowRequests": 9,
+                 "weekQuotaUsed": None, "weekRequests": 10, "weekTokens": 5, "tokensPerWeek": 0, "windowResetAt": 0}})
+        self.assertEqual(got, [{"id": "rolling", "percent": 25.0, "resets_at": None, "hours": 4.0, "used": 50.0, "limit": 200.0, "unit": "requests"},
+                               {"id": "weekly", "percent": 1.0, "resets_at": None, "hours": None, "used": 10.0, "limit": 1000.0, "unit": "requests"}])
+
+    def test_the_whole_answer(self):
+        try:
+            import httpx
+        except ImportError:
+            self.skipTest("without httpx (tested with the Python of Hermes)")
+        routes = {"https://api.deepseek.com/user/balance": (200, {"is_available": True, "balance_infos": [{"currency": "USD", "total_balance": "4.20"}]}),
+                  "https://api.openference.com/api/user/me": (200, self.ME), core.OPENFERENCE_MODELS_URL: (200, self.MODELS)}
+        fake = self.client(routes)
+        keys = {"deepseek": "sk-deepseek-secret", "openference": "sk-openference-secret"}
+        cfg = {"providers": {"openference": {"api": "https://api.openference.com/v1", "key_env": "X"}}}
+        with mock.patch.object(httpx, "Client", lambda *a, **k: mock.MagicMock(__enter__=lambda s: fake, __exit__=lambda *x: False)), \
+                mock.patch.object(core, "usage_rows", lambda since: [row("deepseek-flash", kind="deepseek", inp=5, out=5)]), mock.patch.object(core, "_config", lambda: cfg):
+            body = core.build(runtime=lambda name, *a: {"api_key": keys[name]} if name in keys else None)
+        self.assertEqual([(p["kind"], p["name"], p["ok"]) for p in body["providers"]], [("deepseek", "DeepSeek", True), ("openference", "Openference", True)])
+        self.assertIsNotNone(body["providers"][0]["spent"])
+        for k in keys.values():
+            self.assertNotIn(k, json.dumps(body))
+
+    def test_a_name_of_hermes_at_another_api(self):
+        cfg = {"providers": {"deepseek": {"base_url": "https://api.openference.com/v1", "key_env": "X"}}}
+        [e] = core.detect(lambda name, url, b: {"api_key": "sk-the-key", "base_url": "https://api.openference.com/v1"} if name == "deepseek" else None, cfg, NOW)
+        self.assertEqual((e["kind"], e["base"]), ("openference", "https://api.openference.com/v1"))
+
+
 class Keys(unittest.TestCase):
     """Which keys Hermes has for a provider, and what each account is called."""
 
@@ -693,16 +803,17 @@ class Keys(unittest.TestCase):
 
     def test_which_providers_are_asked_for(self):
         asked = lambda cfg: [(n, u, b) for n, u, _m, b in core._candidates(cfg)]  # noqa: E731
-        own = [("openrouter", "https://openrouter.ai/api/v1", True), ("opencode-go", GO_URL, True), ("opencode-zen", "https://opencode.ai/zen/v1", True)]
+        own = [("openrouter", "https://openrouter.ai/api/v1", True), ("opencode-go", GO_URL, True), ("opencode-zen", "https://opencode.ai/zen/v1", True),
+               ("deepseek", "https://api.deepseek.com/v1", True)]
         self.assertEqual(asked({}), own)
         self.assertEqual(asked({"providers": "garbage", "custom_providers": 3}), own)
         # Turned off in config.yaml: it isn't asked for, even if it's one of Hermes's own.
         self.assertEqual(asked({"providers": {"OpenCode-Go": {"enabled": False}, "venice": {"api": "https://api.venice.ai/api/v1", "enabled": "no"}},
-                                "custom_providers": [{"name": "or2", "base_url": "https://openrouter.ai/api/v1", "enabled": 0}]}), [own[0], own[2]])
+                                "custom_providers": [{"name": "or2", "base_url": "https://openrouter.ai/api/v1", "enabled": 0}]}), [own[0], own[2], own[3]])
         # One of Hermes's own that config.yaml redefines, and one of its names at another API.
         got = asked({"providers": {"openrouter": {"base_url": "https://openrouter.ai/api/v1", "key_env": "MINE"}, "deepseek": {"base_url": "https://openrouter.ai/api/v1"},
                                    "local": {"base_url": "http://192.168.1.50:8080/v1"}}})
-        self.assertEqual(got, [("openrouter", "https://openrouter.ai/api/v1", False), *own[1:], ("deepseek", "https://openrouter.ai/api/v1", False)])
+        self.assertEqual(got, [("openrouter", "https://openrouter.ai/api/v1", False), *own[1:3], ("deepseek", "https://openrouter.ai/api/v1", False)])
 
 
 class Shell(unittest.TestCase):

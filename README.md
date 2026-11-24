@@ -33,10 +33,12 @@ That is what this app wants to be: the sandals that carry your messages to Herme
   - **This PC** uses the same Hermes as Hermes Desktop, with the same chats. It only shows up if Hermes is installed on the PC.
   - **Server** is a Hermes on another machine (`hermes dashboard` with a username and password). It only shows up once you set its address in Settings → Server.
   - With a single Hermes there is no switch: that one is used.
-- **Your APIs' quotas:** if your Hermes uses OpenRouter, Venice or OpenCode, the panel shows what is left of each one:
+- **Your APIs' quotas:** if your Hermes uses OpenRouter, Venice, OpenCode, DeepSeek or Openference, the panel shows what is left of each one:
   - **OpenRouter:** credit balance; the key's limit, when it resets and what was spent today, this week and this month.
   - **Venice:** USD balance, plan credits and DIEM; when the DIEM resets; limits per model.
   - **OpenCode Go:** % used of the 5-hour, weekly and monthly windows (with a decimal when it can be worked out), and when they reset. OpenCode doesn't publish **OpenCode Zen**'s balance.
+  - **DeepSeek:** the balance left, and a notice when it isn't enough to use the API.
+  - **Openference:** credit balance and plan; with a paid plan, % used of its windows and when they reset; which models are free and until when.
   - If you gave Hermes **several keys for the same API** (`hermes auth add`), each one is a quota of its own, with its label: which one is in use, which ones are in reserve and which ones are resting until their limit resets.
   - For each one, what Hermes has spent in 24 hours, 7 days and 30 days.
   - A small Pedila plugin reads it inside Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): your keys never leave Hermes, only numbers come out. It is installed with the panel's "Turn on quotas" button, without restarting Hermes, and updated from there too (going from a version before 1.2.0, Hermes has to restart once). APIs you don't have don't show up.
@@ -70,7 +72,7 @@ That is what this app wants to be: the sandals that carry your messages to Herme
   - **Hermes versions:** Pedila checks every 6 hours whether there's a new one (the "Connections" card and Settings → About say so). This PC's Hermes, if it's an installation Hermes knows how to update (the official installer's), updates itself with its own `hermes update` command after 10 minutes unused: no chats working or active. A Hermes in Docker (a server) can't update itself: Pedila gives notice, and it's updated from its server;
   - Pedila, the pet, who reacts to what Hermes does; if you prefer another one, there are more than 5,000 to choose from on [Petdex](https://petdex.dev).
 - **Your own layout** (Settings → Layout): sort and hide the tabs (This PC/Server), choose which panel cards show and in what order, hide the buttons you don't use and put the chat list on the right if you like. The tabs and the cards can also be dragged right where they are.
-- **Quotas with the same design for all:** every provider (OpenRouter, Venice and OpenCode) looks the same: what's left, big, and below it each measure with its bar and when it resets. For balances without a total (Venice), the bar counts what was spent since the highest balance Pedila has seen.
+- **Quotas with the same design for all:** every provider (OpenRouter, Venice, OpenCode, DeepSeek and Openference) looks the same: what's left, big, and below it each measure with its bar and when it resets. For balances without a total (Venice, DeepSeek, and Openference if no credits were bought), the bar counts what was spent since the highest balance Pedila has seen.
 - **Themes:** six, each in dark and light mode, with a preview in Settings → Appearance:
   - **Messenger** (the default): ink, grays and gold, like Pedila;
   - **Classic**: cool grays and violet, from the first versions;

@@ -29,11 +29,11 @@ const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 // The Hermes plugin that reads the quotas (the hermes-plugin/pedila folder of this repository).
 const QUOTA_PLUGIN = 'pedila'
 const QUOTA_PLUGIN_SOURCE = 'ElKiro1311/pedila/hermes-plugin/pedila'
-const QUOTA_KINDS = ['openrouter', 'venice', 'opencode-go', 'opencode-zen']
-// The plugin version this Pedila knows how to show in full (1.2.0: every key of a provider, and OpenCode Go
-// with decimals). With an earlier one, updating it is offered. From 1.2.0 on its calculation reloads by itself
+const QUOTA_KINDS = ['openrouter', 'venice', 'opencode-go', 'opencode-zen', 'deepseek', 'openference']
+// The plugin version this Pedila knows how to show in full (1.3.0: DeepSeek and Openference; 1.2.0: every key of
+// a provider, and OpenCode Go with decimals). With an earlier one, updating it is offered. From 1.2.0 on its calculation reloads by itself
 // (without restarting Hermes).
-const QUOTA_PLUGIN_WANT = '1.2.0'
+const QUOTA_PLUGIN_WANT = '1.3.0'
 const QUOTA_PLANS = ['go', 'go-teams', 'go-plus']
 const INSTALL_TIMEOUT = 180000
 
@@ -45,8 +45,18 @@ function paidKindOf(u) {
     if (h === 'openrouter.ai' || h.endsWith('.openrouter.ai')) { return 'openrouter' }
     if (h === 'api.venice.ai' || h.endsWith('.venice.ai')) { return 'venice' }
     if (h === 'opencode.ai' || h.endsWith('.opencode.ai')) { return p.pathname.toLowerCase().includes('/go') ? 'opencode-go' : 'opencode-zen' }
+    if (h === 'api.deepseek.com') { return 'deepseek' }
+    if (h === 'api.openference.com') { return 'openference' }
   } catch {}
   return null
+}
+
+/** Hermes gives its own providers without an address: they're known by their name. */
+function paidKindOfProvider(pv) {
+  const url = pv.api_url || pv.base_url
+  if (url) { return paidKindOf(url) }
+  const slug = str(pv.slug).toLowerCase()
+  return pv.authenticated !== false && pv.is_user_defined !== true && ['openrouter', 'opencode-go', 'opencode-zen', 'deepseek'].includes(slug) ? slug : null
 }
 
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -94,6 +104,25 @@ function quotaData(j) {
       o.plan = QUOTA_PLANS.includes(p.plan) ? p.plan : null
       o.unpriced = (Array.isArray(p.unpriced) ? p.unpriced : []).filter(x => typeof x === 'string' && x).slice(0, 8).map(x => cut(x, 80))
       o.catalog = typeof p.catalog === 'boolean' ? p.catalog : null
+    } else if (p.kind === 'deepseek') {
+      o.balances = (Array.isArray(p.balances) ? p.balances : []).filter(b => b && num(b.total) !== null).slice(0, 4)
+        .map(b => ({ currency: ['USD', 'CNY'].includes(b.currency) ? b.currency : '', total: num(b.total), granted: num(b.granted), toppedUp: num(b.topped_up) }))
+      o.available = typeof p.available === 'boolean' ? p.available : null
+    } else if (p.kind === 'openference') {
+      const count = v => (num(v) === null ? null : Math.max(0, num(v)))
+      const au = p.account_usage && typeof p.account_usage === 'object' ? p.account_usage : {}
+      Object.assign(o, {
+        balance: num(p.balance), creditsTotal: num(p.credits_total), planName: cut(str(p.plan_name), 30),
+        subscribed: p.subscribed === true, expiresAt: isoOf(p.expires_at), active: typeof p.active === 'boolean' ? p.active : null,
+        windows: (Array.isArray(p.windows) ? p.windows : []).filter(w => w && num(w.percent) !== null).slice(0, 4)
+          .map(w => ({
+            id: cut(str(w.id), 20), percent: Math.max(0, Math.min(100, num(w.percent))), resetsAt: isoOf(w.resets_at), hours: num(w.hours),
+            used: count(w.used), limit: count(w.limit), unit: w.unit === 'tokens' ? 'tokens' : 'requests'
+          })),
+        usage: { requests: count(au.requests), tokens: count(au.tokens), cost: count(au.cost) },
+        freeModels: (Array.isArray(p.free_models) ? p.free_models : []).filter(m => m && typeof m.model === 'string' && m.model).slice(0, 12)
+          .map(m => ({ model: cut(m.model, 80), until: /^\d{4}-\d{2}-\d{2}$/.test(str(m.until)) ? isoOf(m.until) : null }))
+      })
     }
     return o
   })
@@ -988,7 +1017,7 @@ class Connection extends EventEmitter {
   }
 
   /**
-   * What's left of this Hermes's paid APIs (OpenRouter, Venice, OpenCode), read by the "pedila" plugin that
+   * What's left of this Hermes's paid APIs (OpenRouter, Venice, OpenCode, DeepSeek, Openference), read by the "pedila" plugin that
    * runs inside Hermes: the keys don't leave it, only numbers arrive.
    * { state: 'ok', data } · { state: 'missing' } if the plugin isn't there (or isn't turned on).
    */
@@ -1095,7 +1124,7 @@ class Connection extends EventEmitter {
       id: str(pv.slug || pv.id || pv.provider || pv.name),
       name: str(pv.name || pv.label || pv.slug || pv.id),
       local: isLocalUrl(pv.api_url || pv.base_url),
-      paid: paidKindOf(pv.api_url || pv.base_url),
+      paid: paidKindOfProvider(pv),
       models: (Array.isArray(pv.models) ? pv.models : []).map(m => (typeof m === 'string' ? { id: m, name: m } : { id: str(m.id || m.model || m.name), name: str(m.name || m.label || m.id || m.model) })).filter(m => m.id)
     })).filter(pv => pv.id && pv.models.length)
     const curProvider = str(r && r.provider)
@@ -1269,4 +1298,4 @@ class Connection extends EventEmitter {
   }
 }
 
-module.exports = { quotaData, quotaPluginOutdated, QUOTA_PLUGIN_WANT, paidKindOf, Connection, normalizeTranscript, sessionRow, argsSummary, boundInput, hermesToolOutput, hermesFailed, splitCompaction, contentImages, isLocalUrl, todoSnapshot, todoStateOf, isTodoCall }
+module.exports = { quotaData, quotaPluginOutdated, QUOTA_PLUGIN_WANT, paidKindOf, paidKindOfProvider, Connection, normalizeTranscript, sessionRow, argsSummary, boundInput, hermesToolOutput, hermesFailed, splitCompaction, contentImages, isLocalUrl, todoSnapshot, todoStateOf, isTodoCall }

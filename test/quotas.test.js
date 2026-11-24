@@ -4,7 +4,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
-const { quotaData, quotaPluginOutdated, QUOTA_PLUGIN_WANT, paidKindOf, Connection } = require('../src/main/connection')
+const { quotaData, quotaPluginOutdated, QUOTA_PLUGIN_WANT, paidKindOf, paidKindOfProvider, Connection } = require('../src/main/connection')
 const { newer } = require('../src/main/extras')
 
 test('quotas: which paid API each address is', () => {
@@ -14,6 +14,11 @@ test('quotas: which paid API each address is', () => {
   assert.equal(paidKindOf('https://opencode.ai/zen/v1'), 'opencode-zen')
   assert.equal(paidKindOf('http://192.168.1.50:8181/v1'), null)
   assert.equal(paidKindOf('https://openrouter.ai.evil.example/v1'), null)
+  assert.equal(paidKindOf('https://api.deepseek.com/v1'), 'deepseek')
+  assert.equal(paidKindOf('https://api.deepseek.com/anthropic'), 'deepseek')
+  assert.equal(paidKindOf('https://api.openference.com/v1'), 'openference')
+  assert.equal(paidKindOf('https://api.deepseek.com.evil.example/v1'), null)
+  assert.equal(paidKindOf('https://notapi.openference.com.example/v1'), null)
   assert.equal(paidKindOf(''), null)
 })
 
@@ -37,6 +42,41 @@ test('quotas: the real answer of OpenRouter and Venice (its shape on 2026-11-18)
   assert.equal(ve.nextEpoch, '2026-11-19T00:00:00+00:00')
   assert.equal(ve.spent.week.tokens, 9458288)
   assert.deepEqual(ve.modelLimits, [{ model: 'deepseek-v4-1-flash-uncensored', rpm: 1000, rpd: null, tpm: 30000000 }])
+})
+
+test("quotas: Hermes's own providers, which come without an address", () => {
+  assert.equal(paidKindOfProvider({ slug: 'deepseek', is_user_defined: false }), 'deepseek')
+  assert.equal(paidKindOfProvider({ slug: 'OpenRouter' }), 'openrouter')
+  assert.equal(paidKindOfProvider({ slug: 'deepseek', authenticated: false }), null)
+  assert.equal(paidKindOfProvider({ slug: 'deepseek', is_user_defined: true }), null)
+  assert.equal(paidKindOfProvider({ slug: 'deepseek', api_url: 'https://proxy.example/v1' }), null)
+  assert.equal(paidKindOfProvider({ slug: 'mine', api_url: 'https://api.openference.com/v1' }), 'openference')
+  assert.equal(paidKindOfProvider({ slug: 'tower' }), null)
+  assert.equal(paidKindOfProvider({}), null)
+})
+
+test('quotas: DeepSeek and Openference (their shape on 2026-11-24)', () => {
+  const free = { kind: 'openference', name: 'Openference', ok: true, balance: 0, credits_total: 0, plan_name: 'Promo', subscribed: false, expires_at: null, active: true, windows: [], account_usage: { requests: 8, tokens: 25529, cost: 0 }, free_models: [{ model: 'GLM-5.3-Flash-Free', until: '2026-12-04' }, { model: 'Other', until: 'soon' }, { model: 'Odd', until: '2026-13-45' }, null, { until: '2026-12-04' }], email: 'x@example.com', apiKey: 'sk-something' }
+  const d = quotaData({ plugin: 'pedila', version: '1.3.0', providers: [
+    { kind: 'deepseek', name: 'DeepSeek', ok: true, balances: [{ currency: 'USD', total: 4.2, granted: 0, topped_up: 4.2 }, { currency: 'EUR', total: 1 }, { currency: 'CNY', total: 'x' }, null], available: true },
+    free,
+    { kind: 'openference', ok: true, balance: 3, credits_total: 10, plan_name: 'Minion', subscribed: true, expires_at: '2026-12-24T00:00:00Z', active: true, windows: [{ id: 'rolling', percent: 140, resets_at: '2026-11-24T19:00:00Z', hours: 5, used: null, limit: null, unit: '' }, { id: 'weekly', percent: 12.5, resets_at: 'x', used: 100, limit: 800, unit: 'requests' }, { id: 'monthly', percent: 'x' }] },
+    { kind: 'deepseek', ok: true, balances: 'garbage', available: 'no' },
+    { kind: 'openference', ok: false, error: "the key isn't valid or isn't allowed to see this", windows: 3, free_models: {}, account_usage: 'x' }
+  ] })
+  const [ds, of, paid, bad, off] = d.providers
+  assert.deepEqual(ds.balances, [{ currency: 'USD', total: 4.2, granted: 0, toppedUp: 4.2 }, { currency: '', total: 1, granted: null, toppedUp: null }])
+  assert.equal(ds.available, true)
+  assert.deepEqual([of.balance, of.planName, of.subscribed, of.active, of.windows.length], [0, 'Promo', false, true, 0])
+  assert.deepEqual(of.usage, { requests: 8, tokens: 25529, cost: 0 })
+  assert.deepEqual(of.freeModels, [{ model: 'GLM-5.3-Flash-Free', until: '2026-12-04' }, { model: 'Other', until: null }, { model: 'Odd', until: null }])
+  assert.ok(!JSON.stringify(of).includes('example.com') && !JSON.stringify(of).includes('sk-'))
+  assert.deepEqual(paid.windows, [
+    { id: 'rolling', percent: 100, resetsAt: '2026-11-24T19:00:00Z', hours: 5, used: null, limit: null, unit: 'requests' },
+    { id: 'weekly', percent: 12.5, resetsAt: null, hours: null, used: 100, limit: 800, unit: 'requests' }])
+  assert.equal(paid.expiresAt, '2026-12-24T00:00:00Z')
+  assert.deepEqual([bad.balances, bad.available], [[], null])
+  assert.deepEqual([off.ok, off.windows, off.freeModels, off.usage], [false, [], [], { requests: null, tokens: null, cost: null }])
 })
 
 test('quotas: OpenCode Go, errors and garbage', () => {
@@ -123,8 +163,9 @@ test('quotas: does the plugin have to be updated?', () => {
   assert.equal(quotaPluginOutdated(''), true)
   assert.equal(quotaPluginOutdated(undefined), true)
   assert.equal(quotaPluginOutdated('1.1.0'), true)
-  assert.equal(quotaPluginOutdated('1.2.0'), false)
-  assert.equal(quotaPluginOutdated('1.2.1'), false)
+  assert.equal(quotaPluginOutdated('1.2.0'), true)
+  assert.equal(quotaPluginOutdated('1.3.0'), false)
+  assert.equal(quotaPluginOutdated('1.3.1'), false)
   assert.equal(quotaPluginOutdated('2.0.0'), false)
 })
 
@@ -228,12 +269,12 @@ test("quotas: a plugin updated on disk but not loaded yet isn't offered again", 
   const Q = 'GET /api/plugins/pedila/cuotas'
   const D = 'GET plugins'
   const ask = async routes => { const h = fakeHermes(routes); const r = await h.c.quotas(); return [r.outdated, r.onDisk, r.restart, h.calls.length] }
-  assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.2.0') }), [true, '1.2.0', true, 2])
+  assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.3.0') }), [true, '1.3.0', true, 2])
   assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.0.1') }), [true, '1.0.1', false, 2])
   // Not being able to know is taken as "not updated"; up to date, it isn't even asked.
   assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: { status: 401 } }), [true, '', false, 2])
   assert.deepEqual(await ask({ [Q]: answer('1.0.0') }), [true, '', false, 2])
-  assert.deepEqual(await ask({ [Q]: answer('1.2.0') }), [false, '', false, 1])
+  assert.deepEqual(await ask({ [Q]: answer('1.3.0') }), [false, '', false, 1])
   // Up to date in what reloads by itself, but with the fixed part from before.
   assert.deepEqual(await ask({ [Q]: answer('1.3.0', { shell: '1.2.0', shell_stale: true }) }), [false, '', true, 1])
 })

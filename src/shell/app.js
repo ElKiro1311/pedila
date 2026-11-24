@@ -2299,12 +2299,12 @@ function panelModelsCard() {
     }))
 }
 
-// ── Quotas of the paid APIs (OpenRouter, Venice, OpenCode) ──────────────────────────────────
+// ── Quotas of the paid APIs (OpenRouter, Venice, OpenCode, DeepSeek, Openference) ──────────────────────────────────
 // The "pedila" plugin reads them inside Hermes (the keys don't leave it). The card only appears if that
 // Hermes has one of those APIs: with the plugin, the ones that have a key; without it, a button to turn it
 // on if Hermes has any set. If not, nothing shows.
 const Q = { data: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, again: { local: false, server: false }, gen: { local: 0, server: 0 }, err: { local: '', server: '' }, login: { local: false, server: false }, note: { local: '', server: '' }, busy: { local: '', server: '' }, ask: { local: null, server: null }, installed: { local: false, server: false }, updated: { local: false, server: false }, updNote: { local: '', server: '' }, updAsk: { local: null, server: null }, restarted: { local: false, server: false }, host: { local: 0, server: 0 } }
-const QUOTA_NAMES = { openrouter: 'OpenRouter', venice: 'Venice', 'opencode-go': 'OpenCode Go', 'opencode-zen': 'OpenCode Zen' }
+const QUOTA_NAMES = { openrouter: 'OpenRouter', venice: 'Venice', 'opencode-go': 'OpenCode Go', 'opencode-zen': 'OpenCode Zen', deepseek: 'DeepSeek', openference: 'Openference' }
 const RESET_NAMES = { daily: tr('daily'), weekly: tr('weekly'), monthly: tr('monthly') }
 const PLAN_NAMES = { go: 'Go', 'go-plus': 'Go Plus', 'go-teams': 'Go Teams' }
 
@@ -2541,7 +2541,13 @@ function observedUse(key, value, epoch = '') {
   const spent = Math.max(0, r.max - value)
   return { pct: r.max > 0 ? spent / r.max * 100 : 0, spent, max: r.max, since: r.since }
 }
-const sinceText = (o, fmt) => (o.spent > 0 ? tr('spent {0} of {1} since {2}', fmt(o.spent), fmt(o.max), clock(o.since)) : tr('nothing spent since {0}', clock(o.since)))
+const sinceText = (o, fmt) => (o.max <= 0 ? '' : o.spent > 0 ? tr('spent {0} of {1} since {2}', fmt(o.spent), fmt(o.max), clock(o.since)) : tr('nothing spent since {0}', clock(o.since)))
+/** A balance in its currency (DeepSeek bills in dollars or in yuan). */
+const money = (n, currency) => (currency === 'CNY' ? usd(n).replace('$', '¥') : usd(n))
+/** The last day of something ("2026-12-04", in UTC): "Dec 4", or "Dec 4, 2027" if it isn't this year. */
+const lastDay = (iso, now = Date.now()) => new Intl.DateTimeFormat(locale(), { day: 'numeric', month: 'short', timeZone: 'UTC', ...(Number(iso.slice(0, 4)) === new Date(now).getUTCFullYear() ? {} : { year: 'numeric' }) }).format(new Date(iso + 'T00:00:00Z')).replace(/\./g, '')
+/** Where Pedila remembers the highest balance of an account (see observedUse). */
+const peakKey = (p, conn) => `${conn}:${p.kind}:${p.name && p.name !== QUOTA_NAMES[p.kind] ? p.name + ':' : ''}`
 const diemFmt = n => `${(n || 0).toLocaleString(locale(), { maximumFractionDigits: 2 })} DIEM`
 
 function quotaBlock(p, conn = S.active) {
@@ -2568,7 +2574,7 @@ function quotaBlock(p, conn = S.active) {
   } else if (p.kind === 'venice') {
     big(usd((p.usd || 0) + (p.bundled || 0)), tr('USD balance + credits included in your plan'))
     const epoch = p.nextEpoch ? Date.parse(p.nextEpoch) : NaN
-    const k = `${conn}:venice:${p.name && p.name !== QUOTA_NAMES.venice ? p.name + ':' : ''}`
+    const k = peakKey(p, conn)
     if (p.bundled !== null && p.bundled !== undefined) {
       const o = observedUse(k + 'bundled', p.bundled)
       rows.push(quotaMetric({ label: tr('Plan credits'), value: usd(p.bundled), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '', title: tr('The bar counts what was spent since the highest balance Pedila has seen (it starts over when you top up)') }))
@@ -2617,6 +2623,44 @@ function quotaBlock(p, conn = S.active) {
     if (p.catalog === false) { line(tr("Couldn't read OpenCode's prices: the whole numbers its API gives are shown.")) }
   } else if (p.kind === 'opencode-zen') {
     line(tr("OpenCode doesn't publish Zen's balance (check it on opencode.ai). What Hermes has spent with it is shown here."))
+  } else if (p.kind === 'deepseek') {
+    big(p.balances.map(b => money(b.total, b.currency)).join(' + ') || '—', tr('Balance you have left on DeepSeek'))
+    for (const b of p.balances) {
+      const fmt = n => money(n, b.currency)
+      const o = observedUse(peakKey(p, conn) + (b.currency || 'balance').toLowerCase(), b.total)
+      rows.push(quotaMetric({ label: b.currency === 'CNY' ? tr('CNY balance') : tr('USD balance'), value: fmt(b.total), pct: o ? o.pct : null, note: o ? sinceText(o, fmt) : '', warn: p.available === false, title: tr('The bar counts what was spent since the highest balance Pedila has seen (it starts over when you top up)') }))
+      if (b.granted > 0) { line(tr('Granted: {0} · topped up: {1}', fmt(b.granted), fmt(b.toppedUp))) }
+    }
+    if (p.available === false) { line(tr("Not enough balance: DeepSeek doesn't answer until you top up (platform.deepseek.com)."), 'warn') }
+  } else if (p.kind === 'openference') {
+    const pctOf = w => Math.floor(w.percent)
+    if (p.windows.length) {
+      const most = p.windows.reduce((a, b) => (b.percent > a.percent ? b : a))
+      big(tr('{0}%', 100 - pctOf(most)), tr("What's left of the most used window"))
+    } else {
+      big(usd(p.balance), tr('Credit balance you have left on Openference'))
+    }
+    const label = { rolling: w => (w.hours && w.hours !== 5 ? tr('{0}-hour window', w.hours) : tr('5-hour window')), weekly: () => tr('Week'), 'weekly-tokens': () => tr('Week (tokens)'), monthly: () => tr('Month') }
+    for (const w of p.windows) {
+      const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN
+      const count = w.limit ? tr('{0} of {1}', kfmt(w.used || 0), kfmt(w.limit)) + (w.unit === 'tokens' ? ' tokens' : '') : ''
+      rows.push(quotaMetric({ label: label[w.id] ? label[w.id](w) : w.id, value: tr('{0}% used', pctOf(w)), pct: w.percent, note: [Number.isFinite(at) ? resetText(at, now) : '', count].filter(Boolean).join(' · ') }))
+    }
+    if (p.balance !== null) {
+      const bought = p.creditsTotal > 0 && p.balance <= p.creditsTotal
+      const o = bought ? null : observedUse(peakKey(p, conn) + 'credits', p.balance)
+      rows.push(bought
+        ? quotaMetric({ label: tr('Credits'), value: tr('{0} of {1}', usd(p.balance), usd(p.creditsTotal)), pct: (p.creditsTotal - p.balance) / p.creditsTotal * 100, note: tr('spent {0} of what was bought', usd(p.creditsTotal - p.balance)) })
+        : quotaMetric({ label: tr('Credits'), value: usd(p.balance), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '' }))
+    }
+    if (p.planName) { line(`Plan: ${p.planName}` + (p.subscribed && p.expiresAt ? ' · ' + tr('until {0}', full(Date.parse(p.expiresAt))) : '')) }
+    if (p.active === false) { line(tr("Openference says that the account isn't active."), 'warn') }
+    if (!p.subscribed && p.balance !== null && p.balance <= 0) { line(tr('Without a plan or credits, only the free models answer. Openference limits them per day, but it only says so when the limit is reached.')) }
+    if (p.freeModels.length) {
+      rows.push(el('details', { class: 'q-more' }, el('summary', { text: tr('Free models ({0})', p.freeModels.length) }),
+        ...p.freeModels.map(m => el('div', { class: 'q-line muted', title: m.model, text: m.until ? tr('{0}: free until {1}', modelName(m.model), lastDay(m.until)) : modelName(m.model) }))))
+    }
+    if (p.usage.requests) { line(tr('This account, in all: {0} requests · {1} tokens', kfmt(p.usage.requests), kfmt(p.usage.tokens || 0)) + (p.usage.cost > 0 ? ' · ' + usd(p.usage.cost) : '')) }
   }
   if (p.account && p.account.hidden) { line(tr("{0} more keys of this API aren't shown.", p.account.hidden)) }
   return el('div', { class: 'q-prov' }, head, ...rows, p.spent ? spentLine(p.spent) : spentLine(p.spentAll, true))
@@ -2672,7 +2716,8 @@ function panelQuotasCard() {
     return el('section', { class: 'sp-card' }, ...parts)
   }
   const provs = q.data && Array.isArray(q.data.providers) ? q.data.providers : []
-  if (!provs.length) { return null }
+  // An old plugin doesn't know some of the APIs this Hermes has: then the card is only there to offer the new one.
+  if (!provs.length && !(Array.isArray(q.paid) && q.paid.length && pluginNotice(q, { updated: Q.updated[conn], ask: Q.updAsk[conn] }))) { return null }
   const at = q.data.fetchedAt ? Date.parse(q.data.fetchedAt) : NaN
   return el('section', { class: 'sp-card' },
     el('h4', {}, el('span', { class: 'grow', text: title }),
@@ -2697,7 +2742,7 @@ function quotaUpdateRow(conn, q) {
       el('div', { class: 'q-actions' }, el('button', { class: 'btn-primary', text: busy === 'restarting' ? tr('Restarting Hermes…') : tr('Restart Hermes now'), disabled: Boolean(busy), onclick: () => restartForQuotas(conn) })))
   }
   if (notice === 'ask') { return scanQuestion(conn, ask, () => updateQuotas(conn, true), () => { Q.updAsk[conn] = null }) }
-  const parts = [el('p', { class: 'small', text: tr("There's a new quotas plugin: if an API has several keys in Hermes, it shows each one's quota.") })]
+  const parts = [el('p', { class: 'small', text: tr("There's a new quotas plugin: it also reads DeepSeek and Openference, and it shows each key's quota if an API has several.") })]
   // When loading a plugin, a Hermes with username and password and no fixed "secret" closes its web
   // sessions.
   if (conn === 'server') { parts.push(el('p', { class: 'muted small', text: tr("Careful: when it changes it, the server's Hermes may close its web sessions (Pedila's too) and you'll have to sign in again once.") })) }
