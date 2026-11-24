@@ -2,7 +2,8 @@
 import { Pet, loadSheet } from './pet.js'
 import { describeTool, groupSummary, failedText } from './tools.mjs'
 import { tr, setLang, getLang, locale, translateDom } from './i18n.mjs'
-import { kfmt, setHour12, hhmm, full, clock, dayLabel, span, ago, tokensOf, modelName, tasksLine, usd, nextUtcReset, dayAhead } from './fmt.mjs'
+import { keyState, pluginNotice } from './quotas.mjs'
+import { kfmt, setHour12, hhmm, full, clock, dayLabel, span, ago, tokensOf, modelName, tasksLine, usd, nextUtcReset, dayAhead, pct1, trunc1 } from './fmt.mjs'
 
 const demo = new URLSearchParams(location.search).get('demo') === '1'
 const api = demo ? (await import('./demo.js')).demoApi : window.hp
@@ -263,10 +264,13 @@ function renderConnSwitch() {
   }
 }
 
+/** Hermes closes for a few seconds so as to load a new plugin (the connection's state is the one of updating). */
+const restarting = st => st.state === 'updating' && st.detail === 'restarting'
+const stateText = st => (restarting(st) ? tr('restarting Hermes…') : CONN_STATES[st.state] || st.state)
+
 function connLabel(c) {
   const st = S.conns[c]
-  const what = CONN_STATES[st.state] || st.state
-  return `${CONN_NAMES[c]}: ${what}${st.detail && st.state !== 'ready' ? ' — ' + st.detail : ''}`
+  return `${CONN_NAMES[c]}: ${stateText(st)}${st.detail && st.state !== 'ready' && !restarting(st) ? ' — ' + st.detail : ''}`
 }
 
 function renderBanner() {
@@ -290,6 +294,9 @@ function renderBanner() {
     b.className = st.state
     b.append(el('div', { class: 'grow' }, el('strong', { text: tr('Not connected to {0}. ', CONN_NAMES[S.active]) }), el('span', { class: 'muted', text: st.detail || '' })),
       el('button', { class: 'btn-ghost', text: tr('Try again'), onclick: () => call(api.retry, S.active).catch(() => {}) }))
+  } else if (restarting(st)) {
+    b.className = 'login'
+    b.append(el('div', { class: 'grow' }, el('strong', { text: tr("Restarting this PC's Hermes. ") }), el('span', { class: 'muted', text: tr("It takes a few seconds; Pedila reconnects by itself when it's done.") })))
   } else if (st.state === 'updating') {
     b.className = 'login'
     b.append(el('div', { class: 'grow' }, el('strong', { text: tr("Updating this PC's Hermes") + (st.detail ? ` (${st.detail})` : '') + '. ' }), el('span', { class: 'muted', text: tr("It takes a few minutes; Pedila reconnects by itself when it's done.") })))
@@ -846,7 +853,7 @@ async function onSendClick() {
   const conn = S.current.conn
   // While Hermes updates, the message wouldn't arrive: it stays in the box.
   if (S.conns[conn] && S.conns[conn].state === 'updating') {
-    showToastLine(tr('Hermes is updating: your message is still here; send it once it reconnects.'))
+    showToastLine(restarting(S.conns[conn]) ? tr('Hermes is restarting: your message is still here; send it once it reconnects.') : tr('Hermes is updating: your message is still here; send it once it reconnects.'))
     return
   }
   closeSnippets()
@@ -1660,7 +1667,7 @@ async function saveSetting(patch) {
     const before = JSON.stringify(S.settings && S.settings.server ? S.settings.server.urls : [])
     S.settings = await call(api.settings, patch)
     // Another server address = maybe another Hermes: its quotas are asked for again.
-    if (JSON.stringify(S.settings.server.urls) !== before) { forgetQuotas('server') }
+    if (JSON.stringify(S.settings.server.urls) !== before) { forgetQuotas('server', true) }
     if (S.settings.lang && S.settings.lang !== getLang()) { reloadForLanguage(); return }
     applyLook()
     renderSettings()
@@ -1844,7 +1851,15 @@ function openChatMenu(conn, sid, x, y) {
   ], x, y)
 }
 
-function askBox({ title, text = '', value = null, ok = tr('OK'), danger = false }) {
+// There's only one box for asking: the questions go one by one, each when the one before has its answer.
+let asking = Promise.resolve()
+function askBox(question) {
+  const answer = asking.then(() => askNow(question))
+  asking = answer.catch(() => {})
+  return answer
+}
+
+function askNow({ title, text = '', value = null, ok = tr('OK'), danger = false }) {
   return new Promise(resolve => {
     const d = $('#ask-dialog')
     $('#ask-title').textContent = title
@@ -1856,10 +1871,19 @@ function askBox({ title, text = '', value = null, ok = tr('OK'), danger = false 
     const okBtn = $('#ask-ok')
     okBtn.textContent = ok
     okBtn.className = danger ? 'btn-danger' : 'btn-primary'
-    const done = v => { d.close(); okBtn.onclick = null; $('#ask-cancel').onclick = null; resolve(v) }
+    const no = value === null ? false : null
+    const done = v => {
+      d.removeEventListener('close', closed)
+      okBtn.onclick = null
+      $('#ask-cancel').onclick = null
+      if (d.open) { d.close() }
+      resolve(v)
+    }
+    // Closed with Esc. The event comes a frame later: if the box is open again, it's the one of the question before.
+    const closed = () => { if (!d.open) { done(no) } }
     okBtn.onclick = () => done(value === null ? true : input.value.trim() || null)
-    $('#ask-cancel').onclick = () => done(value === null ? false : null)
-    d.onclose = () => resolve(value === null ? false : null)
+    $('#ask-cancel').onclick = () => done(no)
+    d.addEventListener('close', closed)
     d.showModal()
     if (value !== null) { input.focus(); input.select() } else { okBtn.focus() }
   })
@@ -2279,12 +2303,16 @@ function panelModelsCard() {
 // The "pedila" plugin reads them inside Hermes (the keys don't leave it). The card only appears if that
 // Hermes has one of those APIs: with the plugin, the ones that have a key; without it, a button to turn it
 // on if Hermes has any set. If not, nothing shows.
-const Q = { data: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, again: { local: false, server: false }, gen: { local: 0, server: 0 }, err: { local: '', server: '' }, login: { local: false, server: false }, note: { local: '', server: '' }, busy: { local: '', server: '' }, ask: { local: null, server: null }, installed: { local: false, server: false } }
+const Q = { data: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, again: { local: false, server: false }, gen: { local: 0, server: 0 }, err: { local: '', server: '' }, login: { local: false, server: false }, note: { local: '', server: '' }, busy: { local: '', server: '' }, ask: { local: null, server: null }, installed: { local: false, server: false }, updated: { local: false, server: false }, updNote: { local: '', server: '' }, updAsk: { local: null, server: null }, restarted: { local: false, server: false }, host: { local: 0, server: 0 } }
 const QUOTA_NAMES = { openrouter: 'OpenRouter', venice: 'Venice', 'opencode-go': 'OpenCode Go', 'opencode-zen': 'OpenCode Zen' }
 const RESET_NAMES = { daily: tr('daily'), weekly: tr('weekly'), monthly: tr('monthly') }
+const PLAN_NAMES = { go: 'Go', 'go-plus': 'Go Plus', 'go-teams': 'Go Teams' }
 
-/** Forgets a connection's quotas (another address, another session…): they're asked for again. */
-function forgetQuotas(conn) {
+/**
+ * Forgets a connection's quotas (another address, another session…): they're asked for again. What's known of
+ * its plugin's update stays, unless it's another Hermes (`other`).
+ */
+function forgetQuotas(conn, other = false) {
   Q.gen[conn]++ // whatever is arriving from before is no longer good
   Q.data[conn] = null
   Q.at[conn] = 0
@@ -2292,12 +2320,20 @@ function forgetQuotas(conn) {
   Q.note[conn] = ''
   Q.ask[conn] = null
   Q.installed[conn] = false
+  if (other) {
+    Q.host[conn]++ // what's being installed or updated in the one from before doesn't count for this one
+    Q.busy[conn] = ''
+    Q.updated[conn] = false
+    Q.restarted[conn] = false
+    Q.updNote[conn] = ''
+    Q.updAsk[conn] = null
+  }
 }
 
 /** A connection's quotas, once per minute at most (or when ↻ is clicked). */
 async function loadQuotas(conn, fresh = false) {
   if (Q.loading[conn]) { if (fresh) { Q.again[conn] = true } return }
-  if (!fresh && Date.now() - Q.at[conn] < 60000) { return }
+  if (!fresh && (Date.now() - Q.at[conn] < 60000 || Q.busy[conn] === 'updating')) { return }
   if (!S.conns[conn] || S.conns[conn].state !== 'ready') { return }
   Q.loading[conn] = true
   const gen = Q.gen[conn]
@@ -2308,6 +2344,13 @@ async function loadQuotas(conn, fresh = false) {
     Q.err[conn] = ''
     Q.login[conn] = false
     if (r && r.state === 'ok') { Q.note[conn] = ''; Q.installed[conn] = false }
+    // Hermes already uses the new plugin (it reloaded by itself or was restarted): no more notices.
+    if (r && r.state === 'ok' && !r.outdated) {
+      Q.updated[conn] = false
+      Q.updNote[conn] = ''
+      Q.updAsk[conn] = null
+    }
+    if (r && r.state === 'ok' && !r.restart) { Q.restarted[conn] = false }
   } catch (e) {
     if (gen === Q.gen[conn]) { Q.err[conn] = e.message || String(e); Q.login[conn] = Boolean(e.needLogin) }
   } finally {
@@ -2319,14 +2362,33 @@ async function loadQuotas(conn, fresh = false) {
   }
 }
 
+/**
+ * Changing a plugin makes Hermes load all of its plugins again: if it's working, the person decides whether to
+ * go on (a long task may take hours).
+ */
+async function okWhileWorking(conn) {
+  const working = await call(api.hermesWorking, conn).catch(() => null)
+  return !working || askBox({
+    title: tr('Hermes is working'),
+    text: tr('When this plugin changes, Hermes loads all of its plugins again. It takes a couple of seconds, and meanwhile a tool of another plugin may fail. Go on anyway?'),
+    ok: tr('Go on')
+  })
+}
+
 async function installQuotas(conn, force = false) {
-  if (Q.busy[conn] === 'installing') { return }
+  if (Q.busy[conn]) { return }
   Q.busy[conn] = 'installing'
+  const host = Q.host[conn]
+  if (!await okWhileWorking(conn)) { if (host === Q.host[conn]) { Q.busy[conn] = ''; schedulePanel() } return }
+  if (host !== Q.host[conn]) { return }
   Q.ask[conn] = null
   Q.note[conn] = ''
+  Q.updNote[conn] = ''
+  Q.updAsk[conn] = null
   schedulePanel()
   try {
     const r = await call(api.quotasInstall, conn, force)
+    if (host !== Q.host[conn]) { return }
     Q.busy[conn] = ''
     if (!r.ok) {
       // Hermes's security scan raised an objection: it's shown and the person decides.
@@ -2339,6 +2401,7 @@ async function installQuotas(conn, force = false) {
     schedulePanel()
     await loadQuotas(conn, true)
   } catch (e) {
+    if (host !== Q.host[conn]) { return }
     Q.busy[conn] = ''
     Q.note[conn] = tr("Couldn't turn the quotas on: {0}", e.message || e)
     // The wait may have been cut off while Hermes did install it: look again.
@@ -2347,9 +2410,70 @@ async function installQuotas(conn, force = false) {
   }
 }
 
+/**
+ * Installs the quotas plugin's new version. If Hermes still has the old one loaded, the notice becomes "it will
+ * be used when Hermes restarts". How it went stays on the card until it's tried again (reading the quotas
+ * doesn't erase it).
+ */
+async function updateQuotas(conn, force = false) {
+  if (Q.busy[conn]) { return }
+  Q.busy[conn] = 'updating'
+  const host = Q.host[conn]
+  if (!await okWhileWorking(conn)) { if (host === Q.host[conn]) { Q.busy[conn] = ''; schedulePanel() } return }
+  if (host !== Q.host[conn]) { return }
+  Q.updAsk[conn] = null
+  Q.updNote[conn] = ''
+  schedulePanel()
+  try {
+    const r = await call(api.quotasUpdate, conn, force)
+    if (host !== Q.host[conn]) { return }
+    if (r.ok) {
+      Q.restarted[conn] = false
+      if (r.unchanged) { Q.updNote[conn] = tr("GitHub doesn't have the new version yet: try again later.") } else { Q.updated[conn] = true }
+    } else if (r.scan) {
+      // Hermes's security scan raised an objection: it's shown and the person decides.
+      Q.updAsk[conn] = { scan: r.scan, findings: r.findings || [] }
+    } else {
+      Q.updNote[conn] = r.error || tr("Couldn't update the plugin.")
+    }
+  } catch (e) {
+    if (host !== Q.host[conn]) { return }
+    Q.updNote[conn] = tr("Couldn't update the plugin: {0}", e.message || e)
+  } finally {
+    if (host === Q.host[conn]) { Q.busy[conn] = '' }
+    schedulePanel()
+  }
+  await loadQuotas(conn, true)
+}
+
+/** Restarts this PC's Hermes so that it loads the new plugin (only if it isn't working). */
+async function restartForQuotas(conn) {
+  if (conn !== 'local' || Q.busy[conn]) { return }
+  const ok = await askBox({
+    title: tr('Restart Hermes?'),
+    text: tr("Hermes closes for a few seconds to load the new plugin, and Pedila reconnects by itself. If it's working on something now, it isn't restarted."),
+    ok: tr('Restart')
+  })
+  if (!ok) { return }
+  Q.busy[conn] = 'restarting'
+  schedulePanel()
+  try {
+    await call(api.hermesRestart, conn)
+    Q.restarted[conn] = true
+  } catch (e) {
+    showToastLine(tr("Couldn't restart Hermes: {0}", e.message || e))
+  } finally {
+    Q.busy[conn] = ''
+    // It's read again as soon as the connection is ready again.
+    Q.at[conn] = 0
+    schedulePanel()
+  }
+}
+
 function quotaBar(usedPct, warnAt = 80) {
   const p = Math.max(0, Math.min(100, usedPct))
-  return el('div', { class: 'sp-bar q-bar' + (p >= warnAt ? ' warn' : '') }, el('i', { style: `width:${Math.max(p > 0 ? 2 : 0, Math.round(p))}%` }))
+  // The width, with its decimal (and a minimum so that something shows if anything was spent).
+  return el('div', { class: 'sp-bar q-bar' + (p >= warnAt ? ' warn' : '') }, el('i', { style: `width:${p > 0 ? Math.max(2, trunc1(p)) : 0}%` }))
 }
 
 /** "resets in 3 h 10 min (21:00)" or "resets tomorrow at 19:00". */
@@ -2360,11 +2484,18 @@ function resetText(ms, now = Date.now()) {
   return tr('resets {0} at {1}', dayAhead(ms, now), hhmm(ms))
 }
 
-function spentLine(sp) {
+function spentLine(sp, all = false) {
   if (!sp) { return null }
   const part = (label, x) => `${label} ${kfmt(x.tokens)}${x.cost > 0 ? ' · ' + usd(x.cost) : ''}`
+  const parts = [part('24 h', sp.day), part('7 d', sp.week), part('30 d', sp.month)]
   return el('div', { class: 'q-line muted', title: tr('What Hermes has spent with this API according to its own records: tokens read + written (and the cost, if Hermes knows it). Summaries, titles and images count too.') },
-    tr('Hermes spent: {0} · {1} · {2}', part('24 h', sp.day), part('7 d', sp.week), part('30 d', sp.month)))
+    all ? tr('Hermes spent (with all the keys): {0} · {1} · {2}', ...parts) : tr('Hermes spent: {0} · {1} · {2}', ...parts))
+}
+
+/** With several keys for the same API (Hermes's credential pool): what this one is doing. */
+function keyChip(a, now) {
+  const s = keyState(a, now)
+  return s ? el('span', { class: 'q-chip' + (s.cls ? ' ' + s.cls : ''), text: s.text, title: s.title }) : null
 }
 
 /**
@@ -2415,7 +2546,7 @@ const diemFmt = n => `${(n || 0).toLocaleString(locale(), { maximumFractionDigit
 
 function quotaBlock(p, conn = S.active) {
   const now = Date.now()
-  const head = el('div', { class: 'q-head' }, el('b', { text: p.name || QUOTA_NAMES[p.kind] || p.kind }))
+  const head = el('div', { class: 'q-head' }, el('b', { text: p.name || QUOTA_NAMES[p.kind] || p.kind }), keyChip(p.account, now))
   const big = (text, title) => head.append(el('span', { class: 'q-big', text, title }))
   const rows = []
   const line = (text, cls = 'muted', title = '') => rows.push(el('div', { class: 'q-line ' + cls, text, title }))
@@ -2437,7 +2568,7 @@ function quotaBlock(p, conn = S.active) {
   } else if (p.kind === 'venice') {
     big(usd((p.usd || 0) + (p.bundled || 0)), tr('USD balance + credits included in your plan'))
     const epoch = p.nextEpoch ? Date.parse(p.nextEpoch) : NaN
-    const k = `${conn}:venice:`
+    const k = `${conn}:venice:${p.name && p.name !== QUOTA_NAMES.venice ? p.name + ':' : ''}`
     if (p.bundled !== null && p.bundled !== undefined) {
       const o = observedUse(k + 'bundled', p.bundled)
       rows.push(quotaMetric({ label: tr('Plan credits'), value: usd(p.bundled), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '', title: tr('The bar counts what was spent since the highest balance Pedila has seen (it starts over when you top up)') }))
@@ -2459,20 +2590,48 @@ function quotaBlock(p, conn = S.active) {
         ...p.modelLimits.map(m => el('div', { class: 'q-line muted', title: m.model, text: `${modelName(m.model)}: ${fmtL(m)}` }))))
     }
   } else if (p.kind === 'opencode-go') {
+    // OpenCode gives whole numbers rounded down (0% up to 1%). From plugin 1.1.0 on, `estimate` may come too
+    // (with decimals, from Hermes's tokens and OpenCode's prices) in the windows where it agrees with that
+    // whole number. It's shown with ONE decimal, cut off (never more than what was spent).
+    const exactOf = w => w.estimate !== null && w.estimate !== undefined
+    const usedOf = w => (exactOf(w) ? trunc1(w.estimate) : Math.floor(w.percent))
     if (!p.windows.length) {
       line(tr("OpenCode didn't report your plan's usage."))
     } else {
-      big(tr('{0}%', Math.round(100 - Math.max(0, ...p.windows.map(w => w.percent)))), tr("What's left of the most used window"))
+      const most = p.windows.reduce((a, b) => (usedOf(b) > usedOf(a) ? b : a))
+      big(exactOf(most) ? pct1(100 - usedOf(most)) : tr('{0}%', 100 - usedOf(most)), tr("What's left of the most used window"))
     }
     const label = { rolling: tr('5-hour window'), weekly: tr('Week'), monthly: tr('Month') }
+    const plan = p.plan ? tr(' ({0} plan)', PLAN_NAMES[p.plan] || p.plan) : ''
     for (const w of p.windows) {
       const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN
-      rows.push(quotaMetric({ label: label[w.id] || w.label, value: tr('{0}% used', Math.round(w.percent)), pct: w.percent, note: Number.isFinite(at) ? resetText(at, now) : '' }))
+      const exact = exactOf(w)
+      const mine = w.cost > 0 ? tr('this Hermes: {0} · {1} tokens', usd(w.cost), kfmt(w.tokens)) : ''
+      const note = [Number.isFinite(at) ? resetText(at, now) : '', mine].filter(Boolean).join(' · ')
+      const title = exact
+        ? tr("OpenCode says {0}%: it only gives whole numbers, rounded down. The decimal comes from the tokens this Hermes has spent and from the prices and each model's limit that OpenCode publishes{1}. If the same account is used from somewhere else, what OpenCode says wins.", Math.floor(w.percent), plan)
+        : tr('OpenCode gives whole numbers rounded down: 0% is less than 1%.')
+      rows.push(quotaMetric({ label: label[w.id] || w.label, value: exact ? tr('{0} used', pct1(w.estimate)) : tr('{0}% used', Math.floor(w.percent)), pct: usedOf(w), note, title }))
     }
+    if (p.windows.some(exactOf) && p.unpriced && p.unpriced.length) { line(tr("Without a price on OpenCode, these don't count in the decimal: {0}.", p.unpriced.map(modelName).join(', '))) }
+    if (p.catalog === false) { line(tr("Couldn't read OpenCode's prices: the whole numbers its API gives are shown.")) }
   } else if (p.kind === 'opencode-zen') {
     line(tr("OpenCode doesn't publish Zen's balance (check it on opencode.ai). What Hermes has spent with it is shown here."))
   }
-  return el('div', { class: 'q-prov' }, head, ...rows, spentLine(p.spent))
+  if (p.account && p.account.hidden) { line(tr("{0} more keys of this API aren't shown.", p.account.hidden)) }
+  return el('div', { class: 'q-prov' }, head, ...rows, p.spent ? spentLine(p.spent) : spentLine(p.spentAll, true))
+}
+
+/** Hermes's security scan raised an objection when installing or updating the plugin: the person decides. */
+function scanQuestion(conn, ask, go, done) {
+  const no = el('button', { class: 'btn-ghost', text: ask.scan === 'dangerous' ? tr('Got it') : tr('Not now'), onclick: () => { done(); schedulePanel() } })
+  const found = ask.findings.map(f => el('div', { class: 'q-line muted', text: '• ' + f }))
+  if (ask.scan === 'dangerous') {
+    return el('div', { class: 'q-ask' }, el('p', { class: 'small warn', text: tr("Hermes's security scan doesn't allow this plugin to be installed.") }), ...found, el('div', { class: 'q-actions' }, no))
+  }
+  return el('div', { class: 'q-ask' },
+    el('p', { class: 'small', text: tr("Hermes's security scan asks for confirmation. That's expected: the plugin uses your keys, inside Hermes, to ask for the balance.") }),
+    ...found, el('div', { class: 'q-actions' }, el('button', { class: 'btn-primary', text: tr('Install anyway'), disabled: Boolean(Q.busy[conn]), onclick: go }), no))
 }
 
 function panelQuotasCard() {
@@ -2481,7 +2640,8 @@ function panelQuotasCard() {
   const q = Q.data[conn]
   const title = tr('Quotas · {0}', CONN_NAMES[conn])
   const refresh = el('button', { class: 'sp-link', text: Q.loading[conn] ? '…' : '↻', title: tr('Read the quotas again'), 'aria-label': tr('Read the quotas again'), 'data-focus': 'quotas-refresh', onclick: () => loadQuotas(conn, true) })
-  const note = Q.note[conn] ? el('div', { class: 'q-line warn', text: Q.note[conn] }) : null
+  const noteText = Q.note[conn] || (q && q.state === 'missing' ? Q.updNote[conn] : '')
+  const note = noteText ? el('div', { class: 'q-line warn', text: noteText }) : null
   const err = Q.err[conn] ? el('div', { class: 'q-line warn', text: tr("Couldn't read the quotas: {0}", Q.err[conn]) }) : null
   if (!q) {
     // The first reading failed: say so, with the option to try again (otherwise there's nothing to show).
@@ -2490,30 +2650,21 @@ function panelQuotasCard() {
   if (q.state === 'missing') {
     if (!Array.isArray(q.paid) || !q.paid.length) { return null }
     const names = q.paid.map(k => QUOTA_NAMES[k] || k).join(', ')
-    const busy = Q.busy[conn] === 'installing'
-    const ask = Q.ask[conn]
+    const busy = Q.busy[conn]
+    // An update that went through "remove and install" may have stopped halfway: its question comes out here.
+    const ask = Q.ask[conn] || Q.updAsk[conn]
     const parts = [el('h4', { text: title }),
       el('p', { class: 'small', text: tr("This Hermes uses {0}. Pedila can show you what's left of each one: balance, limits, when they reset and what you've spent.", names) }),
       el('p', { class: 'muted small', text: tr("For that it installs a small Pedila plugin in Hermes: it reads the balance inside Hermes and only returns numbers, so your keys never leave it. It doesn't touch your chats or restart Hermes.") })]
     // When loading a plugin, a Hermes with username and password and no fixed "secret" closes its web
     // sessions.
     if (conn === 'server') { parts.push(el('p', { class: 'muted small', text: tr("Careful: when it loads it, the server's Hermes may close its web sessions (Pedila's too) and you'll have to sign in again once.") })) }
-    if (ask && ask.scan === 'dangerous') {
-      parts.push(el('div', { class: 'q-ask' },
-        el('p', { class: 'small warn', text: tr("Hermes's security scan doesn't allow this plugin to be installed.") }),
-        ...ask.findings.map(f => el('div', { class: 'q-line muted', text: '• ' + f })),
-        el('div', { class: 'q-actions' }, el('button', { class: 'btn-ghost', text: tr('Got it'), onclick: () => { Q.ask[conn] = null; schedulePanel() } }))))
-    } else if (ask) {
-      parts.push(el('div', { class: 'q-ask' },
-        el('p', { class: 'small', text: tr("Hermes's security scan asks for confirmation. That's expected: the plugin uses your keys, inside Hermes, to ask for the balance.") }),
-        ...ask.findings.map(f => el('div', { class: 'q-line muted', text: '• ' + f })),
-        el('div', { class: 'q-actions' },
-          el('button', { class: 'btn-primary', text: tr('Install anyway'), onclick: () => installQuotas(conn, true) }),
-          el('button', { class: 'btn-ghost', text: tr('Not now'), onclick: () => { Q.ask[conn] = null; schedulePanel() } }))))
+    if (ask) {
+      parts.push(scanQuestion(conn, ask, () => installQuotas(conn, true), () => { Q.ask[conn] = null; Q.updAsk[conn] = null }))
     } else if (Q.installed[conn]) {
       parts.push(el('button', { class: 'btn-ghost', text: Q.loading[conn] ? tr('Checking…') : tr('I restarted it: check'), disabled: Q.loading[conn], onclick: () => loadQuotas(conn, true) }))
     } else {
-      parts.push(el('button', { class: 'btn-primary', text: busy ? tr('Installing… (it may take a minute)') : tr('Turn on quotas'), disabled: busy, onclick: () => installQuotas(conn) }))
+      parts.push(el('button', { class: 'btn-primary', text: busy === 'installing' ? tr('Installing… (it may take a minute)') : busy === 'updating' ? tr('Updating… (it may take a minute)') : tr('Turn on quotas'), disabled: Boolean(busy), onclick: () => installQuotas(conn) }))
     }
     if (note) { parts.push(note) }
     if (err) { parts.push(err) }
@@ -2527,7 +2678,32 @@ function panelQuotasCard() {
     el('h4', {}, el('span', { class: 'grow', text: title }),
       Number.isFinite(at) ? el('span', { class: 'q-ago', text: ago(at), title: tr('Read at: {0}', full(at)) }) : null, refresh),
     ...provs.map(pv => quotaBlock(pv, conn)),
-    err, Q.login[conn] ? loginAgain(conn) : null)
+    quotaUpdateRow(conn, q), note, err, Q.login[conn] ? loginAgain(conn) : null)
+}
+
+/** With an old plugin in that Hermes: the button to install the new one (and, if needed, restart). */
+function quotaUpdateRow(conn, q) {
+  const ask = Q.updAsk[conn]
+  const notice = pluginNotice(q, { updated: Q.updated[conn], ask })
+  if (!notice) { return null }
+  const busy = Q.busy[conn]
+  if (notice === 'restart') {
+    // It's already on disk (Hermes says so), but it still has the old one loaded: it will use it when it restarts.
+    if (conn !== 'local') {
+      return el('p', { class: 'muted small', text: tr("Plugin updated. The server's Hermes will use it when it restarts.") })
+    }
+    return el('div', { class: 'q-ask' },
+      el('p', { class: 'small', text: Q.restarted[conn] ? tr('Hermes restarted, but it still has the old plugin loaded. Its log may say why.') : tr("Plugin updated. Hermes will load it when it restarts: restart it when it isn't working.") }),
+      el('div', { class: 'q-actions' }, el('button', { class: 'btn-primary', text: busy === 'restarting' ? tr('Restarting Hermes…') : tr('Restart Hermes now'), disabled: Boolean(busy), onclick: () => restartForQuotas(conn) })))
+  }
+  if (notice === 'ask') { return scanQuestion(conn, ask, () => updateQuotas(conn, true), () => { Q.updAsk[conn] = null }) }
+  const parts = [el('p', { class: 'small', text: tr("There's a new quotas plugin: if an API has several keys in Hermes, it shows each one's quota.") })]
+  // When loading a plugin, a Hermes with username and password and no fixed "secret" closes its web
+  // sessions.
+  if (conn === 'server') { parts.push(el('p', { class: 'muted small', text: tr("Careful: when it changes it, the server's Hermes may close its web sessions (Pedila's too) and you'll have to sign in again once.") })) }
+  parts.push(el('div', { class: 'q-actions' }, el('button', { class: 'btn-ghost', text: busy === 'updating' ? tr('Updating… (it may take a minute)') : tr('Update plugin'), disabled: Boolean(busy), onclick: () => updateQuotas(conn) })))
+  if (Q.updNote[conn]) { parts.push(el('div', { class: 'q-line warn', text: Q.updNote[conn] })) }
+  return el('div', { class: 'q-ask' }, ...parts)
 }
 
 /** Hermes closed the session (for example, when loading the plugin): a button to sign in again. */
@@ -2540,7 +2716,7 @@ function panelConnsCard() {
   return el('section', { class: 'sp-card' }, el('h4', { text: tr('Connections') }),
     ...visibleConns().filter(c => S.conns[c]).flatMap(c => {
       const st = S.conns[c]
-      const what = CONN_STATES[st.state] || st.state
+      const what = stateText(st)
       const row = el('div', { class: 'sp-conn', title: connLabel(c) }, el('span', { class: 'dot ' + st.state }), el('span', { text: CONN_NAMES[c] }), el('span', { class: 's', text: st.state === 'ready' && st.detail ? `${what} · ${st.detail}` : what }))
       // Below, their Hermes's version and whether there's a new one (a click goes to Settings → About).
       const u = hermesUpdText(c)
@@ -2555,6 +2731,7 @@ function hermesUpdText(c) {
   if (!u || !u.version) { return null }
   const to = u.latest ? ` ${u.latest}` : ''
   const auto = ((S.settings && S.settings.hermes) || {}).autoUpdate !== false
+  if (u.applying && u.applying.kind === 'restart') { return { text: tr('Restarting Hermes {0}…', u.version), warn: true } }
   if (u.applying) { return { text: tr('Updating Hermes {0} → {1}…', u.applying.from, u.applying.to || tr('the latest')), warn: true } }
   const r = u.lastResult
   if (u.available && r && !r.ok) { return { text: tr("Hermes {0} · couldn't be updated ({1}){2}", u.version, r.error, auto ? tr('; it will be tried again in a few hours') : ''), warn: true } }

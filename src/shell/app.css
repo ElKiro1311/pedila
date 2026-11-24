@@ -419,8 +419,11 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .sp-model .sp-bar > i { display: block; height: 100%; background: var(--accent); }
 .q-prov { padding: 6px 0 8px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
 .q-prov:first-of-type { border-top: 0; padding-top: 0; }
-.q-head { display: flex; align-items: baseline; gap: 8px; }
+.q-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
 .q-head b { flex: 1; font-size: .88rem; }
+.q-chip { flex: none; font-size: .68rem; font-weight: 600; line-height: 1; padding: 3px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.q-chip.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.q-chip.rest { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 .q-big { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .q-line { font-size: .78rem; line-height: 1.35; }
 .q-line.warn, .q-ask .warn { color: var(--warn); }

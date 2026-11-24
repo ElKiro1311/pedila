@@ -9,7 +9,7 @@ const { sanitize, defaults } = require('../src/main/settings')
 const es = require('../src/shell/es.json')
 
 const SRC = path.join(__dirname, '..', 'src')
-const files = ['shell/app.js', 'shell/fmt.mjs', 'shell/tools.mjs', 'shell/pet.js',
+const files = ['shell/app.js', 'shell/fmt.mjs', 'shell/quotas.mjs', 'shell/tools.mjs', 'shell/pet.js',
   ...fs.readdirSync(path.join(SRC, 'main')).filter(f => f.endsWith('.js')).map(f => 'main/' + f)]
 const code = files.map(f => fs.readFileSync(path.join(SRC, f), 'utf8')).join('\n')
 const html = fs.readFileSync(path.join(SRC, 'shell', 'index.html'), 'utf8')

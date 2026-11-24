@@ -119,7 +119,7 @@ function fakeConn(id, over = {}) {
         return { status: 404, json: null }
       },
       invalidate: () => c.calls.push('invalidate'),
-      pause: () => c.calls.push('pause'),
+      pause: why => c.calls.push(why ? `pause ${why}` : 'pause'),
       resume: () => c.calls.push('resume')
     },
     async activeList() { c.calls.push('RPC session.active_list'); return c.active },
@@ -301,7 +301,7 @@ test("This PC: while Hermes updates nothing of its own is started, and afterward
   await assert.rejects(tr.fetchJson('/api/sessions'), /is updating/)
   await assert.rejects(tr.wsTarget(), /is updating/)
   tr.resume()
-  assert.equal(tr.paused, false)
+  assert.equal(Boolean(tr.paused), false)
   assert.equal(tr.ep, null)
   assert.equal(tr.bridge, null)
 })
@@ -389,4 +389,112 @@ test('model and effort of a chat already started, new protocol: session.mutate w
   assert.deepEqual(calls.slice(-3).map(x => [x[1], x[2]]), [['reasoning', { effort: 'max' }], ['reasoning', { effort: null }], ['model', { model: 'reset' }]])
   c.rpc = async () => { const e = new Error('session busy: turn_active'); throw e }
   await assert.rejects(c.setChatOptions('s1', { reasoning: 'low' }), /change it when it finishes/)
+})
+
+test("Restart Hermes for a new plugin: only the PC's, only if it isn't working, and it connects again", async () => {
+  const t = 1000 * MIN
+  const local = fakeConn('local')
+  const runs = []
+  const hu = new HermesUpdates({ conns: { local, server: fakeConn('server') }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, run: async (file, args) => { runs.push([file, ...args]); return { code: 0, tail: 'Gateway restarted' } } })
+  await assert.rejects(hu.restartNow('server'), /from the server/)
+  // Working (a chat running): it isn't restarted and is free for the next time.
+  local.active = [{ id: 'x', status: 'working' }]
+  await assert.rejects(hu.restartNow('local'), /is working/)
+  assert.equal(runs.length, 0)
+  assert.equal(hu.state('local').applying, null)
+  // With background subagents, it isn't either.
+  local.active = []
+  local.roster = { sessions: [{ session_id: 's', subagents: 1, background: 0 }] }
+  await assert.rejects(hu.restartNow('local'), /is working/)
+  // When it can't be checked, it isn't either.
+  local.roster = { sessions: [] }
+  local.rosterFail = true
+  await assert.rejects(hu.restartNow('local'), /couldn't check/)
+  assert.equal(runs.length, 0)
+  // Free: the connection stops, it's restarted with its command and connected again.
+  local.rosterFail = false
+  local.calls.length = 0
+  assert.equal(await hu.restartNow('local'), true)
+  assert.deepEqual(runs, [['hermes.exe', 'gateway', 'restart', '--detach']])
+  assert.deepEqual(local.calls.filter(x => !x.startsWith('GET') && !x.startsWith('RPC')), ['stop', 'pause restart', 'state updating restarting', 'resume', 'invalidate', 'state connecting', 'start'])
+  assert.equal(hu.state('local').applying, null)
+  // While it restarts, neither another restart nor an update can start.
+  let release
+  const slow = new HermesUpdates({ conns: { local: fakeConn('local') }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, run: () => new Promise(r => { release = r }) })
+  const first = slow.restartNow('local')
+  await assert.rejects(slow.restartNow('local'), /already restarting/)
+  assert.equal(slow.view().local.applying.kind, 'restart')
+  while (!release) { await new Promise(r => setImmediate(r)) }
+  release({ code: 1, tail: "error: couldn't stop the gateway" })
+  await assert.rejects(first, /couldn't stop the gateway/)
+  assert.equal(slow.state('local').applying, null)
+})
+
+test('Restart Hermes: meanwhile, the automatic update neither looks nor starts', async () => {
+  let t = 1000 * MIN
+  const local = fakeConn('local')
+  const runs = []
+  let release
+  const hu = new HermesUpdates({
+    conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t,
+    run: (file, args) => { runs.push(args.join(' ')); return args[0] === 'gateway' ? new Promise(r => { release = r }) : Promise.resolve({ code: 0, tail: '' }) }
+  })
+  await hu.tickOne(local)
+  t += 11 * MIN // a new version, and unused long enough to install it
+  const restart = hu.restartNow('local')
+  while (!release) { await new Promise(r => setImmediate(r)) }
+  local.state = 'ready' // even if it looked connected
+  local.calls.length = 0
+  await hu.tickOne(local)
+  assert.deepEqual(local.calls, [])
+  assert.equal(await hu.apply(local, 'by hand'), false)
+  assert.deepEqual(runs, ['gateway restart --detach'])
+  release({ code: 0, tail: 'Gateway restarted' })
+  assert.equal(await restart, true)
+  t += 11 * MIN
+  await hu.tickOne(local)
+  t += 11 * MIN
+  await hu.tickOne(local)
+  assert.deepEqual(runs, ['gateway restart --detach', 'update'])
+})
+
+test('Is Hermes working? (before changing its plugin)', async () => {
+  const local = fakeConn('local')
+  const hu = new HermesUpdates({ conns: { local }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => 1000 * MIN, run: async () => ({ code: 0, tail: '' }) })
+  assert.equal(await hu.working('local'), false)
+  local.active = [{ id: 'x', status: 'working' }]
+  assert.equal(await hu.working('local'), true)
+  // Busy for sure, even if the rest couldn't be known; and not knowing isn't "no".
+  local.rosterFail = true
+  assert.equal(await hu.working('local'), true)
+  local.active = []
+  assert.equal(await hu.working('local'), null)
+  local.status = null
+  assert.equal(await hu.working('local'), null)
+  assert.equal(await hu.working('nobody'), null)
+})
+
+test("Restart Hermes: an older Hermes without --detach, and one that refuses because something started", async () => {
+  const t = 1000 * MIN
+  const make = answers => {
+    const runs = []
+    const seen = []
+    const hu = new HermesUpdates({ conns: { local: fakeConn('local') }, settings: settingsOn, log: quiet, hermesExe: () => 'hermes.exe', now: () => t, run: async (file, args) => { runs.push(args.join(' ')); return answers.shift() } })
+    hu.on('change', () => seen.push(hu.state('local').applying ? 'restarting' : 'free'))
+    return { hu, runs, seen }
+  }
+  let m = make([{ code: 2, tail: 'hermes: error: unrecognized arguments: --detach' }, { code: 0, tail: 'Gateway restarted' }])
+  assert.equal(await m.hu.restartNow('local'), true)
+  assert.deepEqual(m.runs, ['gateway restart --detach', 'gateway restart'])
+  // Its last line is the order to cut that work off: it isn't shown.
+  m = make([{ code: 1, tail: 'Refusing to restart the gateway: 1 live session(s)\n  Let them finish, or interrupt them deliberately:\n    hermes gateway restart --yes   # interrupts 1 live session(s)' }])
+  await assert.rejects(m.hu.restartNow('local'), /^Error: Hermes is working: wait until it finishes$/)
+  assert.equal(m.runs.length, 1)
+  assert.equal(m.hu.state('local').lastBusyAt, t)
+  assert.equal(m.seen.at(-1), 'free')
+  // Refused before launching anything: the screen is told that it's free again.
+  m = make([])
+  m.hu.conns.local.active = [{ id: 'x', status: 'working' }]
+  await assert.rejects(m.hu.restartNow('local'), /is working/)
+  assert.equal(m.seen.at(-1), 'free')
 })

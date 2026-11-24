@@ -9,6 +9,12 @@ const { tr, getLang } = require('./i18n')
 
 const INSTALLER = 'Pedila-Setup.exe'
 
+/** What the tray says of a connection. */
+function trayLabel(c) {
+  if (c.state === 'updating' && c.detail === 'restarting') { return tr('restarting Hermes…') }
+  return { ready: tr('connected'), connecting: tr('connecting…'), offline: tr('not connected'), login: tr('not signed in'), updating: tr('updating Hermes…'), error: 'error', off: tr('off') }[c.state] || c.state
+}
+
 /**
  * Is `a` newer than `b`? As in Semantic Versioning (semver.org, §11): first x.y.z; with the same number, the
  * stable one beats its -alpha/-beta (0.8.0 > 0.8.0-beta). Suffixes are compared field by field (separated by
@@ -231,4 +237,4 @@ function modelUsageFrom(j) {
   return [...out.values()].sort(byTokens).slice(0, 200)
 }
 
-module.exports = { checkUpdate, installUpdate, downloadUpdate, launchInstaller, verifiedFile, relaunchScript, usageStats, modelUsageFrom, newer, INSTALLER }
+module.exports = { checkUpdate, installUpdate, downloadUpdate, launchInstaller, verifiedFile, relaunchScript, usageStats, modelUsageFrom, newer, trayLabel, INSTALLER }

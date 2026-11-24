@@ -36,9 +36,10 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
 - **Cuotas de tus APIs:** si tu Hermes usa OpenRouter, Venice u OpenCode, el panel enseña lo que te queda de cada una:
   - **OpenRouter:** saldo de créditos; límite de la clave, cuándo se reinicia y lo gastado hoy, en la semana y en el mes.
   - **Venice:** saldo USD, créditos del plan y DIEM; cuándo se reinicia el DIEM; límites por modelo.
-  - **OpenCode Go:** % usado de las ventanas de 5 h, semana y mes, y cuándo se reinician. De **OpenCode Zen**, OpenCode no publica el saldo.
+  - **OpenCode Go:** % usado de las ventanas de 5 h, semana y mes (con un decimal cuando se puede calcular), y cuándo se reinician. De **OpenCode Zen**, OpenCode no publica el saldo.
+  - Si le diste a Hermes **varias claves de la misma API** (`hermes auth add`), cada una es una cuota aparte, con su etiqueta: cuál está en uso, cuáles están de reserva y cuáles descansan hasta que se reinicie su límite.
   - En cada una, lo que Hermes ha gastado en 24 h, 7 y 30 días.
-  - Lo lee un complemento pequeño de Pedila dentro de Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): tus claves no salen de Hermes, solo llegan números. Se instala con el botón «Activar cuotas» del panel, sin reiniciar Hermes. Las APIs que no tienes no aparecen.
+  - Lo lee un complemento pequeño de Pedila dentro de Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): tus claves no salen de Hermes, solo llegan números. Se instala con el botón «Activar cuotas» del panel, sin reiniciar Hermes, y se actualiza también desde ahí (al venir de una versión anterior a la 1.2.0, Hermes tiene que reiniciarse una vez). Las APIs que no tienes no aparecen.
 - **Modelo y esfuerzo de un chat empezado:** se pueden cambiar con el chat ya en marcha (Hermes los cambia con sus órdenes `/model` y `/reasoning`), con niveles de razonamiento hasta «al máximo».
 - **Herramientas como en Claude Code:** las que van seguidas se juntan en una línea que se abre («Ejecutó 2 órdenes, leyó captura.png · +12 −3 · 1 falló»). Dentro, cada una con su título, lo que se le pasó (la orden, el código o el cambio en verde y rojo), lo que devolvió y, si falló, en rojo. Las imágenes que mira o genera salen ahí mismo.
 - **Imágenes:** las que adjuntas se ven en tu mensaje y en el recuadro de escribir; se abren en grande al pulsarlas.

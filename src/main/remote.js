@@ -48,6 +48,7 @@ class RemoteTransport {
     this.baseAt = 0
     this.kind = 'remote'
     this.saveTimer = null
+    this.sessionNo = 0 // goes up when signing in or out
   }
 
   async init() {
@@ -131,6 +132,7 @@ class RemoteTransport {
     if (res.status === 401 || res.status === 403) { return { ok: false, error: tr('Wrong username or password.') } }
     if (!res.ok) { return { ok: false, error: tr('The server answered {0}.', res.status) } }
     this.jar.clear()
+    this.sessionNo++
     this.absorb(res)
     if (!this.hasSession()) { return { ok: false, error: tr("The server didn't return the session.") } }
     await this.persist()
@@ -143,6 +145,7 @@ class RemoteTransport {
       await fetch(base + '/auth/logout', { method: 'POST', headers: { Cookie: this.cookieHeader() }, redirect: 'manual', signal: AbortSignal.timeout(8000) })
     } catch {}
     this.jar.clear()
+    this.sessionNo++
     await this.persist()
   }
 
@@ -159,14 +162,35 @@ class RemoteTransport {
     return { url: base.replace(/^http/, 'ws') + '/api/ws?ticket=' + encodeURIComponent(j.ticket), protocols: null }
   }
 
-  async fetchJson(p, { method = 'GET', body, timeoutMs = 30000 } = {}) {
+  async fetchJson(p, opts) {
     if (!this.urls().length) { throw new NeedSetup() }
     if (!this.hasSession()) { throw new NeedLogin() }
+    return this.requestJson(await this.pickBase(), p, opts)
+  }
+
+  /**
+   * The same, tied to the address and the session of now: for several requests in a row that must go to the same
+   * Hermes. If another session is started meanwhile (perhaps in another server), they're over.
+   */
+  async pinned() {
+    if (!this.urls().length) { throw new NeedSetup() }
     const base = await this.pickBase()
+    const session = this.sessionNo
+    return {
+      fetchJson: async (p, opts) => {
+        if (!this.hasSession() || session !== this.sessionNo) { throw new NeedLogin() }
+        return this.requestJson(base, p, opts)
+      }
+    }
+  }
+
+  async requestJson(base, p, { method = 'GET', body, timeoutMs = 30000 } = {}) {
+    const session = this.sessionNo
     const headers = { Cookie: this.cookieHeader() }
     if (body !== undefined) { headers['Content-Type'] = 'application/json' }
     const res = await fetch(base + p, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) })
-    this.absorb(res)
+    // The answer to another session's request isn't this one's cookies.
+    if (session === this.sessionNo) { this.absorb(res) }
     if (res.status === 401) { throw new NeedLogin(tr('The server session expired')) }
     const text = await res.text()
     let json = null

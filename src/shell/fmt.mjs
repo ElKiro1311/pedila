@@ -1,7 +1,7 @@
 // Short formats for the panel: tokens (1.2K, 1.09M…) and times ("3:41 PM", "25 min ago").
 // No dependencies other than the language, so that the tests can load it as is.
 
-import { tr, locale } from './i18n.mjs'
+import { tr, locale, getLang } from './i18n.mjs'
 
 const UNITS = ['', 'K', 'M', 'B']
 
@@ -165,6 +165,22 @@ export function usd(n) {
   const a = Math.abs(n)
   const s = a >= 1000 ? Math.round(a).toLocaleString(locale()) : a >= 1 ? a.toFixed(2) : a >= 0.001 ? a.toFixed(3) : '<0.001'
   return (n < 0 ? '-$' : '$') + s
+}
+
+/**
+ * A percentage cut off (not rounded) to one decimal: 2.5351 → 2.5, 0.99 → 0.9. That way more than what was
+ * spent is never shown. The 1e-9 absorbs floating-point errors (99.3 * 10 = 992.99…).
+ */
+export function trunc1(n) {
+  n = Number(n)
+  if (!Number.isFinite(n) || n <= 0) { return 0 }
+  return Math.floor(Math.min(n, 100) * 10 + 1e-9) / 10
+}
+
+/** "2.5%", "0.0%", "100.0%": with one decimal, cut off (see trunc1). */
+export function pct1(n) {
+  const s = trunc1(n).toFixed(1)
+  return getLang() === 'es' ? s.replace('.', ',') + ' %' : s + '%'
 }
 
 /**

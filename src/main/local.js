@@ -148,7 +148,7 @@ class LocalTransport {
   async endpoint(force = false) {
     // While Hermes updates nothing of its own is started: its Python would lock files the update has to
     // change.
-    if (this.paused) { throw new Error(tr('Hermes is updating')) }
+    if (this.paused) { throw new Error(this.paused === 'restart' ? tr('Hermes is restarting') : tr('Hermes is updating')) }
     if (this.ep && !force) { return this.ep }
     if (!this.available()) {
       const e = new Error(tr("Can't find Hermes on this PC (%LOCALAPPDATA%\\hermes\\bin\\hermes.exe is missing)"))
@@ -187,9 +187,9 @@ class LocalTransport {
     return this.bridge.mint(ep, purpose)
   }
 
-  /** To update Hermes: closes its tickets Python and lets nothing start until resume(). */
-  pause() {
-    this.paused = true
+  /** To update or restart Hermes (`why`): closes its tickets Python and lets nothing start until resume(). */
+  pause(why = 'update') {
+    this.paused = why
     this.dispose()
     this.bridge = null
     this.ep = null
@@ -197,7 +197,7 @@ class LocalTransport {
 
   /** After the update: the next endpoint() asks Hermes again where it is and with which Python. */
   resume() {
-    this.paused = false
+    this.paused = ''
     this.bridge = null
     this.ep = null
   }

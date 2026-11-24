@@ -23,6 +23,7 @@ const IDLE_MS = 10 * 60 * 1000 // "unused"
 const RETRY_MS = 6 * 60 * 60 * 1000 // after a failure, that version isn't retried for 6 h
 const GITHUB_FAIL_MS = 60 * 60 * 1000 // after a GitHub failure, 1 h without asking it (6 h with 403/429)
 const UPDATE_TIMEOUT_MS = 30 * 60 * 1000
+const RESTART_TIMEOUT_MS = 3 * 60 * 1000
 const LATEST_URL = 'https://api.github.com/repos/NousResearch/hermes-agent/releases/latest'
 
 const clean = v => String(v || '').trim().replace(/^v/i, '')
@@ -98,7 +99,7 @@ function runCapture(file, args, timeoutMs) {
     child.stdout.on('data', keep)
     child.stderr.on('data', keep)
     const timer = setTimeout(() => {
-      keep('\n[Pedila] not finished in 30 min: stopping it\n')
+      keep(`\n[Pedila] not finished in ${Math.round(timeoutMs / 60000)} min: stopping it\n`)
       execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {})
     }, timeoutMs)
     child.on('error', e => { clearTimeout(timer); resolve({ code: -1, tail: tail + '\n' + e.message }) })
@@ -360,6 +361,81 @@ class HermesUpdates extends EventEmitter {
     s.why = ''
     this.changed()
     return ok
+  }
+
+  /**
+   * Restarts this PC's Hermes with its own command (`hermes gateway restart`) so that it loads what has
+   * changed on disk (a new plugin). Only if it's doing nothing right now: no turns, no chats working, no
+   * subagents or background processes (it looks right before; if it can't be known, no).
+   * As when updating: Pedila's connection is closed, its transport is paused, and it's opened again.
+   * `--detach`: the new gateway doesn't stay inside this command (which is stopped after a few minutes); and
+   * without `--yes`, Hermes itself refuses if something is running.
+   */
+  async restart(c, reason) {
+    const s = this.state(c.id)
+    if (c.id !== 'local') { throw new Error(tr("the server's Hermes is restarted from the server")) }
+    if (s.applying) { throw new Error(s.applying.kind === 'restart' ? tr('Hermes is already restarting') : tr('Hermes is updating')) }
+    const v = s.version || (s.info && s.info.version) || ''
+    // The spot is taken BEFORE looking: while it looks, an automatic update can't start.
+    s.applying = { at: this.now(), from: v, to: v, reason, kind: 'restart' }
+    let l
+    try {
+      l = c.state === 'ready' ? await this.look(c) : { ok: false }
+    } catch {
+      l = { ok: false }
+    }
+    if (!l.ok || !l.known || l.busy) {
+      s.applying = null
+      if (l.ok && l.busy) { s.lastBusyAt = this.now() }
+      this.changed()
+      throw new Error(l.ok && l.busy ? tr('Hermes is working: wait until it finishes') : tr("couldn't check whether Hermes is working"))
+    }
+    this.log.info(`[hermes local] restarting Hermes (${reason})`)
+    this.changed()
+    const wasOn = !c.stopped
+    c.stop()
+    if (c.transport.pause) { c.transport.pause('restart') }
+    c.setState('updating', 'restarting')
+    let out
+    try {
+      out = await this.run(this.hermesExe(), ['gateway', 'restart', '--detach'], RESTART_TIMEOUT_MS)
+      // A Hermes from before --detach.
+      if (out.code === 2 && /unrecognized arguments/i.test(String(out.tail))) { out = await this.run(this.hermesExe(), ['gateway', 'restart'], RESTART_TIMEOUT_MS) }
+    } catch (e) {
+      out = { code: -1, tail: e.message }
+    } finally {
+      if (c.transport.resume) { c.transport.resume() }
+    }
+    const ok = out.code === 0
+    const tail = String(out.tail || '').trim().split(/\r?\n/).slice(-8).join('\n')
+    if (ok) { this.log.info(`[hermes local] restart finished:\n${tail}`) } else { this.log.warn(`[hermes local] the restart failed (code ${out.code}):\n${tail}`) }
+    if (c.transport.invalidate) { c.transport.invalidate() }
+    c.setState('connecting')
+    if (wasOn) { c.start() }
+    s.applying = null
+    s.watchingSince = 0
+    // Something started between the look and the command (a scheduled task, a message from elsewhere): Hermes
+    // refuses, and its last line is the order to force it, which would cut that work off.
+    const refused = !ok && /refusing to (restart|stop) the gateway/i.test(String(out.tail))
+    if (refused) { s.lastBusyAt = this.now() }
+    this.changed()
+    if (refused) { throw new Error(tr('Hermes is working: wait until it finishes')) }
+    if (!ok) { throw new Error(tail.split('\n').filter(Boolean).pop() || tr('finished with code {0}', out.code)) }
+    return true
+  }
+
+  /** Is that Hermes working now? (null = it couldn't be known). Loading a plugin makes it load all of them again. */
+  async working(id) {
+    const c = this.conns[id]
+    const l = c ? await this.look(c).catch(() => ({ ok: false })) : { ok: false }
+    if (!l.ok || (!l.busy && !l.known)) { return null }
+    return l.busy
+  }
+
+  async restartNow(id, reason = 'asked for by hand') {
+    const c = this.conns[id]
+    if (!c) { throw new Error(tr('unknown connection')) }
+    return this.restart(c, reason)
   }
 
   /** "Check now" / "Update now" from the screen. */

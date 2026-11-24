@@ -305,7 +305,7 @@ function main() {
 
   function refreshTray() {
     if (!tray) { return }
-    const label = c => ({ ready: tr('connected'), connecting: tr('connecting…'), offline: tr('not connected'), login: tr('not signed in'), updating: tr('updating Hermes…'), error: 'error', off: tr('off') })[c.state] || c.state
+    const label = extras.trayLabel
     // Only the Hermes this person has: the PC's if it's installed, the server's if they set its address.
     const mine = Object.values(conns).filter(c => c.state !== 'missing' && !(c.id === 'server' && !settings.data.server.urls.length))
     const lines = mine.map(c => `${c.name}: ${label(c)}`)
@@ -678,6 +678,12 @@ function main() {
       log.info(`[${c.id}] quotas plugin: ${r.ok ? 'installed' : 'scan ' + r.scan}`)
       return r
     })
+    handle('hp:quotas-update', async (id, force) => {
+      const c = connOf(id)
+      const r = await c.updateQuotaPlugin(force === true)
+      log.info(`[${c.id}] quotas plugin: ${r.ok ? 'updated' : 'scan ' + r.scan}`)
+      return r
+    })
     handle('hp:usage', async id => {
       const c = connOf(id)
       // Which chats are working (if this Hermes can say; if not, null and the panel stays the same).
@@ -706,6 +712,10 @@ function main() {
     handle('hp:hermes-updates', () => hermesUpdates.view())
     handle('hp:hermes-check', id => hermesUpdates.checkNow(String(id)))
     handle('hp:hermes-update', id => hermesUpdates.applyNow(String(id)))
+    // Is that Hermes working? (before changing its plugin)
+    handle('hp:hermes-working', id => hermesUpdates.working(String(id)))
+    // Restart this PC's Hermes (so that it loads a new plugin); only if it isn't working.
+    handle('hp:hermes-restart', id => hermesUpdates.restartNow(String(id), 'load the new quotas plugin'))
     // The screen says whether there's something typed and not sent (then Pedila doesn't restart by
     // itself).
     handle('hp:ui-state', st => { uiDraft = Boolean(st && st.draft); return true })
@@ -714,9 +724,8 @@ function main() {
       const r = await remote.login(user, pass)
       if (r.ok) {
         log.info('[server] signed in')
-        conns.server.setState('connecting')
-        conns.server.retryNow()
-        if (conns.server.stopped) { conns.server.start() }
+        // From scratch: the socket of the session from before may still be open.
+        if (conns.server.stopped) { conns.server.setState('connecting'); conns.server.start() } else { conns.server.reconnect() }
       }
       return r
     })
@@ -737,7 +746,7 @@ function main() {
         // Folding the panel or changing widths is "window" too: Windows is only touched if you change the
         // startup.
         if (patch.window && patch.window.openAtLogin !== undefined) { applyLoginItem(); refreshTray() }
-        if (JSON.stringify(settings.data.server.urls) !== before) { remote.invalidate(); conns.server.forgetModelStats(); conns.server.retryNow() }
+        if (JSON.stringify(settings.data.server.urls) !== before) { conns.server.addressesChanged(settings.data.server.urls) }
         if (patch.shortcut) { applyShortcut() }
         if (patch.language !== undefined) { applyLanguage() }
       }
