@@ -40,7 +40,7 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - **DeepSeek:** el saldo que queda y un aviso cuando no llega para usar la API.
   - **Openference:** saldo de créditos y plan; con un plan de pago, % usado de sus ventanas y cuándo se reinician; qué modelos son gratis y hasta cuándo.
   - Si le diste a Hermes **varias claves de la misma API** (`hermes auth add`), cada una es una cuota aparte, con su etiqueta: cuál está en uso, cuáles están de reserva y cuáles descansan hasta que se reinicie su límite.
-  - En cada una, qué modelos ha usado Hermes y cuántos tokens cada uno, en 24 h, 7 días o 30 días.
+  - En cada una, qué modelos ha usado Hermes y cuántos tokens cada uno, en 24 h, 7 días o 30 días; con varias claves de la misma API, cada clave con lo suyo.
   - Lo lee un complemento pequeño de Pedila dentro de Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): tus claves no salen de Hermes, solo llegan números. Se instala con el botón «Activar cuotas» del panel, sin reiniciar Hermes, y se actualiza también desde ahí (al venir de una versión anterior a la 1.2.0, Hermes tiene que reiniciarse una vez). Las APIs que no tienes no aparecen.
 - **Modelo y esfuerzo de un chat empezado:** se pueden cambiar con el chat ya en marcha (Hermes los cambia con sus órdenes `/model` y `/reasoning`), con niveles de razonamiento hasta «al máximo».
 - **Herramientas como en Claude Code:** las que van seguidas se juntan en una línea que se abre («Ejecutó 2 órdenes, leyó captura.png · +12 −3 · 1 falló»). Dentro, cada una con su título, lo que se le pasó (la orden, el código o el cambio en verde y rojo), lo que devolvió y, si falló, en rojo. Las imágenes que mira o genera salen ahí mismo.

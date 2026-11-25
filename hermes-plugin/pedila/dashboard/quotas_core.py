@@ -31,9 +31,12 @@ from __future__ import annotations
 
 import calendar
 import hashlib
+import importlib.util
 import logging
 import re
 import sqlite3
+import sys
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,7 +45,7 @@ from urllib.parse import urlparse
 
 log = logging.getLogger("hermes_dashboard_plugin_pedila")
 
-PLUGIN_VERSION = "1.4.0"
+PLUGIN_VERSION = "1.5.0"
 NAMES = {"openrouter": "OpenRouter", "venice": "Venice", "opencode-go": "OpenCode Go", "opencode-zen": "OpenCode Zen",
          "deepseek": "DeepSeek", "openference": "Openference"}
 ORDER = ["openrouter", "venice", "opencode-go", "opencode-zen", "deepseek", "openference"]
@@ -340,7 +343,7 @@ def detect(runtime: Callable[..., Optional[dict]], cfg: Optional[dict] = None, n
                 entry["models"].extend(m for m in models if m not in entry["models"])
                 entry["active"] = entry["active"] or k["active"]
                 continue
-            seen[(kind, fp)] = {**k, "kind": kind, "name": name, "models": list(models), "pos": pos}
+            seen[(kind, fp)] = {**k, "fp": fp, "kind": kind, "name": name, "models": list(models), "pos": pos}
     # Hermes's own provider first, and each one's keys in the order Hermes tries them.
     return sorted(seen.values(), key=lambda e: (ORDER.index(e["kind"]), e["name"].lower() != e["kind"], e["name"].lower(), e["pos"]))
 
@@ -886,23 +889,40 @@ def go_idle(row: dict, now: float) -> bool:
     return bool(w) and w["percent"] == 0 and w["end"] is not None and w["end"] - now >= GO_ROLLING_SECONDS - GO_IDLE_SLACK
 
 
-def go_decimals(accounts: list[dict], rows: list[dict], catalog: Optional[dict], now: float, whole: bool) -> None:
-    """Puts the decimals on OpenCode Go's rows. Hermes's records don't say with which key each thing was spent:
-    with several keys, they're only worked out in the 5-hour window of one while all the others are idle (in the
-    week and the month, another key's 0% may hide up to 0.99%). ``whole`` = all of the API's keys are in ``accounts``."""
-    for row in accounts:
+def go_decimals(accounts: list[dict], rows: list[dict], catalog: Optional[dict], now: float, whole: bool,
+                keyed: Optional[list[list[dict]]] = None, noted: Optional[list[dict]] = None, since: float = 0.0) -> None:
+    """Puts the decimals on OpenCode Go's rows. Hermes's records don't say with which key each thing was spent: with
+    several keys, what recorder.py noted down is used (``keyed`` = each account's rows, ``noted`` = all of them, from
+    ``since`` on), in the windows where nothing that Hermes recorded is missing. In the others, they're only worked
+    out in the 5-hour window of one key while all the others are idle (in the week and the month, another key's 0%
+    may hide up to 0.99%). ``whole`` = all of the API's keys are in ``accounts``."""
+    def spent(its: list[dict], start: float) -> float:
+        return sum((r["input"] + r["output"]) * share_after(r["first"], r["last"], start) for r in its)
+
+    for i, row in enumerate(accounts):
         official = go_official(row) if row.get("ok") else {}
-        if len(accounts) > 1 or not whole:
-            if not whole or not all(go_idle(x, now) for x in accounts if x is not row):
-                continue
-            official = {w: o for w, o in official.items() if w == "rolling"}
         if not official:
             continue
-        est = go_estimate(rows, catalog, official, now)
-        for w in row["windows"]:
-            if w["id"] in official:
-                w.update(est["windows"].get(w["id"]) or {})
-        row.update(plan=est["plan"], unpriced=est["unpriced"], catalog=bool(catalog))
+        parts: list[tuple[list[dict], dict[str, dict]]] = []
+        if keyed is not None:
+            starts = window_starts({w: o["end"] for w, o in official.items()}, now)
+            sure = {w: o for w, o in official.items() if starts.get(w) is not None and starts[w] >= since
+                    and spent(rows, starts[w]) <= spent(noted or [], starts[w]) * 1.05 + 1000}
+            parts.append((keyed[i], sure))
+            official = {w: o for w, o in official.items() if w not in sure}
+        if keyed is not None or len(accounts) > 1 or not whole:
+            if not whole or not all(go_idle(x, now) for x in accounts if x is not row):
+                official = {}
+            official = {w: o for w, o in official.items() if w == "rolling"}
+        parts.append((rows, official))
+        for its, windows in parts:
+            if not windows:
+                continue
+            est = go_estimate(its, catalog, windows, now)
+            for w in row["windows"]:
+                if w["id"] in windows:
+                    w.update(est["windows"].get(w["id"]) or {})
+            row.update(plan=row.get("plan") or est["plan"], unpriced=sorted(set(row.get("unpriced") or []) | set(est["unpriced"])), catalog=bool(catalog))
 
 
 FETCHERS = {"openrouter": fetch_openrouter, "venice": fetch_venice, "opencode-go": fetch_opencode_go,
@@ -958,41 +978,127 @@ def _ranked(models: dict[str, dict[str, Any]]) -> tuple[list[dict[str, Any]], Op
     return out[:MAX_MODELS], {"models": len(rest), "tokens": sum(m["tokens"] for m in rest)} if rest else None
 
 
-def spent_by_kind(rows: list[dict], now: float, catalog: Optional[dict] = None) -> dict[str, dict[str, dict[str, Any]]]:
-    """What Hermes spent with each API (tokens read + written, read from the cache, calls, cost), in all and model
-    by model: 24 h, 7 and 30 days. Hermes records the first and the last call of each chat and model, not every
-    one: a row that crosses the start is split in proportion to the time, so it's approximate. With OpenCode Go,
-    which Hermes can't put a price on, the cost comes from its catalog's prices."""
-    spans = {"day": now - 86400, "week": now - 7 * 86400, "month": now - 30 * 86400}
-    out: dict[str, dict[str, dict[str, Any]]] = {}
-    by_model: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+def key_rows(since: float) -> Optional[tuple[float, list[dict]]]:
+    """What recorder.py noted down of each key, as rows like ``usage_rows``'s with the key's fingerprint, and since
+    when there's a record. None if there's none."""
+    try:
+        from hermes_constants import get_hermes_home
+        db = Path(get_hermes_home()) / "plugin-data" / "pedila" / "usage.db"
+    except Exception:
+        return None
+    if not db.exists():
+        return None
+    try:
+        con = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
+        try:
+            start = con.execute("SELECT value FROM meta WHERE name = 'since'").fetchone()
+            raw = con.execute("SELECT kind, key, model, input, output, cache_read, cache_write, calls, first, last "
+                              "FROM usage WHERE last >= ?", (since,)).fetchall()
+        finally:
+            con.close()
+    except Exception as exc:
+        log.debug("pedila: couldn't read the usage by key: %s", type(exc).__name__)
+        return None
+    start = _num(start[0]) if start else None
+    if start is None:
+        return None
+    return start, [{"kind": k, "key": key, "model": m or "", "input": int(i or 0), "output": int(o or 0), "cache_read": int(cr or 0),
+                    "cache_write": int(cw or 0), "calls": int(n or 0), "cost": 0.0, "first": _num(f), "last": _num(la)}
+                   for k, key, m, i, o, cr, cw, n, f, la in raw]
+
+
+SPANS = {"day": 1, "week": 7, "month": 30}
+_FIELDS = ("input", "output", "cache", "calls", "cost")
+# Of a model, less than this share without a known key isn't worth saying.
+REST_SHARE = 0.02
+
+
+def _tally(rows: list[dict], now: float, catalog: Optional[dict] = None) -> dict[str, dict[str, dict[str, Any]]]:
+    """{span: {model in lower case: {model, input, output, cache, calls, cost}}}. Hermes records the first and the
+    last call of each chat and model, not every one: a row that crosses the start of the span is split in
+    proportion to the time, so it's approximate. With OpenCode Go, which Hermes can't put a price on, the cost comes
+    from its catalog's prices."""
+    out: dict[str, dict[str, dict[str, Any]]] = {p: {} for p in SPANS}
     for r in rows:
-        per = out.setdefault(r["kind"], {p: {"tokens": 0.0, "calls": 0.0, "cost": 0.0, "cache": 0.0} for p in spans})
         cost = r["cost"]
         if not cost and r["kind"] == "opencode-go" and catalog:
             cost = row_cost(r, catalog.get(norm_model(r["model"]))) or 0.0
         name = " ".join(str(r["model"] or "").split())[:80] or "?"
-        for p, since in spans.items():
-            f = share_after(r["first"], r["last"], since)
+        vals = (r["input"], r["output"], r["cache_read"] + r["cache_write"], r["calls"], cost)
+        for p, days in SPANS.items():
+            f = share_after(r["first"], r["last"], now - days * 86400)
             if f <= 0:
                 continue
-            per[p]["tokens"] += (r["input"] + r["output"]) * f
-            per[p]["cache"] += (r["cache_read"] + r["cache_write"]) * f
-            per[p]["calls"] += r["calls"] * f
-            per[p]["cost"] += cost * f
             # The same model may be written with other capitals from one chat to another.
-            m = by_model.setdefault((r["kind"], p), {}).setdefault(
-                name.lower(), {"model": name, "input": 0.0, "output": 0.0, "cache": 0.0, "calls": 0.0, "cost": 0.0})
-            m["input"] += r["input"] * f
-            m["output"] += r["output"] * f
-            m["cache"] += (r["cache_read"] + r["cache_write"]) * f
-            m["calls"] += r["calls"] * f
-            m["cost"] += cost * f
-    for kind, per in out.items():
-        for p, total in per.items():
-            for k in ("tokens", "cache", "calls"):
-                total[k] = int(round(total[k]))
-            total["models"], total["others"] = _ranked(by_model.get((kind, p), {}))
+            m = out[p].setdefault(name.lower(), {"model": name, **dict.fromkeys(_FIELDS, 0.0)})
+            for k, v in zip(_FIELDS, vals):
+                m[k] += v * f
+    return out
+
+
+def _present(tally: dict[str, dict[str, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    """What's given of each span: the totals and the models, the ones that spent the most first."""
+    out: dict[str, dict[str, Any]] = {}
+    for p, by in tally.items():
+        models, others = _ranked(by)
+        out[p] = {"tokens": int(round(sum(m["input"] + m["output"] for m in by.values()))),
+                  "calls": int(round(sum(m["calls"] for m in by.values()))), "cost": sum(m["cost"] for m in by.values()),
+                  "cache": int(round(sum(m["cache"] for m in by.values()))), "models": models, "others": others}
+    return out
+
+
+def spent_by_kind(rows: list[dict], now: float, catalog: Optional[dict] = None) -> dict[str, dict[str, dict[str, Any]]]:
+    """What Hermes spent with each API (tokens read + written, cache, calls, cost), in all and model by model:
+    24 h, 7 and 30 days."""
+    return {k: _present(_tally([r for r in rows if r["kind"] == k], now, catalog)) for k in dict.fromkeys(r["kind"] for r in rows)}
+
+
+def with_cost(noted: list[dict], rows: list[dict]) -> list[dict]:
+    """recorder.py's rows, with what Hermes reckons each model costs (dollars per token of its own records)."""
+    rate: dict[str, list[float]] = {}
+    for r in rows:
+        if r["cost"] > 0:
+            x = rate.setdefault(str(r["model"]).lower(), [0.0, 0.0])
+            x[0] += r["cost"]
+            x[1] += r["input"] + r["output"]
+    out = []
+    for r in noted:
+        cost, tokens = rate.get(str(r["model"]).lower(), (0.0, 0.0))
+        out.append({**r, "cost": cost / tokens * (r["input"] + r["output"]) if tokens else 0.0})
+    return out
+
+
+_COUNTS = ("input", "output", "cache_read", "cache_write", "calls", "cost")
+
+
+def rest_rows(rows: list[dict], noted: list[dict], keys: list[str], since: float) -> list[dict]:
+    """What isn't in the list of any of the keys shown, as rows: what Hermes recorded before there was a record by key
+    (``since``), what it recorded afterwards and recorder.py didn't note down, and what was spent with other keys."""
+    early = [r for r in rows if (r["last"] or 0) < since]
+    late = [r for r in rows if (r["last"] or 0) >= since]
+    out = early + [r for r in noted if r["key"] not in keys]
+    # Of the chats used since then, model by model and without splitting any by the time: Hermes's total minus what
+    # was noted down. (Only of those: what was noted down of a chat that was deleted must not hide what's from before.)
+    by: dict[str, list[dict]] = {}
+    for r in late:
+        by.setdefault(" ".join(str(r["model"] or "").split())[:80].lower(), []).append(r)
+    known: dict[str, dict[str, float]] = {}
+    for r in noted:
+        k = known.setdefault(str(r["model"]).lower(), dict.fromkeys(_COUNTS, 0.0))
+        for f in _COUNTS:
+            k[f] += r[f]
+    for name, its in by.items():
+        k = known.get(name) or dict.fromkeys(_COUNTS, 0.0)
+        whole = {f: sum(r[f] for r in its) for f in _COUNTS}
+        missing = {f: max(0.0, whole[f] - k[f]) for f in _COUNTS}
+        tokens = whole["input"] + whole["output"]
+        if tokens <= 0 or missing["input"] + missing["output"] < tokens * REST_SHARE:
+            continue
+        # When it was: before there was a record, if some chat is from then; if not, at any time of theirs.
+        firsts = [r["first"] for r in its if r["first"] is not None]
+        first = min(firsts) if firsts else None
+        last = since if first is not None and first < since else max(r["last"] for r in its)
+        out.append({"kind": its[0]["kind"], "model": its[0]["model"], "first": first, "last": last, **missing})
     return out
 
 
@@ -1006,12 +1112,46 @@ def shell_stale(info: dict[str, Any]) -> bool:
     return bool(m) and m.group(1) != info.get("shell")
 
 
+_RECORDER_MODULE = "hermes_dashboard_plugin_pedila_recorder"
+_recorder_lock = threading.Lock()
+
+
+def ensure_recorder() -> bool:
+    """Loads recorder.py (or loads it again, if it or this file changed) in this process and starts it."""
+    with _recorder_lock:
+        here = Path(__file__).resolve()
+        path = here.parent.parent / "recorder.py"
+        try:
+            sig = tuple((s.st_mtime_ns, s.st_size) for s in (path.stat(), here.stat()))
+        except OSError:
+            return False
+        old = sys.modules.get(_RECORDER_MODULE)
+        if old is not None and getattr(old, "_pedila_sig", None) == sig:
+            return bool(getattr(old, "_pedila_on", False))
+        try:
+            spec = importlib.util.spec_from_file_location(_RECORDER_MODULE, path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            on = mod.install(kind_of)
+        except Exception as exc:
+            log.warning("pedila: couldn't start the usage record by key (%s)", type(exc).__name__)
+            return False
+        mod._pedila_sig, mod._pedila_on = sig, on
+        sys.modules[_RECORDER_MODULE] = mod
+        if old is not None:
+            old.stop()
+        return on
+
+
 def build(runtime: Callable[..., Optional[dict]], **info: Any) -> dict[str, Any]:
     """The whole answer. ``info`` = what plugin_api.py says of itself ("shell" and "shell_file")."""
     import httpx
 
+    if info:  # inside Hermes
+        ensure_recorder()
     now = time.time()
     rows = usage_rows(now - ROWS_DAYS * 86400)
+    noted = key_rows(now - ROWS_DAYS * 86400)
     groups: dict[str, list[dict[str, Any]]] = {}
     for e in detect(runtime, now=now):
         groups.setdefault(e["kind"], []).append(e)
@@ -1050,12 +1190,28 @@ def build(runtime: Callable[..., Optional[dict]], **info: Any) -> dict[str, Any]
                 row.update(ok=False, error="unexpected failure reading the provider")
     for kind, group in groups.items() if rows is not None else ():
         mine = [row for e, row in work if e["kind"] == kind]
+        keys = [e["fp"] for e, _row in work if e["kind"] == kind]
+        of_kind = [r for r in rows if r["kind"] == kind]
         try:
+            since, by_key = noted if noted else (0.0, [])
+            by_key = with_cost([r for r in by_key if r["kind"] == kind], of_kind)
+            # (A single key too, if something was noted down with another one that is no longer there.)
+            if by_key and (len(group) > 1 or any(r["key"] not in keys for r in by_key)):
+                # Each key with its own. Hermes doesn't record it: it's what recorder.py noted down.
+                keyed = [[r for r in by_key if r["key"] == k] for k in keys]
+                for row, its in zip(mine, keyed):
+                    row["spent"] = spent_by_kind(its, now, catalog).get(kind)
+                rest = spent_by_kind(rest_rows(of_kind, by_key, keys, since), now, catalog).get(kind)
+                if rest and rest["month"]["tokens"]:
+                    mine[-1]["spent_rest"] = rest
+                if kind == "opencode-go":
+                    go_decimals(mine, of_kind, catalog, now, len(mine) == len(group), keyed, by_key, since)
+                continue
             # What Hermes spent goes by API: with several keys it isn't known which one it was, so it's said once,
             # for all of them (in a field of its own: earlier versions of Pedila would take it for that key's).
-            mine[0]["spent" if len(group) == 1 else "spent_all"] = spent_by_kind(rows, now, catalog).get(kind)
+            mine[0]["spent" if len(group) == 1 else "spent_all"] = spent_by_kind(of_kind, now, catalog).get(kind)
             if kind == "opencode-go":
-                go_decimals(mine, [r for r in rows if r["kind"] == kind], catalog, now, len(mine) == len(group))
+                go_decimals(mine, of_kind, catalog, now, len(mine) == len(group))
         except Exception as exc:  # what's worked out from Hermes's records doesn't take the quotas down
             log.warning("pedila: failure working out what was spent with %s: %s", kind, type(exc).__name__)
     return {"plugin": "pedila", "version": PLUGIN_VERSION, "fetched_at": datetime.fromtimestamp(now, UTC).isoformat(),

@@ -21,9 +21,16 @@ OpenCode Go gives its usage in whole numbers rounded down (0% until it gets to 1
 decimals out from the tokens Hermes records for each model and the price and the monthly limit of each model
 that OpenCode publishes (`/zen/go/v1/models`, without a key): the 5-hour window is 20% of the month and the
 week 50%. They're only given when they agree with OpenCode's whole number (they don't if the account is also used
-from somewhere else, or if OpenCode changes its limits). Hermes doesn't record which key each thing was spent with:
-with several, they're only worked out in the 5-hour window of one while the others are idle, and what Hermes
-spent is said once, for all of them.
+from somewhere else, or if OpenCode changes its limits).
+
+Hermes doesn't record which key each thing was spent with. `recorder.py` notes it down: after each answer, it adds up
+by hour the model, the tokens and a fingerprint of the key (the first 16 hex digits of its SHA-256, never the key) in
+`plugin-data/pedila/usage.db`, for 40 days. No text of any chat is kept. To do that it wraps some of Hermes's
+functions (`agent.turn_usage.add_session_usage`, `agent.aux_accounting.record_aux_usage` and the ones that send the
+auxiliary calls and the cache keep-alives), which go on doing the same. What it couldn't note down (from before, from
+a process that hasn't loaded it yet) is said apart, as not known with which key. If a Hermes doesn't have those
+functions, what Hermes spent is said once, for all the keys. Where the web page and the gateway are separate
+processes (a server), the gateway notes it down from its next start on.
 
 Openference doesn't document an address for its balance: the plugin asks the one its own web page uses
 (`/api/user/me`), which takes the API key too and might change without notice. That answer also has personal data:
@@ -39,7 +46,7 @@ chat and model: a chat longer than that time counts in proportion, so it's appro
 
 Only the APIs that have a key show up. The keys don't leave Hermes: the plugin uses them to ask the provider and
 returns numbers. A key is only sent, over https, to the address Hermes uses it at: if a provider goes through a proxy
-or a mirror, it isn't asked about. Reading them changes nothing in Hermes (it doesn't count or rotate them, and it
-stores nothing). It adds no tools, hooks or prompt text.
+or a mirror, it isn't asked about. Reading them changes nothing in Hermes (it doesn't count or rotate them). All it
+stores is the usage by key. It adds no tools, hooks or prompt text.
 
 By hand: `hermes plugins install ElKiro1311/pedila/hermes-plugin/pedila --enable`.

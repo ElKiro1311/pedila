@@ -30,10 +30,10 @@ const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 const QUOTA_PLUGIN = 'pedila'
 const QUOTA_PLUGIN_SOURCE = 'ElKiro1311/pedila/hermes-plugin/pedila'
 const QUOTA_KINDS = ['openrouter', 'venice', 'opencode-go', 'opencode-zen', 'deepseek', 'openference']
-// The plugin version this Pedila knows how to show in full (1.4.0: the models used with
-// each API; 1.3.0: DeepSeek and Openference; 1.2.0: every key of a provider, and OpenCode Go with decimals). With an earlier one, updating it is offered. From 1.2.0 on its calculation reloads by itself
+// The plugin version this Pedila knows how to show in full (1.5.0: what each key has used;
+// 1.4.0: the models used with each API; 1.3.0: DeepSeek and Openference; 1.2.0: every key of a provider, and OpenCode Go with decimals). With an earlier one, updating it is offered. From 1.2.0 on its calculation reloads by itself
 // (without restarting Hermes).
-const QUOTA_PLUGIN_WANT = '1.4.0'
+const QUOTA_PLUGIN_WANT = '1.5.0'
 const QUOTA_PLANS = ['go', 'go-teams', 'go-plus']
 const INSTALL_TIMEOUT = 180000
 
@@ -85,7 +85,7 @@ function quotaData(j) {
     ? { id: cut(str(a.id), 20), n: Math.max(1, Math.round(num(a.n) || 1)), of: Math.round(a.of), active: typeof a.active === 'boolean' ? a.active : null, resting: a.resting === true, until: isoOf(a.until), hidden: Math.max(0, Math.round(num(a.hidden) || 0)) }
     : null)
   const providers = (Array.isArray(j.providers) ? j.providers : []).filter(p => p && QUOTA_KINDS.includes(p.kind)).slice(0, 30).map(p => {
-    const o = { kind: p.kind, name: cut(str(p.name) || p.kind, 40), ok: p.ok !== false, error: p.ok === false ? cut(str(p.error) || tr("couldn't be read"), 200) : '', noApi: Boolean(p.no_api), spent: spentOf(p.spent), spentAll: spentOf(p.spent_all), account: accountOf(p.account) }
+    const o = { kind: p.kind, name: cut(str(p.name) || p.kind, 40), ok: p.ok !== false, error: p.ok === false ? cut(str(p.error) || tr("couldn't be read"), 200) : '', noApi: Boolean(p.no_api), spent: spentOf(p.spent), spentAll: spentOf(p.spent_all), spentRest: spentOf(p.spent_rest), account: accountOf(p.account) }
     if (p.kind === 'openrouter') {
       const kl = p.key_limit && typeof p.key_limit === 'object' ? p.key_limit : null
       const ku = p.key_usage && typeof p.key_usage === 'object' ? p.key_usage : {}

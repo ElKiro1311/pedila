@@ -63,6 +63,8 @@ test('quotas: the models used with each API (plugin 1.4.0)', () => {
   assert.deepEqual(s.day, { tokens: 12, calls: 2, cost: 0.5, cache: 100, others: { models: 2, tokens: 7 }, models: [
     { model: 'A', tokens: 9, input: 6, output: 3, cache: 90, calls: 1, cost: 0.5 }, { model: 'B', tokens: 0, input: 0, output: 0, cache: 0, calls: 0, cost: 0 }] })
   assert.deepEqual([s.week.models.length, s.week.others], [12, null])
+  const rest = quotaData({ plugin: 'pedila', version: '1.5.0', providers: [{ kind: 'opencode-go', ok: true, windows: [], spent: null, spent_rest: { day, week: many, month: many } }] }).providers[0]
+  assert.deepEqual([rest.spent, rest.spentRest.day.tokens, rest.spentRest.month.models.length], [null, 12, 12])
   // An earlier plugin doesn't tell the models apart.
   assert.deepEqual(s.month, { tokens: 0, calls: 0, cost: 0, cache: 0, models: null, others: null })
   assert.equal(of(null), null)
@@ -179,8 +181,9 @@ test('quotas: does the plugin have to be updated?', () => {
   assert.equal(quotaPluginOutdated('1.1.0'), true)
   assert.equal(quotaPluginOutdated('1.2.0'), true)
   assert.equal(quotaPluginOutdated('1.3.0'), true)
-  assert.equal(quotaPluginOutdated('1.4.0'), false)
-  assert.equal(quotaPluginOutdated('1.4.1'), false)
+  assert.equal(quotaPluginOutdated('1.4.0'), true)
+  assert.equal(quotaPluginOutdated('1.5.0'), false)
+  assert.equal(quotaPluginOutdated('1.5.1'), false)
   assert.equal(quotaPluginOutdated('2.0.0'), false)
 })
 
@@ -284,14 +287,14 @@ test("quotas: a plugin updated on disk but not loaded yet isn't offered again", 
   const Q = 'GET /api/plugins/pedila/cuotas'
   const D = 'GET plugins'
   const ask = async routes => { const h = fakeHermes(routes); const r = await h.c.quotas(); return [r.outdated, r.onDisk, r.restart, h.calls.length] }
-  assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.4.0') }), [true, '1.4.0', true, 2])
+  assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.5.0') }), [true, '1.5.0', true, 2])
   assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.0.1') }), [true, '1.0.1', false, 2])
   // Not being able to know is taken as "not updated"; up to date, it isn't even asked.
   assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: { status: 401 } }), [true, '', false, 2])
   assert.deepEqual(await ask({ [Q]: answer('1.0.0') }), [true, '', false, 2])
-  assert.deepEqual(await ask({ [Q]: answer('1.4.0') }), [false, '', false, 1])
+  assert.deepEqual(await ask({ [Q]: answer('1.5.0') }), [false, '', false, 1])
   // Up to date in what reloads by itself, but with the fixed part from before.
-  assert.deepEqual(await ask({ [Q]: answer('1.4.0', { shell: '1.2.0', shell_stale: true }) }), [false, '', true, 1])
+  assert.deepEqual(await ask({ [Q]: answer('1.5.0', { shell: '1.2.0', shell_stale: true }) }), [false, '', true, 1])
 })
 
 test('quotas: what the card says about the plugin', async () => {

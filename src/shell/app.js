@@ -2518,17 +2518,27 @@ function modelRow(m, max, title) {
 }
 
 /** The models Hermes has used with an API and how many tokens each one, like the "Most used models" card. */
-function spentBlock(p) {
+function spentBlocks(p) {
   const all = !p.spent && Boolean(p.spentAll)
   const sp = p.spent || p.spentAll
-  if (!sp) { return null }
-  if (!sp.month.models) { return spentLine(sp, all) } // a plugin from before 1.4.0
+  const out = []
+  if (sp && !sp.month.models) { out.push(spentLine(sp, all)) /* a plugin from before 1.4.0 */ } else if (sp) {
+    out.push(usedBlock(sp, all ? tr('Models used (all the keys)') : tr('Models used'), '', `used-${p.kind}-${p.account ? p.account.n : 0}`))
+  }
+  // With several keys, what isn't in any of their lists (plugin 1.5.0).
+  if (p.spentRest && p.spentRest.month.models) {
+    out.push(usedBlock(p.spentRest, tr('With other keys, or not known which one'), tr("What was spent before the plugin noted down the key (from its version 1.5.0 on), by a part of Hermes that hasn't restarted since, or with a key that isn't in the list."), `rest-${p.kind}`))
+  }
+  return out
+}
+
+function usedBlock(sp, name, why, focus) {
   if (!sp.month.models.length) { return null }
   const id = spanNow()
   const now = sp[id]
-  const tabs = SPANS.map(([k, text]) => el('button', { class: 'q-span' + (k === id ? ' on' : ''), text, 'aria-pressed': String(k === id), 'data-focus': `used-${p.kind}-${p.account ? p.account.n : 0}-${k}`, onclick: e => setSpan(k, e.currentTarget) }))
-  const head = el('div', { class: 'q-used-h', title: tr('What Hermes has spent with this API according to its own records: tokens read + written, without the cache. Summaries, titles and images count too. A chat that lasts longer than this time counts in proportion, so it is approximate.') },
-    el('span', { class: 'grow', text: all ? tr('Models used (all the keys)') : tr('Models used') }), el('span', { class: 'q-spans' }, ...tabs))
+  const how = tr('What Hermes has spent with this API according to its own records: tokens read + written, without the cache. Summaries, titles and images count too. A chat that lasts longer than this time counts in proportion, so it is approximate.')
+  const tabs = SPANS.map(([k, text]) => el('button', { class: 'q-span' + (k === id ? ' on' : ''), text, 'aria-pressed': String(k === id), 'data-focus': `${focus}-${k}`, onclick: e => setSpan(k, e.currentTarget) }))
+  const head = el('div', { class: 'q-used-h', title: why ? `${why}\n${how}` : how }, el('span', { class: 'grow', text: name }), el('span', { class: 'q-spans' }, ...tabs))
   if (!now.models.length) { return el('div', { class: 'q-used' }, head, el('div', { class: 'q-line muted', text: tr('Nothing in this time.') })) }
   const rest = now.models.slice(6)
   const restN = rest.length + (now.others ? now.others.models : 0)
@@ -2713,7 +2723,7 @@ function quotaBlock(p, conn = S.active) {
     }
     if (p.planName) { line(`Plan: ${p.planName}` + (p.subscribed && p.expiresAt ? ' · ' + tr('until {0}', full(Date.parse(p.expiresAt))) : '')) }
     if (p.active === false) { line(tr("Openference says that the account isn't active."), 'warn') }
-    if (!p.subscribed && p.balance !== null && p.balance <= 0) { line(tr('Without a plan or credits, only the free models answer. Openference limits them per day, but it only says so when the limit is reached.')) }
+    if (!p.subscribed && p.balance !== null && p.balance <= 0) { line(tr('Without a plan or credits, at most the free models answer: Openference limits them per day and may ask for a credit balance for them too (it only says so when it happens).')) }
     if (p.freeModels.length) {
       rows.push(quotaList(peakKey(p, conn) + 'free', tr('Free models ({0})', p.freeModels.length),
         ...p.freeModels.map(m => el('div', { class: 'q-line muted', title: m.model, text: m.until ? tr('{0}: free until {1}', modelName(m.model), lastDay(m.until)) : modelName(m.model) }))))
@@ -2721,7 +2731,7 @@ function quotaBlock(p, conn = S.active) {
     if (p.usage.requests) { line(tr('This account, in all (cache included): {0} requests · {1} tokens', kfmt(p.usage.requests), kfmt(p.usage.tokens || 0)) + (p.usage.cost > 0 ? ' · ' + usd(p.usage.cost) : '')) }
   }
   if (p.account && p.account.hidden) { line(tr("{0} more keys of this API aren't shown.", p.account.hidden)) }
-  return el('div', { class: 'q-prov' }, head, ...rows, spentBlock(p))
+  return el('div', { class: 'q-prov' }, head, ...rows, ...spentBlocks(p))
 }
 
 /** Hermes's security scan raised an objection when installing or updating the plugin: the person decides. */
@@ -2800,7 +2810,7 @@ function quotaUpdateRow(conn, q) {
       el('div', { class: 'q-actions' }, el('button', { class: 'btn-primary', text: busy === 'restarting' ? tr('Restarting Hermes…') : tr('Restart Hermes now'), disabled: Boolean(busy), onclick: () => restartForQuotas(conn) })))
   }
   if (notice === 'ask') { return scanQuestion(conn, ask, () => updateQuotas(conn, true), () => { Q.updAsk[conn] = null }) }
-  const parts = [el('p', { class: 'small', text: tr("There's a new quotas plugin: it shows which models you've used with each API and how many tokens each one, and it also reads DeepSeek and Openference.") })]
+  const parts = [el('p', { class: 'small', text: tr("There's a new quotas plugin: it shows which models you've used with each API and with each key, and it also reads DeepSeek and Openference.") })]
   // When loading a plugin, a Hermes with username and password and no fixed "secret" closes its web
   // sessions.
   if (conn === 'server') { parts.push(el('p', { class: 'muted small', text: tr("Careful: when it changes it, the server's Hermes may close its web sessions (Pedila's too) and you'll have to sign in again once.") })) }

@@ -5,12 +5,14 @@ uses httpx and fastapi, which Hermes brings. By hand:
   python -I -X utf8 test/plugin/test_quotas_core.py
 They touch neither the network nor the real Hermes: everything goes with test data.
 """
+import asyncio
 import importlib.util
 import json
 import logging
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -580,6 +582,328 @@ class Build(unittest.TestCase):
 
 Build.usage_original = FakeClient.usage
 
+
+class UsageByKey(unittest.TestCase):
+    """recorder.py (which key each answer was made with) and how it's told apart."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.home = types.ModuleType("hermes_constants")
+        self.home.get_hermes_home = lambda: self.tmp
+        self.mods = mock.patch.dict(sys.modules, {"hermes_constants": self.home})
+        self.mods.start()
+        self.rec = load(DASH.parent / "recorder.py", "pedila_recorder_test")
+
+    def tearDown(self):
+        self.mods.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def usage(self, i=0, o=0, cr=0, cw=0):
+        return types.SimpleNamespace(input_tokens=i, output_tokens=o, cache_read_tokens=cr, cache_write_tokens=cw)
+
+    def recorder(self):
+        r = self.rec.Recorder(core.kind_of)
+        r.start = lambda: None  # without its thread
+        return r
+
+    def fp(self, key):
+        return core.hashlib.sha256(key.encode()).hexdigest()[:16]
+
+    def test_it_adds_up_by_hour_key_and_model(self):
+        a, b = cred("one", "a").access_token, cred("two", "b").access_token
+        r = self.recorder()
+        for key, when, inp in ((a, NOW, 10), (a, NOW + 5, 20), (b, NOW, 7), (a, NOW - 7200, 1)):
+            r.note(GO_URL + "/", key, "glm-5.3", self.usage(inp, 2, 100, 3), now=when)
+        r.note("http://127.0.0.1:8080/v1", a, "m", self.usage(5), now=NOW)       # local: it isn't a paid API
+        r.note(GO_URL, lambda: "x", "m", self.usage(5), now=NOW)                 # a key that can't be told
+        r.note(GO_URL, a, "m", self.usage(), now=NOW)                            # nothing was spent
+        with mock.patch.object(self.rec.time, "time", lambda: NOW):
+            r.flush()
+        since, rows = core.key_rows(NOW - 86400)
+        got = sorted((x["key"] == self.fp(a), x["input"], x["output"], x["cache_read"], x["cache_write"], x["calls"], x["model"], x["last"]) for x in rows)
+        self.assertEqual(got, [(False, 7, 2, 100, 3, 1, "glm-5.3", NOW), (True, 1, 2, 100, 3, 1, "glm-5.3", NOW - 7200), (True, 30, 4, 200, 6, 2, "glm-5.3", NOW + 5)])
+        self.assertEqual(since, NOW - 7200)
+        # The keys are nowhere in what was stored, and the beginning isn't moved by going on.
+        data = b"".join(f.read_bytes() for f in (self.tmp / "plugin-data" / "pedila").iterdir())
+        self.assertNotIn(a.encode(), data)
+        r.note(GO_URL, a, "m", self.usage(1), now=NOW + 50)
+        r.flush()
+        self.assertEqual(core.key_rows(0)[0], NOW - 7200)
+
+    def test_each_profile_has_its_own(self):
+        other = Path(tempfile.mkdtemp())
+        try:
+            r = self.recorder()
+            key = cred("one", "a").access_token
+            r.note(GO_URL, key, "mine", self.usage(5))
+            self.home.get_hermes_home = lambda: other
+            r.note(GO_URL, key, "theirs", self.usage(6))
+            r.flush()
+            self.assertEqual([x["model"] for x in core.key_rows(0)[1]], ["theirs"])
+            self.home.get_hermes_home = lambda: self.tmp
+            self.assertEqual([x["model"] for x in core.key_rows(0)[1]], ["mine"])
+        finally:
+            shutil.rmtree(other, ignore_errors=True)
+
+    def test_the_thread_writes_and_stops(self):
+        r = self.rec.Recorder(core.kind_of)
+        with mock.patch.object(self.rec, "FLUSH_SECONDS", 0.01):
+            for n in range(40):
+                r.note(GO_URL, cred("one", "a").access_token, "m", self.usage(1))
+                time.sleep(0.001)
+            for _ in range(200):
+                got = core.key_rows(0)
+                if got and sum(x["input"] for x in got[1]) == 40:
+                    break
+                time.sleep(0.02)
+        self.assertEqual(sum(x["input"] for x in core.key_rows(0)[1]), 40)
+        r.note(GO_URL, cred("one", "a").access_token, "last", self.usage(2))
+        r.stop()  # what was pending is written before it ends
+        self.assertIn("last", [x["model"] for x in core.key_rows(0)[1]])
+        r.thread.join(5)
+        self.assertFalse(r.thread.is_alive())
+
+    def test_nothing_is_lost_when_the_process_ends(self):
+        script = ("import importlib.util,sys,types,atexit\n"
+                  "m=types.ModuleType('hermes_constants'); m.get_hermes_home=lambda: sys.argv[2]; sys.modules['hermes_constants']=m\n"
+                  "s=importlib.util.spec_from_file_location('r',sys.argv[1]); r=importlib.util.module_from_spec(s); s.loader.exec_module(r)\n"
+                  "x=r.Recorder(lambda u:'opencode-go'); atexit.register(x.flush)\n"
+                  "x.note('u','k'*20,'m',types.SimpleNamespace(input_tokens=5)); import time; time.sleep(float(sys.argv[3]))\n")
+        for wait in ("0", "0.1"):
+            subprocess.run([sys.executable, "-I", "-c", script, str(DASH.parent / "recorder.py"), str(self.tmp), wait], check=True, timeout=30)
+        self.assertEqual(sum(x["calls"] for x in core.key_rows(0)[1]), 2)
+
+    def test_what_is_old_goes_away(self):
+        r = self.recorder()
+        key = cred("one", "a").access_token
+        r.note(GO_URL, key, "old", self.usage(5), now=time.time() - 41 * 86400)
+        r.note(GO_URL, key, "new", self.usage(5), now=time.time() - 39 * 86400)
+        r.flush()
+        self.assertEqual([x["model"] for x in core.key_rows(0)[1]], ["new"])
+
+    def test_without_a_record(self):
+        self.assertIsNone(core.key_rows(0))
+        (self.tmp / "plugin-data" / "pedila").mkdir(parents=True)
+        (self.tmp / "plugin-data" / "pedila" / "usage.db").write_bytes(b"this isn't a database, it only looks like one")
+        self.assertIsNone(core.key_rows(0))
+        r = self.recorder()
+        r.note(GO_URL, cred("one", "a").access_token, "m", self.usage(5))
+        r.flush()  # it can't be written: nothing happens
+
+    def hermes(self):
+        """A make-believe Hermes: the functions recorder.py listens to."""
+        calls = self.calls = []
+
+        def add_session_usage(agent, usage, *, prompt_tokens=0, completion_tokens=0, total_tokens=0):
+            calls.append(("chat", prompt_tokens))
+            return "chat"
+
+        def record_aux_usage(response, task, *, provider=None, base_url=None, serving=None):
+            calls.append(("aux", task))
+            return "aux"
+
+        class ServingCredential:
+            of = staticmethod(lambda client: client)
+
+        class PromptCacheWarmer:
+            def _record(self, run, usage):
+                if usage is None:
+                    raise ValueError("a keep-alive that fails")
+                return pkg.turn_usage.add_session_usage(self.agent, usage)
+
+        async def relay_async(client, kwargs, *, provider=None):
+            return kwargs["answer"]
+        pkg = types.ModuleType("agent")
+        pkg.turn_usage = types.SimpleNamespace(add_session_usage=add_session_usage)
+        pkg.aux_accounting = types.SimpleNamespace(record_aux_usage=record_aux_usage, ServingCredential=ServingCredential, _EXCLUDED_TASKS=frozenset({"moa_reference"}))
+        pricing = types.ModuleType("agent.usage_pricing")
+        pricing.normalize_usage = lambda raw, provider=None: raw
+        aux = types.ModuleType("agent.auxiliary_client")
+        aux._relay_sync_completion = lambda client, kwargs, *, provider=None: kwargs["answer"]
+        aux._relay_async_completion = relay_async
+        warmer = types.ModuleType("agent.prompt_cache_lifecycle.warmer")
+        warmer.PromptCacheWarmer = PromptCacheWarmer
+        return pkg, {"agent": pkg, "agent.usage_pricing": pricing, "agent.auxiliary_client": aux, "agent.prompt_cache_lifecycle.warmer": warmer}
+
+    def test_it_wraps_hermes_without_changing_what_it_does(self):
+        pkg, mods = self.hermes()
+        a, b = cred("one", "a").access_token, cred("two", "b").access_token
+        with mock.patch.dict(sys.modules, mods):
+            self.assertTrue(self.rec.install(core.kind_of))
+            first = pkg.turn_usage.add_session_usage
+            # Another version of the file takes over: it's wrapped once, and only the new one notes down.
+            old = self.rec._current["rec"]
+            again = load(DASH.parent / "recorder.py", "pedila_recorder_test_2")
+            self.assertTrue(again.install(core.kind_of))
+            self.rec.stop()
+            self.assertTrue(old.stopped)
+            old.note(GO_URL, a, "on-its-way", self.usage(1))  # an answer that was on its way isn't lost
+            self.assertIs(pkg.turn_usage.add_session_usage, first)
+            rec = again._current["rec"]
+            rec.start = lambda: None
+            ag = types.SimpleNamespace(base_url=GO_URL, api_key=a, model="glm-5.3", provider="opencode-go")
+            self.assertEqual(first(ag, self.usage(5, 1), prompt_tokens=5, completion_tokens=1, total_tokens=6), "chat")
+            ag.api_key = b  # Hermes moved on to the next key
+            first(ag, self.usage(8, 1), prompt_tokens=8, completion_tokens=1, total_tokens=9)
+            first(types.SimpleNamespace(base_url=GO_URL, api_key=a, model="mix", provider="moa"), self.usage(99), prompt_tokens=99)
+            first(None, None)  # something unexpected doesn't reach Hermes
+            aux = pkg.aux_accounting.record_aux_usage
+            serving = types.SimpleNamespace(base_url=GO_URL, api_key=b)
+            resp = types.SimpleNamespace(usage=self.usage(3, 3), model="glm-5.3-flash")
+            self.assertEqual(aux(resp, "vision", provider="opencode-go", serving=serving), "aux")
+            aux(resp, "moa_reference", serving=serving)
+            aux(resp, "vision", serving=None)
+            aux(types.SimpleNamespace(usage=None), "vision", serving=serving)
+            self.assertEqual(self.calls, [("chat", 5), ("chat", 8), ("chat", 99), ("chat", 0), ("aux", "vision"), ("aux", "moa_reference"), ("aux", "vision"), ("aux", "vision")])
+            # With an error of Hermes's own, the error is the same and nothing is noted down.
+            with self.assertRaises(TypeError):
+                first()
+            rec.flush()
+        got = sorted((x["model"], x["key"] == self.fp(a), x["input"]) for x in core.key_rows(0)[1])
+        self.assertEqual(got, [("glm-5.3", False, 8), ("glm-5.3", True, 5), ("glm-5.3-flash", False, 3), ("on-its-way", True, 1)])
+
+    def test_auxiliary_calls_tried_again_with_another_key(self):
+        """Hermes doesn't say which client answered when it had to try again."""
+        pkg, mods = self.hermes()
+        a, b = cred("one", "a").access_token, cred("two", "b").access_token
+        client = lambda k: types.SimpleNamespace(base_url=GO_URL, api_key=k)  # noqa: E731
+        answer = lambda n: types.SimpleNamespace(usage=self.usage(n), model="m")  # noqa: E731
+        with mock.patch.dict(sys.modules, mods):
+            self.assertTrue(self.rec.install(core.kind_of))
+            rec = self.rec._current["rec"]
+            rec.start = lambda: None
+            aux, record = mods["agent.auxiliary_client"], pkg.aux_accounting.record_aux_usage
+            one = aux._relay_sync_completion(client(b), {"answer": answer(10)}, provider="opencode-go")
+            record(one, "compression")
+            record(one, "compression")  # it isn't known any more: it isn't given to anybody
+            aux._relay_sync_completion(client(a), {"answer": answer(50)})
+            record(answer(50), "image_generation")  # another answer, which didn't come through there
+
+            async def turn():
+                two = await aux._relay_async_completion(client(a), {"answer": answer(7)})
+                await asyncio.to_thread(record, two, "vision")
+            asyncio.run(turn())
+            rec.flush()
+        got = sorted((x["key"] == self.fp(a), x["input"]) for x in core.key_rows(0)[1])
+        self.assertEqual(got, [(False, 10), (True, 7)])
+
+    def test_a_cache_keep_alive_goes_with_what_it_was_sent_with(self):
+        pkg, mods = self.hermes()
+        a, b = cred("one", "a").access_token, cred("two", "b").access_token
+        with mock.patch.dict(sys.modules, mods):
+            self.assertTrue(self.rec.install(core.kind_of))
+            rec = self.rec._current["rec"]
+            rec.start = lambda: None
+            w = mods["agent.prompt_cache_lifecycle.warmer"].PromptCacheWarmer()
+            w.agent = types.SimpleNamespace(base_url=GO_URL, api_key=a, model="now", provider="opencode-go")
+            run = types.SimpleNamespace(billing={"base_url": GO_URL, "api_key": b, "model": "then"})
+            w._record(run, self.usage(4))
+            with self.assertRaises(ValueError):
+                w._record(run, None)
+            pkg.turn_usage.add_session_usage(w.agent, self.usage(6))  # afterwards, the agent's again
+            rec.flush()
+        got = sorted((x["model"], x["key"] == self.fp(a), x["input"]) for x in core.key_rows(0)[1])
+        self.assertEqual(got, [("now", True, 6), ("then", False, 4)])
+
+    def test_a_hermes_without_those_functions(self):
+        pkg = types.ModuleType("agent")
+        pkg.turn_usage = types.SimpleNamespace()
+        pkg.aux_accounting = types.SimpleNamespace()
+        with mock.patch.dict(sys.modules, {"agent": pkg}):
+            self.assertFalse(self.rec.install(core.kind_of))
+        self.assertIsNone(core.key_rows(0))
+
+    def answer(self, rows, noted, entries, since=0.0):
+        try:
+            import httpx
+        except ImportError:
+            self.skipTest("without httpx (tested with the Python of Hermes)")
+        rt = lambda name, *x: {"api_key": entries[0].access_token, "base_url": GO_URL, "credential_pool": Pool(entries)} if name == "opencode-go" else None  # noqa: E731
+        with mock.patch.object(httpx, "Client", FakeClient), mock.patch.object(core, "usage_rows", lambda s: rows), mock.patch.object(core, "_config", lambda: {}), \
+                mock.patch.object(core.time, "time", lambda: NOW), mock.patch.object(core, "key_rows", lambda s: (since, noted) if noted is not None else None):
+            return core.build(runtime=rt)["providers"]
+
+    def models(self, sp, span="month"):
+        return [(m["model"], m["tokens"]) for m in sp[span]["models"]] if sp else None
+
+    def test_each_key_with_its_own(self):
+        a, b = cred("one", "a"), cred("OpenCode Go (extra)", "b")
+        noted = [{**row("glm-5.3", inp=100, out=50, calls=2, first=NOW - 600, last=NOW - 60), "key": self.fp(a.access_token)},
+                 {**row("glm-5.3-flash", inp=7, out=0, calls=1, first=NOW - 60, last=NOW - 60), "key": self.fp(b.access_token)},
+                 {**row("other", kind="venice", inp=9, last=NOW), "key": self.fp(a.access_token)}]
+        rows = [row("glm-5.3", inp=100, out=50, calls=2, first=NOW - 600, last=NOW - 60), row("glm-5.3-flash", inp=7, first=NOW - 60, last=NOW - 60)]
+        one, two = self.answer(rows, noted, [a, b])
+        self.assertEqual((self.models(one["spent"], "day"), self.models(two["spent"], "day")), ([("glm-5.3", 150)], [("glm-5.3-flash", 7)]))
+        self.assertTrue("spent_all" not in one and "spent_rest" not in one and "spent_rest" not in two)
+        # Nothing noted down yet: the same as before, all the keys together.
+        for nothing in (None, [], noted[2:]):
+            one, two = self.answer(rows, nothing, [a, b])
+            self.assertEqual((one["spent"], self.models(one["spent_all"])), (None, [("glm-5.3", 150), ("glm-5.3-flash", 7)]))
+        # With a single key, what Hermes recorded (all of it is that one's).
+        [only] = self.answer(rows, noted[:1], [a])
+        self.assertEqual(self.models(only["spent"]), [("glm-5.3", 150), ("glm-5.3-flash", 7)])
+
+    def test_what_isnt_known_is_said_apart(self):
+        a, b = cred("one", "a"), cred("two", "b")
+        key = lambda c, *x, **k: {**row(*x, **k), "key": self.fp(c.access_token)}  # noqa: E731
+        spans = lambda sp: [sp[s]["tokens"] for s in ("day", "week", "month")]  # noqa: E731
+        # A chat from five days ago that goes on: what's from before there was a record is 3 million of its 10.
+        rows = [row("m", inp=10_010_000, calls=110, first=NOW - 5 * 86400, last=NOW), row("only-before", inp=400, calls=4, first=NOW - 9 * 86400, last=NOW - 8 * 86400)]
+        noted = [key(a, "m", inp=7_010_000, calls=60, first=NOW - 3500, last=NOW)]
+        one, two = self.answer(rows, noted, [a, b], since=NOW - 3600)
+        self.assertEqual(self.models(one["spent"]), [("m", 7_010_000)])
+        self.assertIsNone(two["spent"])
+        self.assertEqual(self.models(two["spent_rest"]), [("m", 3_000_000), ("only-before", 400)])
+        # A lot from before doesn't make the chats that were noted down look unknown, and no span is above a longer one.
+        rows = [row("m", inp=60_000_000, first=NOW - 10 * 86400, last=NOW - 9 * 86400), row("m", inp=1_000_000, first=NOW - 40 * 3600, last=NOW)]
+        noted = [key(a, "m", inp=900_000, first=NOW - 40 * 3600, last=NOW - 39 * 3600), key(a, "m", inp=100_000, first=NOW - 7200, last=NOW)]
+        self.assertEqual(spans(self.answer(rows, noted, [a, b], since=NOW - 41 * 3600)[1]["spent_rest"]), [0, 0, 60_000_000])
+        # A chat that was noted down and then deleted doesn't hide what's from before.
+        rows = [row("m", inp=1_000_000, last=NOW - 5 * 86400)]
+        self.assertEqual(spans(self.answer(rows, [key(a, "m", inp=1_000_000, last=NOW - 60)], [a, b], since=NOW - 86400)[1]["spent_rest"]), [0, 1_000_000, 1_000_000])
+        # A chat of months, all of it noted down since the record covers the 30 days: nothing is missing.
+        rows = [row("m", inp=60_000_000, first=NOW - 60 * 86400, last=NOW)]
+        self.assertNotIn("spent_rest", self.answer(rows, [key(a, "m", inp=5_000_000, first=NOW - 29 * 86400, last=NOW)], [a, b], since=NOW - 31 * 86400)[1])
+        # Something that Hermes recorded and wasn't noted down (a process without the plugin).
+        rows = [row("m", inp=500, first=NOW - 60, last=NOW - 50), row("n", inp=80, first=NOW - 60, last=NOW - 50)]
+        self.assertEqual(self.models(self.answer(rows, [key(a, "m", inp=495, last=NOW - 50)], [a, b], since=NOW - 86400)[1]["spent_rest"], "day"), [("n", 80)])
+
+    def test_a_single_key_left(self):
+        a = cred("one", "a")
+        noted = [{**row("m", inp=2, last=NOW - 10), "key": self.fp(a.access_token)}, {**row("m", inp=20, last=NOW - 10), "key": "0" * 16}]
+        [only] = self.answer([row("m", inp=22, last=NOW - 10)], noted, [a])
+        self.assertEqual((self.models(only["spent"]), self.models(only["spent_rest"])), ([("m", 2)], [("m", 20)]))
+
+    def test_keys_that_arent_shown(self):
+        a, b = cred("one", "a"), cred("two", "b")
+        noted = [{**row("m", inp=5, last=NOW - 10), "key": self.fp(a.access_token)}, {**row("m", inp=9000, calls=3, last=NOW - 10), "key": "0" * 16},
+                 {**row("gone", inp=40, last=NOW - 10), "key": "0" * 16}]
+        one, two = self.answer([row("m", inp=9005, last=NOW - 10)], noted, [a, b])
+        self.assertEqual((self.models(one["spent"]), self.models(two["spent_rest"])), ([("m", 5)], [("m", 9000), ("gone", 40)]))
+
+    def test_the_cost(self):
+        rows = [row("Dear", kind="openrouter", inp=800, out=200, cost=2.0), row("dear", kind="openrouter", inp=1000, cost=2.0), row("free", kind="openrouter", inp=10)]
+        got = core.with_cost([{**row("dear", kind="openrouter", inp=400, out=100), "key": "x"}, {**row("free", kind="openrouter", inp=5), "key": "x"}], rows)
+        self.assertEqual([r["cost"] for r in got], [1.0, 0.0])
+
+    def test_decimals_of_each_key(self):
+        a, b = cred("one", "a"), cred("two", "b")
+        noted = [{**REAL, "key": self.fp(a.access_token)}]
+        one, two = self.answer([REAL], noted, [a, b], since=NOW - 40 * 86400)
+        self.assertAlmostEqual(one["windows"][0]["estimate"], round(REAL_USD, 4), places=4)
+        self.assertEqual((one["windows"][2]["cost"], two["windows"][2]["cost"]), (round(REAL_USD, 6), 0))
+        # In the windows that started before there was a record, there's no telling.
+        one, _two = self.answer([REAL], noted, [a, b], since=NOW - 3600)
+        self.assertNotIn("estimate", one["windows"][2])
+        self.assertIsNotNone(one["windows"][0]["estimate"])
+        # Another process spent with one of them and it wasn't noted down: the record isn't enough for the decimals. With
+        # the other key idle, all of it is this one's, as before there was a record.
+        more = row(inp=150000, out=50000, cr=1200000, calls=32, first=REAL["first"], last=REAL["last"])
+        self.assertNotIn("estimate", self.answer([REAL, more], noted, [a, b], since=NOW - 40 * 86400)[0]["windows"][2])
+        idle = {"usage": {"rolling": {"status": "ok", "percent": 0, "resetsAt": core._iso_at(NOW + 5 * 3600)}}}
+        with mock.patch.object(FakeClient, "by_key", {b.access_token: idle}):
+            one, _two = self.answer([REAL, more], noted, [a, b], since=NOW - 40 * 86400)
+        self.assertEqual(one["windows"][0]["cost"], round(REAL_USD * 2, 6))
 
 class ModelsUsed(unittest.TestCase):
     """What Hermes spent with each API, model by model."""
