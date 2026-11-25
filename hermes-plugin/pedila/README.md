@@ -33,8 +33,9 @@ only the numbers and the plan's name are taken from it.
 is loaded again by itself when it changes: a new version of the plugin takes effect without restarting Hermes
 (from 1.2.0 on; going from 1.0.x takes one restart).
 
-Also, for each one, what Hermes spent in 24 h, 7 and 30 days (tokens, calls and estimated cost), taken from its
-own records.
+Also, for each one, what Hermes spent in 24 h, 7 and 30 days, in all and model by model (tokens, what was read from
+the cache, calls and estimated cost), taken from its own records. Hermes records the first and the last call of each
+chat and model: a chat longer than that time counts in proportion, so it's approximate.
 
 Only the APIs that have a key show up. The keys don't leave Hermes: the plugin uses them to ask the provider and
 returns numbers. A key is only sent, over https, to the address Hermes uses it at: if a provider goes through a proxy

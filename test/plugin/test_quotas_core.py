@@ -581,6 +581,45 @@ class Build(unittest.TestCase):
 Build.usage_original = FakeClient.usage
 
 
+class ModelsUsed(unittest.TestCase):
+    """What Hermes spent with each API, model by model."""
+
+    def test_by_model_and_time(self):
+        rows = [row("Big", kind="venice", inp=100, out=50, cr=1000, cw=10, calls=3, last=NOW - 3600),
+                row("big", kind="venice", inp=10, out=5, calls=1, last=NOW - 2 * 86400),
+                row("Small", kind="venice", inp=1, out=1, calls=1, last=NOW - 3600, cost=0.25),
+                row("Old", kind="venice", inp=500, out=0, calls=9, last=NOW - 20 * 86400),
+                row("", kind="deepseek", inp=4, out=4, last=NOW - 60)]
+        out = core.spent_by_kind(rows, NOW)
+        v = out["venice"]
+        self.assertEqual([(m["model"], m["tokens"], m["cache"], m["calls"]) for m in v["day"]["models"]], [("Big", 150, 1010, 3), ("Small", 2, 0, 1)])
+        self.assertEqual([(m["model"], m["tokens"]) for m in v["week"]["models"]], [("Big", 165), ("Small", 2)])
+        self.assertEqual([(m["model"], m["tokens"]) for m in v["month"]["models"]], [("Old", 500), ("Big", 165), ("Small", 2)])
+        self.assertEqual((v["month"]["tokens"], v["month"]["calls"], v["month"]["cost"], v["month"]["cache"]), (667, 14, 0.25, 1010))
+        self.assertEqual((v["day"]["models"][0]["input"], v["day"]["models"][0]["output"]), (100, 50))
+        self.assertIsNone(v["day"]["others"])
+        self.assertEqual(out["deepseek"]["day"]["models"][0]["model"], "?")
+
+    def test_a_long_chat_is_split_by_the_time(self):
+        # 10 days of chat, up to now: a tenth in the last 24 h and seven in the last 7 days.
+        out = core.spent_by_kind([row("m", kind="venice", inp=1000, out=0, calls=100, first=NOW - 10 * 86400, last=NOW)], NOW)["venice"]
+        self.assertEqual([(out[p]["tokens"], out[p]["calls"], out[p]["models"][0]["tokens"]) for p in ("day", "week", "month")], [(100, 10, 100), (700, 70, 700), (1000, 100, 1000)])
+
+    def test_more_models_than_the_ones_told_apart(self):
+        rows = [row(f"m{i:02d}", kind="venice", inp=100 - i, last=NOW) for i in range(core.MAX_MODELS + 3)]
+        day = core.spent_by_kind(rows, NOW)["venice"]["day"]
+        self.assertEqual(len(day["models"]), core.MAX_MODELS)
+        self.assertEqual(day["models"][0]["model"], "m00")
+        self.assertEqual(day["others"], {"models": 3, "tokens": 88 + 87 + 86})
+        self.assertEqual(sum(m["tokens"] for m in day["models"]) + day["others"]["tokens"], day["tokens"])
+
+    def test_nothing(self):
+        self.assertEqual(core.spent_by_kind([], NOW), {})
+        # Used long ago: there's nothing in any of the three.
+        out = core.spent_by_kind([row("m", kind="venice", inp=5, last=NOW - 31 * 86400), row("z", kind="venice", calls=0, last=NOW)], NOW)["venice"]
+        self.assertEqual([out[p]["models"] for p in ("day", "week", "month")], [[], [], []])
+
+
 class NewProviders(unittest.TestCase):
     """DeepSeek and Openference."""
     ME = {"userId": 7, "status": "active", "planId": None, "email": "someone@example.com", "firstName": "Some", "apiKey": "sk-of-of-the-account",

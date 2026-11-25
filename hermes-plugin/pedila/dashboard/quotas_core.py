@@ -42,7 +42,7 @@ from urllib.parse import urlparse
 
 log = logging.getLogger("hermes_dashboard_plugin_pedila")
 
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.4.0"
 NAMES = {"openrouter": "OpenRouter", "venice": "Venice", "opencode-go": "OpenCode Go", "opencode-zen": "OpenCode Zen",
          "deepseek": "DeepSeek", "openference": "Openference"}
 ORDER = ["openrouter", "venice", "opencode-go", "opencode-zen", "deepseek", "openference"]
@@ -70,6 +70,8 @@ CATALOG_RETRY = 300
 ROWS_DAYS = 32
 # The most keys of one provider that are asked about in one reading (the rest are only counted).
 MAX_KEYS = 6
+# The most models of one API that are told apart in what Hermes spent (the rest are added up).
+MAX_MODELS = 12
 # What Hermes puts when a provider of one's own has no key.
 PLACEHOLDER_KEYS = {"", "no-key-required", "none", "null", "dummy", "sk-dummy"}
 
@@ -945,22 +947,52 @@ def usage_rows(since: float) -> Optional[list[dict]]:
     return rows
 
 
-def spent_by_kind(rows: list[dict], now: float, catalog: Optional[dict] = None) -> dict[str, dict[str, dict[str, float]]]:
-    """What Hermes spent with each API (tokens read + written, calls, cost): 24 h, 7 and 30 days.
-    Each row goes to the day it was last used, so it's approximate. With OpenCode Go, which Hermes can't
-    put a price on, the cost comes from its catalog's prices."""
+def _ranked(models: dict[str, dict[str, Any]]) -> tuple[list[dict[str, Any]], Optional[dict[str, int]]]:
+    """The models that spent the most, first, and what the ones that don't fit add up to."""
+    rows = sorted(models.values(), key=lambda m: (-(m["input"] + m["output"]), -m["cache"], m["model"]))
+    out = [{"model": m["model"], "tokens": int(round(m["input"] + m["output"])), "input": int(round(m["input"])),
+            "output": int(round(m["output"])), "cache": int(round(m["cache"])), "calls": int(round(m["calls"])),
+            "cost": round(m["cost"], 6)} for m in rows]
+    out = [m for m in out if m["tokens"] or m["cache"] or m["calls"]]
+    rest = out[MAX_MODELS:]
+    return out[:MAX_MODELS], {"models": len(rest), "tokens": sum(m["tokens"] for m in rest)} if rest else None
+
+
+def spent_by_kind(rows: list[dict], now: float, catalog: Optional[dict] = None) -> dict[str, dict[str, dict[str, Any]]]:
+    """What Hermes spent with each API (tokens read + written, read from the cache, calls, cost), in all and model
+    by model: 24 h, 7 and 30 days. Hermes records the first and the last call of each chat and model, not every
+    one: a row that crosses the start is split in proportion to the time, so it's approximate. With OpenCode Go,
+    which Hermes can't put a price on, the cost comes from its catalog's prices."""
     spans = {"day": now - 86400, "week": now - 7 * 86400, "month": now - 30 * 86400}
-    out: dict[str, dict[str, dict[str, float]]] = {}
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    by_model: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
     for r in rows:
-        per = out.setdefault(r["kind"], {p: {"tokens": 0, "calls": 0, "cost": 0.0} for p in spans})
+        per = out.setdefault(r["kind"], {p: {"tokens": 0.0, "calls": 0.0, "cost": 0.0, "cache": 0.0} for p in spans})
         cost = r["cost"]
         if not cost and r["kind"] == "opencode-go" and catalog:
             cost = row_cost(r, catalog.get(norm_model(r["model"]))) or 0.0
+        name = " ".join(str(r["model"] or "").split())[:80] or "?"
         for p, since in spans.items():
-            if (r["last"] or 0) >= since:
-                per[p]["tokens"] += r["input"] + r["output"]
-                per[p]["calls"] += r["calls"]
-                per[p]["cost"] += cost
+            f = share_after(r["first"], r["last"], since)
+            if f <= 0:
+                continue
+            per[p]["tokens"] += (r["input"] + r["output"]) * f
+            per[p]["cache"] += (r["cache_read"] + r["cache_write"]) * f
+            per[p]["calls"] += r["calls"] * f
+            per[p]["cost"] += cost * f
+            # The same model may be written with other capitals from one chat to another.
+            m = by_model.setdefault((r["kind"], p), {}).setdefault(
+                name.lower(), {"model": name, "input": 0.0, "output": 0.0, "cache": 0.0, "calls": 0.0, "cost": 0.0})
+            m["input"] += r["input"] * f
+            m["output"] += r["output"] * f
+            m["cache"] += (r["cache_read"] + r["cache_write"]) * f
+            m["calls"] += r["calls"] * f
+            m["cost"] += cost * f
+    for kind, per in out.items():
+        for p, total in per.items():
+            for k in ("tokens", "cache", "calls"):
+                total[k] = int(round(total[k]))
+            total["models"], total["others"] = _ranked(by_model.get((kind, p), {}))
     return out
 
 

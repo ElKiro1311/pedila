@@ -818,7 +818,6 @@
  "🗑 Delete…": "🗑 Borrar…",
  "🧠 Effort": "🧠 Esfuerzo",
  "🧠 Hermes's default": "🧠 el de Hermes",
- "There's a new quotas plugin: it also reads DeepSeek and Openference, and it shows each key's quota if an API has several.": "Hay un complemento de cuotas nuevo: también lee DeepSeek y Openference, y enseña la cuota de cada clave si una API tiene varias.",
  "Balance you have left on DeepSeek": "Saldo que te queda en DeepSeek",
  "CNY balance": "Saldo CNY",
  "Granted: {0} · topped up: {1}": "Regalado: {0} · recargado: {1}",
@@ -830,6 +829,18 @@
  "Without a plan or credits, only the free models answer. Openference limits them per day, but it only says so when the limit is reached.": "Sin plan ni créditos solo responden los modelos gratis. Openference los limita por día, pero solo lo dice al llegar al límite.",
  "Free models ({0})": "Modelos gratis ({0})",
  "{0}: free until {1}": "{0}: gratis hasta el {1}",
- "This account, in all: {0} requests · {1} tokens": "Esta cuenta, en total: {0} peticiones · {1} tokens",
- "until {0}": "hasta el {0}"
+ "until {0}": "hasta el {0}",
+ "There's a new quotas plugin: it shows which models you've used with each API and how many tokens each one, and it also reads DeepSeek and Openference.": "Hay un complemento de cuotas nuevo: enseña qué modelos has usado con cada API y cuántos tokens cada uno, y también lee DeepSeek y Openference.",
+ "This account, in all (cache included): {0} requests · {1} tokens": "Esta cuenta, en total (con la caché): {0} peticiones · {1} tokens",
+ "What Hermes has spent with this API according to its own records: tokens read + written, without the cache. Summaries, titles and images count too. A chat that lasts longer than this time counts in proportion, so it is approximate.": "Lo que Hermes ha gastado con esta API según sus propios registros: tokens leídos + escritos, sin la caché. Los resúmenes, los títulos y las imágenes también cuentan. Un chat que dura más que este tiempo cuenta en proporción, así que es aproximado.",
+ "Models used": "Modelos usados",
+ "Models used (all the keys)": "Modelos usados (todas las claves)",
+ "Nothing in this time.": "Nada en este tiempo.",
+ "{0} read · {1} written · {2} in the cache": "{0} leídos · {1} escritos · {2} de caché",
+ "1 request": "1 petición",
+ "{0} requests": "{0} peticiones",
+ "1 more model": "1 modelo más",
+ "{0} more models": "{0} modelos más",
+ "In all: {0} tokens": "En total: {0} tokens",
+ "{0} in the cache": "{0} de caché"
 }

@@ -40,7 +40,7 @@ That is what this app wants to be: the sandals that carry your messages to Herme
   - **DeepSeek:** the balance left, and a notice when it isn't enough to use the API.
   - **Openference:** credit balance and plan; with a paid plan, % used of its windows and when they reset; which models are free and until when.
   - If you gave Hermes **several keys for the same API** (`hermes auth add`), each one is a quota of its own, with its label: which one is in use, which ones are in reserve and which ones are resting until their limit resets.
-  - For each one, what Hermes has spent in 24 hours, 7 days and 30 days.
+  - For each one, which models Hermes has used and how many tokens each one, in 24 hours, 7 days or 30 days.
   - A small Pedila plugin reads it inside Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): your keys never leave Hermes, only numbers come out. It is installed with the panel's "Turn on quotas" button, without restarting Hermes, and updated from there too (going from a version before 1.2.0, Hermes has to restart once). APIs you don't have don't show up.
 - **Model and effort of a chat that has already started:** they can be changed with the chat going (Hermes changes them with its `/model` and `/reasoning` commands), with reasoning levels up to "maximum".
 - **Tools as in Claude Code:** consecutive ones go together on one line that opens ("Ran 2 commands, read screenshot.png · +12 −3 · 1 failed"). Inside, each one with its title, what it was given (the command, the code or the change in green and red), what it returned and, if it failed, in red. The images it looks at or makes come out right there.

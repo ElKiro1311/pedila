@@ -30,10 +30,10 @@ const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 const QUOTA_PLUGIN = 'pedila'
 const QUOTA_PLUGIN_SOURCE = 'ElKiro1311/pedila/hermes-plugin/pedila'
 const QUOTA_KINDS = ['openrouter', 'venice', 'opencode-go', 'opencode-zen', 'deepseek', 'openference']
-// The plugin version this Pedila knows how to show in full (1.3.0: DeepSeek and Openference; 1.2.0: every key of
-// a provider, and OpenCode Go with decimals). With an earlier one, updating it is offered. From 1.2.0 on its calculation reloads by itself
+// The plugin version this Pedila knows how to show in full (1.4.0: the models used with
+// each API; 1.3.0: DeepSeek and Openference; 1.2.0: every key of a provider, and OpenCode Go with decimals). With an earlier one, updating it is offered. From 1.2.0 on its calculation reloads by itself
 // (without restarting Hermes).
-const QUOTA_PLUGIN_WANT = '1.3.0'
+const QUOTA_PLUGIN_WANT = '1.4.0'
 const QUOTA_PLANS = ['go', 'go-teams', 'go-plus']
 const INSTALL_TIMEOUT = 180000
 
@@ -66,7 +66,17 @@ const isoOf = v => (typeof v === 'string' && v && Number.isFinite(Date.parse(v))
 function quotaData(j) {
   const spentOf = s => {
     if (!s || typeof s !== 'object') { return null }
-    const one = p => (p && typeof p === 'object' ? { tokens: num(p.tokens) || 0, calls: num(p.calls) || 0, cost: num(p.cost) || 0 } : { tokens: 0, calls: 0, cost: 0 })
+    const n = v => Math.max(0, num(v) || 0)
+    // `models` = model by model (plugin 1.4.0); null with an earlier one.
+    const one = p => {
+      p = p && typeof p === 'object' ? p : {}
+      const models = Array.isArray(p.models)
+        ? p.models.filter(m => m && typeof m === 'object' && str(m.model)).slice(0, 12)
+          .map(m => ({ model: cut(m.model, 80), tokens: n(m.tokens), input: n(m.input), output: n(m.output), cache: n(m.cache), calls: n(m.calls), cost: n(m.cost) }))
+        : null
+      const others = models && p.others && typeof p.others === 'object' && n(p.others.models) ? { models: Math.round(n(p.others.models)), tokens: n(p.others.tokens) } : null
+      return { tokens: num(p.tokens) || 0, calls: num(p.calls) || 0, cost: num(p.cost) || 0, cache: n(p.cache), models, others }
+    }
     return { day: one(s.day), week: one(s.week), month: one(s.month) }
   }
   // One of several keys of the same API (Hermes's credential pool): which one, whether Hermes uses it now

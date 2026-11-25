@@ -519,6 +519,16 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none !i
 .q-win > b.warn { color: var(--warn); }
 .q-win .q-bar { margin-top: 2px; }
 
+/* Quotas: the models used with each API (the same rows as the "Most used models" card). */
+.q-used { margin-top: 6px; }
+.q-used-h { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.q-used-h .grow { flex: 1; min-width: 0; }
+.q-spans { display: inline-flex; flex: none; gap: 2px; }
+.q-span { border: 0; background: none; border-radius: 6px; padding: 2px 6px; font: inherit; letter-spacing: 0; text-transform: none; color: var(--muted); cursor: pointer; }
+.q-span:hover { color: var(--text); }
+.q-span.on { background: var(--surface-3); color: var(--accent); }
+.q-used .sp-model > .muted { font-variant-numeric: tabular-nums; }
+
 /* Badge of the active chats (open or working now). */
 .live-badge { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: .68rem; font-weight: 600; line-height: 1; padding: 3px 7px; border-radius: 999px; background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent); }
 .live-badge.busy { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }

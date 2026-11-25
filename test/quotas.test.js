@@ -55,6 +55,20 @@ test("quotas: Hermes's own providers, which come without an address", () => {
   assert.equal(paidKindOfProvider({}), null)
 })
 
+test('quotas: the models used with each API (plugin 1.4.0)', () => {
+  const day = { tokens: 12, calls: 2, cost: 0.5, cache: 100, others: { models: 2, tokens: 7 }, models: [{ model: 'A', tokens: 9, input: 6, output: 3, cache: 90, calls: 1, cost: 0.5 }, { model: '', tokens: 1 }, null, 'x', { model: 'B', tokens: -3, input: 'x' }] }
+  const many = { models: Array.from({ length: 30 }, (_, i) => ({ model: 'm' + i, tokens: 1 })), others: 'x' }
+  const of = spent => quotaData({ plugin: 'pedila', version: '1.4.0', providers: [{ kind: 'deepseek', ok: true, balances: [], spent }] }).providers[0].spent
+  const s = of({ day, week: many, month: {} })
+  assert.deepEqual(s.day, { tokens: 12, calls: 2, cost: 0.5, cache: 100, others: { models: 2, tokens: 7 }, models: [
+    { model: 'A', tokens: 9, input: 6, output: 3, cache: 90, calls: 1, cost: 0.5 }, { model: 'B', tokens: 0, input: 0, output: 0, cache: 0, calls: 0, cost: 0 }] })
+  assert.deepEqual([s.week.models.length, s.week.others], [12, null])
+  // An earlier plugin doesn't tell the models apart.
+  assert.deepEqual(s.month, { tokens: 0, calls: 0, cost: 0, cache: 0, models: null, others: null })
+  assert.equal(of(null), null)
+  assert.equal(of({ day: 3 }).day.models, null)
+})
+
 test('quotas: DeepSeek and Openference (their shape on 2026-11-24)', () => {
   const free = { kind: 'openference', name: 'Openference', ok: true, balance: 0, credits_total: 0, plan_name: 'Promo', subscribed: false, expires_at: null, active: true, windows: [], account_usage: { requests: 8, tokens: 25529, cost: 0 }, free_models: [{ model: 'GLM-5.3-Flash-Free', until: '2026-12-04' }, { model: 'Other', until: 'soon' }, { model: 'Odd', until: '2026-13-45' }, null, { until: '2026-12-04' }], email: 'x@example.com', apiKey: 'sk-something' }
   const d = quotaData({ plugin: 'pedila', version: '1.3.0', providers: [
@@ -164,8 +178,9 @@ test('quotas: does the plugin have to be updated?', () => {
   assert.equal(quotaPluginOutdated(undefined), true)
   assert.equal(quotaPluginOutdated('1.1.0'), true)
   assert.equal(quotaPluginOutdated('1.2.0'), true)
-  assert.equal(quotaPluginOutdated('1.3.0'), false)
-  assert.equal(quotaPluginOutdated('1.3.1'), false)
+  assert.equal(quotaPluginOutdated('1.3.0'), true)
+  assert.equal(quotaPluginOutdated('1.4.0'), false)
+  assert.equal(quotaPluginOutdated('1.4.1'), false)
   assert.equal(quotaPluginOutdated('2.0.0'), false)
 })
 
@@ -269,14 +284,14 @@ test("quotas: a plugin updated on disk but not loaded yet isn't offered again", 
   const Q = 'GET /api/plugins/pedila/cuotas'
   const D = 'GET plugins'
   const ask = async routes => { const h = fakeHermes(routes); const r = await h.c.quotas(); return [r.outdated, r.onDisk, r.restart, h.calls.length] }
-  assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.3.0') }), [true, '1.3.0', true, 2])
+  assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.4.0') }), [true, '1.4.0', true, 2])
   assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.0.1') }), [true, '1.0.1', false, 2])
   // Not being able to know is taken as "not updated"; up to date, it isn't even asked.
   assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: { status: 401 } }), [true, '', false, 2])
   assert.deepEqual(await ask({ [Q]: answer('1.0.0') }), [true, '', false, 2])
-  assert.deepEqual(await ask({ [Q]: answer('1.3.0') }), [false, '', false, 1])
+  assert.deepEqual(await ask({ [Q]: answer('1.4.0') }), [false, '', false, 1])
   // Up to date in what reloads by itself, but with the fixed part from before.
-  assert.deepEqual(await ask({ [Q]: answer('1.3.0', { shell: '1.2.0', shell_stale: true }) }), [false, '', true, 1])
+  assert.deepEqual(await ask({ [Q]: answer('1.4.0', { shell: '1.2.0', shell_stale: true }) }), [false, '', true, 1])
 })
 
 test('quotas: what the card says about the plugin', async () => {
