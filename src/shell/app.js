@@ -2,8 +2,8 @@
 import { Pet, loadSheet } from './pet.js'
 import { describeTool, groupSummary, failedText } from './tools.mjs'
 import { tr, setLang, getLang, locale, translateDom } from './i18n.mjs'
-import { keyState, pluginNotice } from './quotas.mjs'
-import { kfmt, setHour12, hhmm, full, clock, dayLabel, span, ago, tokensOf, modelName, tasksLine, usd, nextUtcReset, dayAhead, pct1, trunc1 } from './fmt.mjs'
+import { keyState, pluginNotice, quotaTotal, usedOf, localUse, nextPeak, NEARLY } from './quotas.mjs'
+import { kfmt, setHour12, hhmm, full, clock, dayLabel, span, ago, tokensOf, modelName, tasksLine, usd, money, nextUtcReset, dayAhead, pct1, pctShort, trunc1 } from './fmt.mjs'
 
 const demo = new URLSearchParams(location.search).get('demo') === '1'
 const api = demo ? (await import('./demo.js')).demoApi : window.hp
@@ -2084,12 +2084,21 @@ function chime() {
 
 // ── Right panel: usage and parameters ────────────────────────────────────────────────────────
 // Like Claude Panel's cards: what's going on now, the open chat and usage, always in sight.
-const P = { usage: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, done: { local: null, server: null }, raf: 0, day: '', hold: false, held: false, reconciling: false }
+const P = { usage: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, done: { local: null, server: null }, raf: 0, day: '', view: '', hold: false, held: false, reconciling: false }
 const panelOn = () => S.settings && S.settings.window && S.settings.window.sidePanel !== false
+// Two views: 'simple' (everything in less space; for each quota, only how much of its total has been used) and
+// 'advanced' (every detail).
+const panelView = () => (S.settings && S.settings.window && S.settings.window.panelView === 'advanced' ? 'advanced' : 'simple')
 
 function applyPanel() {
   const on = panelOn()
+  const view = panelView()
   $('#app').classList.toggle('with-panel', on)
+  $('#side-panel').classList.toggle('simple', view === 'simple')
+  for (const b of document.querySelectorAll('#panel-view button')) {
+    b.classList.toggle('active', b.dataset.v === view)
+    b.setAttribute('aria-pressed', String(b.dataset.v === view))
+  }
   applyWidths()
   const b = $('#panel-toggle')
   b.classList.toggle('active', on)
@@ -2126,39 +2135,61 @@ function hermesNow() {
   return { cls: 'idle', text: tr('Idle'), live, remote }
 }
 
-function panelChatCard() {
+/** The open chat's numbers, or null (a new chat). */
+function chatNumbers() {
   const ch = currentChat()
-  if (!ch) {
+  if (!ch) { return null }
+  const u = ch.usage || {}
+  const max = u.max || ch.contextMax || 0
+  const row = (S.sessions[ch.conn] || []).find(r => r.id === ch.sid) || {}
+  const turns = [...(ch.transcript || []), ...(ch.live ? [ch.live] : [])]
+  const last = [...(ch.transcript || [])].reverse().find(t => t.role === 'assistant' && t.stats)
+  const e = currentEffort()
+  return {
+    used: u.used || 0,
+    max,
+    pct: u.used && max ? Math.min(100, Math.round(u.used / max * 100)) : 0,
+    model: ch.model || '—',
+    effort: e.value ? effortName(e.value) : '',
+    provider: ch.provider || '',
+    messages: String(row.messages || turns.length || 0),
+    read: kfmt(row.inputTokens || 0),
+    written: kfmt(row.outputTokens || u.out || 0),
+    tools: String(turns.reduce((n, t) => n + ((t.blocks || []).filter(b => b.type === 'tool').length), 0)),
+    last: last ? statsText(last.stats) || '—' : ''
+  }
+}
+
+const MEMORY_HOW = tr('Chat memory: at 85%, Hermes summarizes the older part')
+
+function panelChatCard() {
+  const n = chatNumbers()
+  if (!n) {
     return el('section', { class: 'sp-card' }, el('h4', { text: tr('This chat') }),
       el('p', { class: 'muted small', text: tr('New chat on {0}. Once it starts, its memory, tokens and speed show up here.', CONN_NAMES[S.current.conn]) }))
   }
-  const u = ch.usage || {}
-  const max = u.max || ch.contextMax || 0
-  const pct = u.used && max ? Math.min(100, Math.round(u.used / max * 100)) : 0
-  const row = (S.sessions[ch.conn] || []).find(r => r.id === ch.sid) || {}
-  const turns = [...(ch.transcript || []), ...(ch.live ? [ch.live] : [])]
-  const tools = turns.reduce((n, t) => n + ((t.blocks || []).filter(b => b.type === 'tool').length), 0)
-  const last = [...(ch.transcript || [])].reverse().find(t => t.role === 'assistant' && t.stats)
-  const ring = el('div', { class: 'sp-ring' + (pct >= 80 ? ' warn' : ''), style: `--p:${pct}`, title: tr('Chat memory: at 85%, Hermes summarizes the older part') }, el('span', { text: max ? pct + '%' : '—' }))
+  const ring = el('div', { class: 'sp-ring' + (n.pct >= 80 ? ' warn' : ''), style: `--p:${n.pct}`, title: MEMORY_HOW }, el('span', { text: n.max ? n.pct + '%' : '—' }))
   return el('section', { class: 'sp-card' }, el('h4', { text: tr('This chat') }),
     el('div', { class: 'sp-ctx' }, ring, el('div', { class: 'sp-ctx-txt' },
       el('b', { text: tr('Memory used') }),
-      el('span', { class: 'muted', text: max ? tr('{0} of {1} tokens', kfmt(u.used || 0), kfmt(max)) : tr('No data yet') }))),
+      el('span', { class: 'muted', text: n.max ? tr('{0} of {1} tokens', kfmt(n.used), kfmt(n.max)) : tr('No data yet') }))),
     spKv([
-      [tr('Model'), ch.model || '—'],
-      (() => { const e = currentEffort(); return e.value ? [tr('Effort'), effortName(e.value)] : null })(),
-      ch.provider ? [tr('Provider'), ch.provider] : null,
-      [tr('Messages'), String(row.messages || turns.length || 0)],
-      [tr('Tokens read'), kfmt(row.inputTokens || 0)],
-      [tr('Tokens written'), kfmt(row.outputTokens || u.out || 0)],
-      [tr('Tools'), String(tools)],
-      last ? [tr('Last answer'), statsText(last.stats) || '—'] : null
+      [tr('Model'), n.model],
+      n.effort ? [tr('Effort'), n.effort] : null,
+      n.provider ? [tr('Provider'), n.provider] : null,
+      [tr('Messages'), n.messages],
+      [tr('Tokens read'), n.read],
+      [tr('Tokens written'), n.written],
+      [tr('Tools'), n.tools],
+      n.last ? [tr('Last answer'), n.last] : null
     ]))
 }
 
+/** The model the new chat will use, as the button below says it. */
+const newChatModel = () => ($('#model-pill') ? $('#model-pill').textContent.replace(tr('Model: {0}', ''), '') : '') || '—'
+
 function panelNowCard() {
   const now = hermesNow()
-  const model = $('#model-pill') ? $('#model-pill').textContent.replace(tr('Model: {0}', ''), '') : ''
   return el('section', { class: 'sp-card' }, el('h4', { text: tr('Now') }),
     el('div', { class: 'sp-state' }, el('span', { class: 'dot ' + now.cls }), el('span', { text: now.text })),
     spKv([
@@ -2166,15 +2197,15 @@ function panelNowCard() {
       [tr('Read only'), S.readOnly ? tr('yes') : 'no'],
       // Reasoning and model are chosen when a chat starts; with one open, the model shows in "This chat".
       (() => { const e = currentEffort(); return [currentChat() ? tr('Effort (this chat)') : tr('Effort (new chat)'), e.value ? effortName(e.value) : tr("Hermes's default")] })(),
-      !currentChat() ? [tr('Model (new chat)'), model || '—'] : null
+      !currentChat() ? [tr('Model (new chat)'), newChatModel()] : null
     ]))
 }
 
 /**
- * The first row of "Usage": at what time Hermes last answered and how long ago or, with Hermes working,
- * since when. The time updates by itself (tickPanel), without repainting.
+ * When Hermes last answered in that connection or, with Hermes working, since when it has been at it:
+ * { busy, total (tasks running), at (0 = it isn't known), open (opens that chat, or null), title } or null.
  */
-function panelLastTiles(conn, u) {
+function lastActivity(conn, u) {
   const now = Date.now()
   const busyChats = [...S.chats.values()].filter(c => c.conn === conn && busy(c))
   const remote = remoteBusy(conn)
@@ -2185,38 +2216,38 @@ function panelLastTiles(conn, u) {
     // give the time.
     const starts = busyChats.map(c => c.turnAt || toMs([...(c.transcript || [])].reverse().find(t => t.role === 'user' && t.ts)?.ts)).filter(t => t > 0 && t <= now + 60000)
     const first = starts.length ? Math.min(...starts, now) : 0
-    const label = total > 1 ? tr('{0} tasks running', total) : tr('running')
-    if (!first) {
-      // A click opens it here, and then it does show since when it has been working.
-      const row = total === 1 && remote.length ? listedRow(conn, remote[0].id) : null
-      const open = row ? () => openChat(conn, row.id) : null
-      const names = remote.map(a => a.title || (listedRow(conn, a.id) || {}).title).filter(Boolean)
-      return [el('div', { class: 'sp-num sp-wide' + (open ? ' sp-go' : ''), title: open ? tr('Open “{0}”', row.title || tr('the chat')) : names.join(' · '), ...opener(open, 'busy') },
-        el('b', { text: tr('Working now') }), el('span', { text: total > 1 ? label : tr('one task running') }))]
-    }
-    const day = dayLabel(first)
-    return [
-      el('div', { class: 'sp-num', title: tr('Started: {0}', full(first)) }, el('b', { text: hhmm(first) }), el('span', { text: tr('task started{0}', day ? ' · ' + day : '') })),
-      el('div', { class: 'sp-num', title: tr('How long Hermes has been on this task') }, el('b', { 'data-span': first, text: span(now - first) }), el('span', { text: label }))
-    ]
+    if (first) { return { busy: true, total, at: first, open: null, title: tr('Started: {0}', full(first)) } }
+    // A click opens it here, and then it does show since when it has been working.
+    const row = total === 1 && remote.length ? listedRow(conn, remote[0].id) : null
+    const names = remote.map(a => a.title || (listedRow(conn, a.id) || {}).title).filter(Boolean)
+    return { busy: true, total, at: 0, open: row ? () => openChat(conn, row.id) : null, title: row ? tr('Open “{0}”', row.title || tr('the chat')) : names.join(' · ') }
   }
   // The most recent of what Pedila saw finish (right away) and the last activity Hermes keeps (it also
   // counts what was done from Hermes Desktop or elsewhere, and survives restarts).
   const fromHermes = u && u.last && u.last.at ? u.last : null
   const mine = P.done[conn]
   const last = mine && (!fromHermes || mine.at >= fromHermes.at) ? { at: mine.at, id: mine.sid, title: (S.chats.get(key(conn, mine.sid)) || {}).title || '' } : fromHermes
-  if (!last) { return [] }
+  if (!last) { return null }
   const at = Math.min(last.at, now)
-  const day = dayLabel(at)
   // It only opens if the chat is in the list (not archived or deleted).
   const row = last.id ? listedRow(conn, last.id) : null
   const name = (row && row.title) || last.title || ''
   const open = row ? () => openChat(conn, row.id) : null
-  return [
-    el('div', { class: 'sp-num' + (open ? ' sp-go' : ''), title: `${open ? tr('Open “{0}”', name || tr('the chat')) : name || tr('Last answer')} · ${full(at)}`, ...opener(open, 'last') },
-      el('b', { text: hhmm(at) }), el('span', { text: tr('last answer{0}', day ? ' · ' + day : '') })),
-    el('div', { class: 'sp-num', title: tr("Time since Hermes's last answer") }, el('b', { 'data-span': at, text: span(now - at) }), el('span', { text: tr('since then') }))
-  ]
+  return { busy: false, total: 0, at, open, title: `${open ? tr('Open “{0}”', name || tr('the chat')) : name || tr('Last answer')} · ${full(at)}` }
+}
+
+/** The first row of "Usage": lastActivity in two boxes. The time updates by itself (tickPanel), without repainting. */
+function panelLastTiles(conn, u) {
+  const a = lastActivity(conn, u)
+  if (!a) { return [] }
+  const box = (attrs, big, small) => el('div', { ...attrs, class: 'sp-num' + (attrs.class || '') }, el('b', typeof big === 'string' ? { text: big } : { 'data-span': big.since, text: span(Date.now() - big.since) }), el('span', { text: small }))
+  const running = a.total > 1 ? tr('{0} tasks running', a.total) : tr('running')
+  if (!a.at) { return [box({ class: ' sp-wide' + (a.open ? ' sp-go' : ''), title: a.title, ...opener(a.open, 'busy') }, tr('Working now'), a.total > 1 ? running : tr('one task running'))] }
+  const day = dayLabel(a.at)
+  const more = day ? ' · ' + day : ''
+  return a.busy
+    ? [box({ title: a.title }, hhmm(a.at), tr('task started{0}', more)), box({ title: tr('How long Hermes has been on this task') }, { since: a.at }, running)]
+    : [box({ class: a.open ? ' sp-go' : '', title: a.title, ...opener(a.open, 'last') }, hhmm(a.at), tr('last answer{0}', more)), box({ title: tr("Time since Hermes's last answer") }, { since: a.at }, tr('since then'))]
 }
 
 // The chat only if it's in the list (not archived or deleted); rowOf gives a filler one.
@@ -2254,11 +2285,15 @@ function tickPanel() {
   for (const n of document.querySelectorAll('#panel-body [data-span]')) { n.textContent = span(Date.now() - Number(n.dataset.span)) }
 }
 
+function usageHead(conn) {
+  return el('h4', {}, el('span', { class: 'grow', text: tr('Usage · {0}', CONN_NAMES[conn]) }), el('button', { class: 'sp-link', text: tr('See all'), 'data-focus': 'usage-all', onclick: () => openUsage(conn) }))
+}
+
 function panelUsageCard() {
   const conn = S.active
   const u = P.usage[conn]
   loadPanelUsage(conn)
-  const head = el('h4', {}, el('span', { class: 'grow', text: tr('Usage · {0}', CONN_NAMES[conn]) }), el('button', { class: 'sp-link', text: tr('See all'), 'data-focus': 'usage-all', onclick: () => openUsage(conn) }))
+  const head = usageHead(conn)
   if (!u) { return el('section', { class: 'sp-card' }, head, el('p', { class: 'muted small', text: S.conns[conn] && S.conns[conn].state === 'ready' ? tr('Calculating…') : tr('Not connected.') })) }
   const days = u.days.slice(-14)
   const max = Math.max(1, ...days.map(d => d.chats))
@@ -2282,14 +2317,39 @@ function modelsHow(u) {
     : tr('Tokens read + written by each model, adding up your chats.')
 }
 
-/** The models that have spent the most tokens (read + written), not the ones with the most chats. */
-function panelModelsCard() {
-  const u = P.usage[S.active]
-  const used = u && Array.isArray(u.models) ? u.models.filter(m => tokensOf(m) > 0) : []
-  if (!used.length) { return null }
-  const top = used.slice(0, 4)
+/** The cards shown in the panel's current view. */
+const cardsOn = () => (panelView() === 'simple' ? layout().cardsSimple : layout().cardsChats)
+
+/** What "Local AI" shows of a connection (see localUse), and what it's called. It asks for what it needs. */
+function localNow(conn) {
+  // It comes with the quotas, which ask every paid API: with their card hidden and once it's known, seldom.
+  const q = Q.data[conn]
+  const known = q && !Q.err[conn] && (Array.isArray(q.localModels) || (q.data && Array.isArray(q.data.local)))
+  loadQuotas(conn, false, cardsOn().includes('cuotas') || !known ? 60000 : 15 * 60000)
+  loadPanelUsage(conn)
+  const use = localUse(Q.data[conn], P.usage[conn], m => modelName(m) !== m)
+  if (!use) { return null }
+  const name = use.blocks ? (use.blocks.length === 1 ? use.blocks[0].name : '') : use.name
+  return { ...use, title: name ? tr('Local AI · {0}', name) : tr('Local AI') }
+}
+
+const LOCAL_HOW = tr('What Hermes has used of this AI according to its own records: tokens read + written, without the cache. Summaries, titles and images count too. A chat that lasts longer than this time counts in proportion, so it is approximate.')
+
+/** The most used models of the AI on your own network (by tokens, not by chats): the paid ones' go with their quota. */
+function panelLocalCard() {
+  const conn = S.active
+  const L = localNow(conn)
+  if (!L) { return null }
+  if (L.blocks) {
+    return el('section', { class: 'sp-card' }, el('h4', { text: L.title }),
+      ...L.blocks.map((b, i) => el('div', { class: 'q-prov' }, L.blocks.length > 1 ? el('div', { class: 'q-head' }, el('b', { text: b.name })) : null,
+        usedBlock(b.spent, tr('Most used models'), '', `local-${i}`, LOCAL_HOW))))
+  }
+  const u = P.usage[conn]
+  const top = L.models.slice(0, 6)
   const max = Math.max(1, ...top.map(tokensOf))
-  return el('section', { class: 'sp-card' }, el('h4', { text: tr('Most used models'), title: modelsHow(u) }),
+  return el('section', { class: 'sp-card' }, el('h4', { text: L.title }),
+    el('div', { class: 'q-used-h', title: modelsHow(u) }, el('span', { class: 'grow', text: tr('Most used models') })),
     ...top.map(m => {
       const n = tokensOf(m)
       const aux = tasksLine(m.tasks)
@@ -2328,10 +2388,10 @@ function forgetQuotas(conn, other = false) {
   }
 }
 
-/** A connection's quotas, once per minute at most (or when ↻ is clicked). */
-async function loadQuotas(conn, fresh = false) {
+/** A connection's quotas, once per minute at most (or per `every` ms; or when ↻ is clicked). */
+async function loadQuotas(conn, fresh = false, every = 60000) {
   if (Q.loading[conn]) { if (fresh) { Q.again[conn] = true } return }
-  if (!fresh && (Date.now() - Q.at[conn] < 60000 || Q.busy[conn] === 'updating')) { return }
+  if (!fresh && (Date.now() - Q.at[conn] < every || Q.busy[conn] === 'updating')) { return }
   if (!S.conns[conn] || S.conns[conn].state !== 'ready') { return }
   Q.loading[conn] = true
   const gen = Q.gen[conn]
@@ -2468,7 +2528,7 @@ async function restartForQuotas(conn) {
   }
 }
 
-function quotaBar(usedPct, warnAt = 80) {
+function quotaBar(usedPct, warnAt = NEARLY) {
   const p = Math.max(0, Math.min(100, usedPct))
   // The width, with its decimal (and a minimum so that something shows if anything was spent).
   return el('div', { class: 'sp-bar q-bar' + (p >= warnAt ? ' warn' : '') }, el('i', { style: `width:${p > 0 ? Math.max(2, trunc1(p)) : 0}%` }))
@@ -2484,7 +2544,7 @@ function resetText(ms, now = Date.now()) {
 
 // The time the models used are shown for (the same one for every provider; remembered on this PC).
 const SPAN_KEY = 'pedila.cuotas.periodo'
-const SPANS = [['day', '24 h'], ['week', '7 d'], ['month', '30 d']]
+const SPANS = [['day', '24 h', tr('Last 24 hours')], ['week', '7 d', tr('Last 7 days')], ['month', '30 d', tr('Last 30 days')]]
 let quotaSpan = null
 function spanNow() {
   if (!quotaSpan) { try { quotaSpan = localStorage.getItem(SPAN_KEY) } catch {} }
@@ -2517,7 +2577,13 @@ function modelRow(m, max, title) {
     el('div', { class: 'sp-bar' }, el('i', { style: `width:${n > 0 ? Math.max(2, Math.round(n / max * 100)) : 0}%` })))
 }
 
-/** The models Hermes has used with an API and how many tokens each one, like the "Most used models" card. */
+/** The buttons to choose the time (24 h, 7 d, 30 d) the models used are shown for. */
+function spanTabs(focus) {
+  const id = spanNow()
+  return el('span', { class: 'q-spans' }, ...SPANS.map(([k, text, title]) => el('button', { class: 'q-span' + (k === id ? ' on' : ''), text, title, 'aria-pressed': String(k === id), 'data-focus': `${focus}-${k}`, onclick: e => setSpan(k, e.currentTarget) })))
+}
+
+/** The models Hermes has used with an API and how many tokens each one. */
 function spentBlocks(p) {
   const all = !p.spent && Boolean(p.spentAll)
   const sp = p.spent || p.spentAll
@@ -2532,20 +2598,21 @@ function spentBlocks(p) {
   return out
 }
 
-function usedBlock(sp, name, why, focus) {
+const API_HOW = tr('What Hermes has spent with this API according to its own records: tokens read + written, without the cache. Summaries, titles and images count too. A chat that lasts longer than this time counts in proportion, so it is approximate.')
+
+/** A model used, in words (the help text of its row). */
+const usedTitle = m => [m.model, tr('{0} read · {1} written · {2} in the cache', kfmt(m.input), kfmt(m.output), kfmt(m.cache)), requestsText(m.calls) + (m.cost > 0 ? ' · ' + usd(m.cost) : '')].join('\n')
+
+function usedBlock(sp, name, why, focus, how = API_HOW) {
   if (!sp.month.models.length) { return null }
-  const id = spanNow()
-  const now = sp[id]
-  const how = tr('What Hermes has spent with this API according to its own records: tokens read + written, without the cache. Summaries, titles and images count too. A chat that lasts longer than this time counts in proportion, so it is approximate.')
-  const tabs = SPANS.map(([k, text]) => el('button', { class: 'q-span' + (k === id ? ' on' : ''), text, 'aria-pressed': String(k === id), 'data-focus': `${focus}-${k}`, onclick: e => setSpan(k, e.currentTarget) }))
-  const head = el('div', { class: 'q-used-h', title: why ? `${why}\n${how}` : how }, el('span', { class: 'grow', text: name }), el('span', { class: 'q-spans' }, ...tabs))
+  const now = sp[spanNow()]
+  const head = el('div', { class: 'q-used-h', title: why ? `${why}\n${how}` : how }, el('span', { class: 'grow', text: name }), spanTabs(focus))
   if (!now.models.length) { return el('div', { class: 'q-used' }, head, el('div', { class: 'q-line muted', text: tr('Nothing in this time.') })) }
   const rest = now.models.slice(6)
   const restN = rest.length + (now.others ? now.others.models : 0)
   const restTokens = rest.reduce((a, m) => a + m.tokens, 0) + (now.others ? now.others.tokens : 0)
   const max = Math.max(1, restTokens, ...now.models.map(m => m.tokens))
-  const rows = now.models.slice(0, 6).map(m => modelRow({ name: modelName(m.model), tokens: m.tokens }, max,
-    [m.model, tr('{0} read · {1} written · {2} in the cache', kfmt(m.input), kfmt(m.output), kfmt(m.cache)), requestsText(m.calls) + (m.cost > 0 ? ' · ' + usd(m.cost) : '')].join('\n')))
+  const rows = now.models.slice(0, 6).map(m => modelRow({ name: modelName(m.model), tokens: m.tokens }, max, usedTitle(m)))
   if (restN) { rows.push(modelRow({ name: restN === 1 ? tr('1 more model') : tr('{0} more models', restN), tokens: restTokens }, max, rest.map(m => m.model).join('\n'))) }
   const total = [tr('In all: {0} tokens', kfmt(now.tokens)), now.cache > 0 ? tr('{0} in the cache', kfmt(now.cache)) : '', requestsText(now.calls), now.cost > 0 ? usd(now.cost) : ''].filter(Boolean).join(' · ')
   return el('div', { class: 'q-used' }, head, ...rows, el('div', { class: 'q-line muted', text: total }))
@@ -2600,41 +2667,42 @@ let peaks = null
 function observedUse(key, value, epoch = '') {
   if (typeof value !== 'number' || !Number.isFinite(value)) { return null }
   if (!peaks) { try { peaks = JSON.parse(localStorage.getItem(PEAKS_KEY) || '{}') || {} } catch { peaks = {} } }
-  let r = peaks[key]
-  if (!r || value > r.max + 1e-9 || (epoch && r.epoch !== epoch)) {
-    r = { max: value, since: Date.now(), epoch }
+  const r = nextPeak(peaks[key], value, epoch)
+  if (r !== peaks[key]) {
     peaks[key] = r
     try { localStorage.setItem(PEAKS_KEY, JSON.stringify(peaks)) } catch {}
   }
   const spent = Math.max(0, r.max - value)
-  return { pct: r.max > 0 ? spent / r.max * 100 : 0, spent, max: r.max, since: r.since }
+  return { pct: r.max > 0 ? spent / r.max * 100 : 0, spent, max: r.max, since: r.since, out: r.out || 0 }
 }
 const sinceText = (o, fmt) => (o.max <= 0 ? '' : o.spent > 0 ? tr('spent {0} of {1} since {2}', fmt(o.spent), fmt(o.max), clock(o.since)) : tr('nothing spent since {0}', clock(o.since)))
-/** A balance in its currency (DeepSeek bills in dollars or in yuan). */
-const money = (n, currency) => (currency === 'CNY' ? usd(n).replace('$', '¥') : usd(n))
 /** The last day of something ("2026-12-04", in UTC): "Dec 4", or "Dec 4, 2027" if it isn't this year. */
 const lastDay = (iso, now = Date.now()) => new Intl.DateTimeFormat(locale(), { day: 'numeric', month: 'short', timeZone: 'UTC', ...(Number(iso.slice(0, 4)) === new Date(now).getUTCFullYear() ? {} : { year: 'numeric' }) }).format(new Date(iso + 'T00:00:00Z')).replace(/\./g, '')
 /** Where Pedila remembers the highest balance of an account (see observedUse). */
 const peakKey = (p, conn) => `${conn}:${p.kind}:${p.name && p.name !== QUOTA_NAMES[p.kind] ? p.name + ':' : ''}`
 const diemFmt = n => `${(n || 0).toLocaleString(locale(), { maximumFractionDigits: 2 })} DIEM`
 
-function quotaBlock(p, conn = S.active) {
+const quotaName = p => p.name || QUOTA_NAMES[p.kind] || p.kind
+
+/** What's known of a quota: its figure (`big`) and, in order, its measures ({ metric }), lines and lists. */
+function quotaInfo(p, conn = S.active) {
   const now = Date.now()
-  const head = el('div', { class: 'q-head' }, el('b', { text: p.name || QUOTA_NAMES[p.kind] || p.kind }), keyChip(p.account, now))
-  const big = (text, title) => head.append(el('span', { class: 'q-big', text, title }))
-  const rows = []
-  const line = (text, cls = 'muted', title = '') => rows.push(el('div', { class: 'q-line ' + cls, text, title }))
+  const info = { big: null, rows: [] }
+  const big = (text, title) => { info.big = { text, title } }
+  const metric = m => info.rows.push({ metric: m })
+  const line = (text, cls = 'muted') => info.rows.push({ line: text, cls })
+  const list = (key, title, lines) => info.rows.push({ list: title, key, lines })
   if (!p.ok) {
     line(tr("Couldn't read it: {0}", pluginText(p.error)), 'warn')
   } else if (p.kind === 'openrouter') {
     big(usd(p.balance), tr('Credit balance you have left on OpenRouter'))
     if (p.creditsTotal > 0 && p.creditsUsed !== null) {
-      rows.push(quotaMetric({ label: tr('Credits'), value: tr('{0} of {1}', usd(p.balance), usd(p.creditsTotal)), pct: p.creditsUsed / p.creditsTotal * 100, note: tr('spent {0} of what was bought', usd(p.creditsUsed)) }))
+      metric({ label: tr('Credits'), value: tr('{0} of {1}', usd(p.balance), usd(p.creditsTotal)), pct: p.creditsUsed / p.creditsTotal * 100, note: tr('spent {0} of what was bought', usd(p.creditsUsed)) })
     }
     if (p.keyLimit) {
       const used = p.keyLimit.remaining !== null ? p.keyLimit.limit - p.keyLimit.remaining : null
       const at = nextUtcReset(p.keyLimit.reset, now)
-      rows.push(quotaMetric({ label: tr('Key limit'), value: tr('{0} of {1}', usd(p.keyLimit.remaining), usd(p.keyLimit.limit)), pct: used !== null ? used / p.keyLimit.limit * 100 : null, note: p.keyLimit.reset ? `${RESET_NAMES[p.keyLimit.reset]}, ${resetText(at, now)}` : tr("doesn't reset") }))
+      metric({ label: tr('Key limit'), value: tr('{0} of {1}', usd(p.keyLimit.remaining), usd(p.keyLimit.limit)), pct: used !== null ? used / p.keyLimit.limit * 100 : null, note: p.keyLimit.reset ? `${RESET_NAMES[p.keyLimit.reset]}, ${resetText(at, now)}` : tr("doesn't reset") })
     }
     const ku = p.keyUsage || {}
     if (ku.total !== null && ku.total !== undefined) { line(tr('This key: today {0} · week {1} · month {2} · total {3}', usd(ku.day), usd(ku.week), usd(ku.month), usd(ku.total))) }
@@ -2645,30 +2713,28 @@ function quotaBlock(p, conn = S.active) {
     const k = peakKey(p, conn)
     if (p.bundled !== null && p.bundled !== undefined) {
       const o = observedUse(k + 'bundled', p.bundled)
-      rows.push(quotaMetric({ label: tr('Plan credits'), value: usd(p.bundled), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '', title: tr('The bar counts what was spent since the highest balance Pedila has seen (it starts over when you top up)') }))
+      metric({ label: tr('Plan credits'), value: usd(p.bundled), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '', title: tr('The bar counts what was spent since the highest balance Pedila has seen (it starts over when you top up)') })
     }
     if (p.usd !== null && p.usd !== undefined) {
       const o = observedUse(k + 'usd', p.usd)
-      rows.push(quotaMetric({ label: tr('USD balance'), value: usd(p.usd), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '' }))
+      metric({ label: tr('USD balance'), value: usd(p.usd), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '' })
     }
     if (p.diem !== null && p.diem !== undefined) {
       const o = observedUse(k + 'diem', p.diem, p.nextEpoch || '')
-      rows.push(quotaMetric({ label: tr("Today's DIEM"), value: diemFmt(p.diem), pct: o ? o.pct : null, note: Number.isFinite(epoch) ? resetText(epoch, now) : '', title: tr("1 DIEM = $1 of usage per day while you have it staked; what you don't spend doesn't accumulate") }))
+      metric({ label: tr("Today's DIEM"), value: diemFmt(p.diem), pct: o ? o.pct : null, note: Number.isFinite(epoch) ? resetText(epoch, now) : '', title: tr("1 DIEM = $1 of usage per day while you have it staked; what you don't spend doesn't accumulate") })
     }
     if (p.tier) { line(`Plan: ${p.tier}`) }
     if (p.access === false) { line(tr("No access: Venice doesn't let you use the API (not enough balance)."), 'warn') }
     if (p.keyExpires) { line(tr('The key expires on {0}', full(Date.parse(p.keyExpires)))) }
     if (p.modelLimits.length) {
       const fmtL = m => [m.rpm ? `${kfmt(m.rpm)}/min` : '', m.rpd ? tr('{0}/day', kfmt(m.rpd)) : '', m.tpm ? `${kfmt(m.tpm)} tokens/min` : ''].filter(Boolean).join(' · ')
-      rows.push(quotaList(peakKey(p, conn) + 'limits', tr('Limits per model ({0})', p.modelLimits.length),
-        ...p.modelLimits.map(m => el('div', { class: 'q-line muted', title: m.model, text: `${modelName(m.model)}: ${fmtL(m)}` }))))
+      list(peakKey(p, conn) + 'limits', tr('Limits per model ({0})', p.modelLimits.length), p.modelLimits.map(m => ({ title: m.model, text: `${modelName(m.model)}: ${fmtL(m)}` })))
     }
   } else if (p.kind === 'opencode-go') {
     // OpenCode gives whole numbers rounded down (0% up to 1%). From plugin 1.1.0 on, `estimate` may come too
     // (with decimals, from Hermes's tokens and OpenCode's prices) in the windows where it agrees with that
     // whole number. It's shown with ONE decimal, cut off (never more than what was spent).
     const exactOf = w => w.estimate !== null && w.estimate !== undefined
-    const usedOf = w => (exactOf(w) ? trunc1(w.estimate) : Math.floor(w.percent))
     if (!p.windows.length) {
       line(tr("OpenCode didn't report your plan's usage."))
     } else {
@@ -2685,7 +2751,7 @@ function quotaBlock(p, conn = S.active) {
       const title = exact
         ? tr("OpenCode says {0}%: it only gives whole numbers, rounded down. The decimal comes from the tokens this Hermes has spent and from the prices and each model's limit that OpenCode publishes{1}. If the same account is used from somewhere else, what OpenCode says wins.", Math.floor(w.percent), plan)
         : tr('OpenCode gives whole numbers rounded down: 0% is less than 1%.')
-      rows.push(quotaMetric({ label: label[w.id] || w.label, value: exact ? tr('{0} used', pct1(w.estimate)) : tr('{0}% used', Math.floor(w.percent)), pct: usedOf(w), note, title }))
+      metric({ label: label[w.id] || w.label, value: exact ? tr('{0} used', pct1(w.estimate)) : tr('{0}% used', Math.floor(w.percent)), pct: usedOf(w), note, title })
     }
     if (p.windows.some(exactOf) && p.unpriced && p.unpriced.length) { line(tr("Without a price on OpenCode, these don't count in the decimal: {0}.", p.unpriced.map(modelName).join(', '))) }
     if (p.catalog === false) { line(tr("Couldn't read OpenCode's prices: the whole numbers its API gives are shown.")) }
@@ -2696,7 +2762,7 @@ function quotaBlock(p, conn = S.active) {
     for (const b of p.balances) {
       const fmt = n => money(n, b.currency)
       const o = observedUse(peakKey(p, conn) + (b.currency || 'balance').toLowerCase(), b.total)
-      rows.push(quotaMetric({ label: b.currency === 'CNY' ? tr('CNY balance') : tr('USD balance'), value: fmt(b.total), pct: o ? o.pct : null, note: o ? sinceText(o, fmt) : '', warn: p.available === false, title: tr('The bar counts what was spent since the highest balance Pedila has seen (it starts over when you top up)') }))
+      metric({ label: b.currency === 'CNY' ? tr('CNY balance') : tr('USD balance'), value: fmt(b.total), pct: o ? o.pct : null, note: o ? sinceText(o, fmt) : '', warn: p.available === false, title: tr('The bar counts what was spent since the highest balance Pedila has seen (it starts over when you top up)') })
       if (b.granted > 0) { line(tr('Granted: {0} · topped up: {1}', fmt(b.granted), fmt(b.toppedUp))) }
     }
     if (p.available === false) { line(tr("Not enough balance: DeepSeek doesn't answer until you top up (platform.deepseek.com)."), 'warn') }
@@ -2712,27 +2778,61 @@ function quotaBlock(p, conn = S.active) {
     for (const w of p.windows) {
       const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN
       const count = w.limit ? tr('{0} of {1}', kfmt(w.used || 0), kfmt(w.limit)) + (w.unit === 'tokens' ? ' tokens' : '') : ''
-      rows.push(quotaMetric({ label: label[w.id] ? label[w.id](w) : w.id, value: tr('{0}% used', pctOf(w)), pct: w.percent, note: [Number.isFinite(at) ? resetText(at, now) : '', count].filter(Boolean).join(' · ') }))
+      metric({ label: label[w.id] ? label[w.id](w) : w.id, value: tr('{0}% used', pctOf(w)), pct: w.percent, note: [Number.isFinite(at) ? resetText(at, now) : '', count].filter(Boolean).join(' · ') })
     }
     if (p.balance !== null) {
       const bought = p.creditsTotal > 0 && p.balance <= p.creditsTotal
       const o = bought ? null : observedUse(peakKey(p, conn) + 'credits', p.balance)
-      rows.push(bought
-        ? quotaMetric({ label: tr('Credits'), value: tr('{0} of {1}', usd(p.balance), usd(p.creditsTotal)), pct: (p.creditsTotal - p.balance) / p.creditsTotal * 100, note: tr('spent {0} of what was bought', usd(p.creditsTotal - p.balance)) })
-        : quotaMetric({ label: tr('Credits'), value: usd(p.balance), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '' }))
+      metric(bought
+        ? { label: tr('Credits'), value: tr('{0} of {1}', usd(p.balance), usd(p.creditsTotal)), pct: (p.creditsTotal - p.balance) / p.creditsTotal * 100, note: tr('spent {0} of what was bought', usd(p.creditsTotal - p.balance)) }
+        : { label: tr('Credits'), value: usd(p.balance), pct: o ? o.pct : null, note: o ? sinceText(o, usd) : '' })
     }
     if (p.planName) { line(`Plan: ${p.planName}` + (p.subscribed && p.expiresAt ? ' · ' + tr('until {0}', full(Date.parse(p.expiresAt))) : '')) }
     if (p.active === false) { line(tr("Openference says that the account isn't active."), 'warn') }
     if (!p.subscribed && p.balance !== null && p.balance <= 0) { line(tr('Without a plan or credits, at most the free models answer: Openference limits them per day and may ask for a credit balance for them too (it only says so when it happens).')) }
     if (p.freeModels.length) {
-      rows.push(quotaList(peakKey(p, conn) + 'free', tr('Free models ({0})', p.freeModels.length),
-        ...p.freeModels.map(m => el('div', { class: 'q-line muted', title: m.model, text: m.until ? tr('{0}: free until {1}', modelName(m.model), lastDay(m.until)) : modelName(m.model) }))))
+      list(peakKey(p, conn) + 'free', tr('Free models ({0})', p.freeModels.length), p.freeModels.map(m => ({ title: m.model, text: m.until ? tr('{0}: free until {1}', modelName(m.model), lastDay(m.until)) : modelName(m.model) })))
     }
     if (p.usage.requests) { line(tr('This account, in all (cache included): {0} requests · {1} tokens', kfmt(p.usage.requests), kfmt(p.usage.tokens || 0)) + (p.usage.cost > 0 ? ' · ' + usd(p.usage.cost) : '')) }
   }
   if (p.account && p.account.hidden) { line(tr("{0} more keys of this API aren't shown.", p.account.hidden)) }
+  return info
+}
+
+function quotaBlock(p, conn = S.active) {
+  const info = quotaInfo(p, conn)
+  const head = el('div', { class: 'q-head' }, el('b', { text: quotaName(p) }), keyChip(p.account, Date.now()), info.big ? el('span', { class: 'q-big', ...info.big }) : null)
+  const rows = info.rows.map(r => r.metric ? quotaMetric(r.metric)
+    : r.list ? quotaList(r.key, r.list, ...r.lines.map(l => el('div', { class: 'q-line muted', ...l })))
+      : el('div', { class: 'q-line ' + r.cls, text: r.line }))
   return el('div', { class: 'q-prov' }, head, ...rows, ...spentBlocks(p))
 }
+
+/**
+ * A quota in the simple view: its name, the bar and how much of its total has been used. The rest is in its help
+ * text; a shorter limit about to stop it, below.
+ */
+function quotaRow(p, conn = S.active) {
+  const now = Date.now()
+  const t = quotaTotal(p, (name, value, epoch) => observedUse(peakKey(p, conn) + name, value, epoch), now)
+  const key = keyState(p.account, now)
+  const info = quotaInfo(p, conn)
+  const tip = [quotaName(p) + (key ? ` (${key.text})` : ''),
+    ...info.rows.filter(r => !r.list).map(r => (r.metric ? `${r.metric.label}: ${r.metric.value}${r.metric.note ? ' · ' + r.metric.note : ''}` : r.line))].join('\n')
+  const value = t.pct === null ? t.text : pctShort(t.pct)
+  const bar = t.pct === null ? null : quotaBar(t.pct)
+  const hot = t.warn || (t.pct !== null && t.pct >= NEARLY)
+  const limit = t.tight && ({ key: tr('Key limit'), weekly: tr('Week'), 'weekly-tokens': tr('Week (tokens)'), monthly: tr('Month') }[t.tight.id] || `${t.tight.hours || 5} h`)
+  const left = t.tight && t.tight.at ? t.tight.at - now : 0
+  const back = left <= 0 ? '' : left < 24 * 3600e3 ? tr('resets in {0}', span(left)) : tr('resets {0}', dayAhead(t.tight.at, now))
+  const tight = t.tight && tr('{0} at {1}', limit, pctShort(t.tight.pct)) + (back ? ' · ' + back : '')
+  const off = key && (p.account.resting || p.account.active === false)
+  return el('div', { class: 'qs-row' + (off ? ' off' : ''), title: tip },
+    el('span', { class: 'n' }, key ? el('i', { class: 'qs-key ' + (off ? key.cls : 'on') }) : null, quotaName(p)),
+    bar, el('b', { class: (hot ? 'warn' : '') + (bar ? '' : ' wide'), text: value }),
+    tight ? el('span', { class: 'q-line warn qs-note', text: tight }) : null)
+}
+
 
 /** Hermes's security scan raised an objection when installing or updating the plugin: the person decides. */
 function scanQuestion(conn, ask, go, done) {
@@ -2746,7 +2846,7 @@ function scanQuestion(conn, ask, go, done) {
     ...found, el('div', { class: 'q-actions' }, el('button', { class: 'btn-primary', text: tr('Install anyway'), disabled: Boolean(Q.busy[conn]), onclick: go }), no))
 }
 
-function panelQuotasCard() {
+function panelQuotasCard(simple = false) {
   const conn = S.active
   loadQuotas(conn)
   const q = Q.data[conn]
@@ -2784,13 +2884,16 @@ function panelQuotasCard() {
     return el('section', { class: 'sp-card' }, ...parts)
   }
   const provs = q.data && Array.isArray(q.data.providers) ? q.data.providers : []
-  // An old plugin doesn't know some of the APIs this Hermes has: then the card is only there to offer the new one.
-  if (!provs.length && !(Array.isArray(q.paid) && q.paid.length && pluginNotice(q, { updated: Q.updated[conn], ask: Q.updAsk[conn] }))) { return null }
+  // An old plugin doesn't know some of the APIs this Hermes has, or its local AI: then the card is only there to offer
+  // the new one.
+  const some = [q.paid, q.localModels].some(x => Array.isArray(x) && x.length)
+  if (!provs.length && !(some && pluginNotice(q, { updated: Q.updated[conn], ask: Q.updAsk[conn] }))) { return null }
   const at = q.data.fetchedAt ? Date.parse(q.data.fetchedAt) : NaN
   return el('section', { class: 'sp-card' },
     el('h4', {}, el('span', { class: 'grow', text: title }),
-      Number.isFinite(at) ? el('span', { class: 'q-ago', text: ago(at), title: tr('Read at: {0}', full(at)) }) : null, refresh),
-    ...provs.map(pv => quotaBlock(pv, conn)),
+      simple && !provs.length ? null : simple ? el('span', { class: 'q-ago', text: tr('used'), title: tr('How much of the total of each quota has been used.') + (Number.isFinite(at) ? '\n' + tr('Read at: {0}', full(at)) : '') })
+        : Number.isFinite(at) ? el('span', { class: 'q-ago', text: ago(at), title: tr('Read at: {0}', full(at)) }) : null, refresh),
+    ...(simple ? [el('div', { class: 'qs-list' }, ...provs.map(pv => quotaRow(pv, conn)))] : provs.map(pv => quotaBlock(pv, conn))),
     quotaUpdateRow(conn, q), note, err, Q.login[conn] ? loginAgain(conn) : null)
 }
 
@@ -2810,7 +2913,7 @@ function quotaUpdateRow(conn, q) {
       el('div', { class: 'q-actions' }, el('button', { class: 'btn-primary', text: busy === 'restarting' ? tr('Restarting Hermes…') : tr('Restart Hermes now'), disabled: Boolean(busy), onclick: () => restartForQuotas(conn) })))
   }
   if (notice === 'ask') { return scanQuestion(conn, ask, () => updateQuotas(conn, true), () => { Q.updAsk[conn] = null }) }
-  const parts = [el('p', { class: 'small', text: tr("There's a new quotas plugin: it shows which models you've used with each API and with each key, and it also reads DeepSeek and Openference.") })]
+  const parts = [el('p', { class: 'small', text: tr("There's a new quotas plugin: it shows which models you've used with each API, with each key and on your local AI, and it also reads DeepSeek and Openference.") })]
   // When loading a plugin, a Hermes with username and password and no fixed "secret" closes its web
   // sessions.
   if (conn === 'server') { parts.push(el('p', { class: 'muted small', text: tr("Careful: when it changes it, the server's Hermes may close its web sessions (Pedila's too) and you'll have to sign in again once.") })) }
@@ -2897,16 +3000,18 @@ async function hermesUpdateNow(c) {
 function renderPanel() {
   if (!panelOn() || !S.settings) { return }
   const body = $('#panel-body')
-  const top = body.scrollTop
+  const view = panelView()
+  const top = P.view === view ? body.scrollTop : 0 // the other view starts from the top
+  P.view = view
   // With the focus on a card that can be clicked, repainting gives it back (keyboard).
   const focused = body.contains(document.activeElement) ? document.activeElement.getAttribute('data-focus') : null
-  // The cards and their order come from Settings → Layout (each one says in which mode it shows).
+  // The cards and their order come from Settings → Layout (each one says in which view it shows).
   const L = layout()
-  const on = L.cardsChats
+  const on = cardsOn()
   const cards = []
   for (const id of L.cards) {
     if (!on.includes(id) || !CARDS[id]) { continue }
-    const c = CARDS[id].make()
+    const c = view === 'simple' ? CARDS[id].simple() : CARDS[id].make()
     if (!c) { continue }
     c.dataset.card = id
     const h = c.querySelector('h4')
@@ -3060,6 +3165,169 @@ function panelTasksCard() {
   return el('section', { class: 'sp-card' }, ...parts)
 }
 
+// ── The panel's simple view: the same cards, in less space ───────────────────────────────────
+/**
+ * One thing and its value, two to a line or on a line of its own (`wide`; with `wrap`, a value that doesn't fit next to
+ * its name goes below). `value`: text, or pieces of a line.
+ */
+function fact(name, value, { wide = false, wrap = false, title = '', open = null, focus = '' } = {}) {
+  return el('div', { class: 'sp-fact' + (wide || wrap ? ' wide' : '') + (wrap ? ' wrap' : '') + (open ? ' sp-go' : ''), title: title || (typeof value === 'string' ? `${name}: ${value}` : ''), ...opener(open, focus) },
+    el('span', { class: 'k', text: name }), el('span', { class: 'v' }, value))
+}
+
+/** A card's title with its main thing on the right. */
+const simpleHead = (name, ...right) => el('h4', {}, el('span', { text: name }), right.length ? el('span', { class: 'sp-side' }, ...right) : null)
+
+/** How long since a moment, as "25 min ago" (it updates by itself, see tickPanel). */
+function agoPieces(at) {
+  const [before, after] = tr('{0} ago').split('{0}')
+  return [before, el('span', { 'data-span': at, text: span(Date.now() - at) }), after]
+}
+
+function simpleNowCard() {
+  const now = hermesNow()
+  const open = currentChat()
+  const e = currentEffort()
+  const effort = e.value ? effortName(e.value) : tr("Hermes's default")
+  // The default's name alone, without saying that it's the default (its help text does).
+  const model = () => {
+    const opts = S.models[S.current.conn]
+    const m = S.modelChoice[S.current.conn] ? null : opts && opts.current.model ? opts.current : null
+    return m ? modelName(m.model) + (m.local ? '' : ' ☁') : newChatModel()
+  }
+  return el('section', { class: 'sp-card' },
+    simpleHead(tr('Now'), el('span', { class: 'sp-state' }, el('span', { class: 'dot ' + now.cls }), el('span', { text: now.text }))),
+    el('div', { class: 'sp-facts' },
+      fact(tr('Chats running'), String(now.live.length + now.remote.length)),
+      fact(tr('Read only'), S.readOnly ? tr('yes') : 'no'),
+      fact(tr('Effort'), effort, { wrap: true, title: `${open ? tr('Effort (this chat)') : tr('Effort (new chat)')}: ${effort}` }),
+      open ? null : fact(tr('Model'), model(), { wrap: true, title: `${tr('Model (new chat)')}: ${newChatModel()}` })))
+}
+
+function simpleChatCard() {
+  const n = chatNumbers()
+  if (!n) { return el('section', { class: 'sp-card' }, simpleHead(tr('This chat'), el('span', { class: 'muted', text: tr('New chat') }))) }
+  const tokens = n.max ? tr('{0} of {1} tokens', kfmt(n.used), kfmt(n.max)) : tr('No data yet')
+  return el('section', { class: 'sp-card' },
+    simpleHead(tr('This chat'), el('span', { class: 'muted', title: tr('Memory used'), text: tokens })),
+    el('div', { class: 'qs-list one', title: `${tokens}\n${MEMORY_HOW}` }, el('div', { class: 'qs-row' },
+      el('span', { class: 'n', text: tr('Memory used') }), quotaBar(n.pct), el('b', { class: n.pct >= NEARLY ? 'warn' : '', text: n.max ? tr('{0}%', n.pct) : '—' }))),
+    el('div', { class: 'sp-facts' },
+      fact(tr('Model'), n.model, { wrap: true }),
+      n.provider ? fact(tr('Provider'), n.provider, { wrap: true }) : null,
+      // The effort is already in "Now".
+      n.effort && !layout().cardsSimple.includes('ahora') ? fact(tr('Effort'), n.effort) : null,
+      fact(tr('Messages'), n.messages),
+      fact(tr('Tools'), n.tools),
+      fact(tr('Read'), n.read, { title: `${tr('Tokens read')}: ${n.read}` }),
+      fact(tr('Written'), n.written, { title: `${tr('Tokens written')}: ${n.written}` }),
+      n.last ? fact(tr('Last answer'), n.last, { wrap: true }) : null))
+}
+
+function simpleTasksCard() {
+  const ch = taskChat()
+  if (!ch) {
+    const other = remoteBusy(S.active).map(a => listedRow(S.active, a.id)).find(Boolean)
+    if (!other) { return el('section', { class: 'sp-card' }, simpleHead(tr('Tasks'), el('span', { class: 'muted', text: tr('Nothing running') }))) }
+    return el('section', { class: 'sp-card' }, simpleHead(tr('Tasks')),
+      el('button', { class: 'sp-hint one', 'data-focus': 'tasks-other', title: tr('Hermes is working in “{0}”. Open it to see its plan and its progress.', other.title || tr('a chat')), text: tr('In “{0}”', other.title || tr('another chat')), onclick: () => openChat(S.active, other.id) }))
+  }
+  const items = ch.todos ? ch.todos.items : []
+  const counted = items.filter(t => t.status !== 'cancelled')
+  const done = counted.filter(t => t.status === 'completed').length
+  const running = busy(ch)
+  const subs = [...ch.subagents.values()]
+  const waiting = liveSubs(ch)
+  const count = counted.length ? el('span', { class: 'sp-count', title: tr('{0} of {1} done', done, counted.length), text: `${done}/${counted.length}` }) : null
+  const parts = [simpleHead(tr('Tasks'), ...(count ? [count] : !running && !subs.length ? [el('span', { class: 'muted', text: tr('Nothing running') })] : []))]
+  if (ch !== currentChat()) {
+    parts.push(el('button', { class: 'sp-where', 'data-focus': 'tasks-where', title: tr('Open this chat'), text: tr('In “{0}”', ch.title || tr('another chat')), onclick: () => openChat(ch.conn, ch.sid) }))
+  }
+  if (counted.length) {
+    parts.push(el('div', { class: 'sp-progress', role: 'progressbar', 'aria-label': tr('Tasks done'), 'aria-valuemin': '0', 'aria-valuemax': String(counted.length), 'aria-valuenow': String(done) },
+      el('i', { style: `width:${Math.round(done / counted.length * 100)}%` })))
+  }
+  // One line: the step it's on (the whole plan is in its help text) or how it was left.
+  const step = running || waiting ? items.find(t => t.status === 'in_progress') : null
+  const plan = todoRows(items).map(({ t, depth }) => `${'  '.repeat(depth)}${TODO_ICON[t.status] || '○'} ${t.content}`).join('\n')
+  if (step) {
+    parts.push(el('ul', { class: 'sp-todo one', title: plan }, el('li', { class: 'in_progress' + (running ? ' live' : '') }, el('span', { class: 'i', text: TODO_ICON.in_progress }), el('span', { class: 't', text: step.content }))))
+  } else if (!running && !waiting && done < counted.length) {
+    parts.push(el('div', { class: 'q-line muted', title: plan, text: tr('Some steps were left undone.') }))
+  }
+  if (running) {
+    const L = ch.live && !ch.live.done ? ch.live : null
+    const tools = L ? L.blocks.filter(b => b.type === 'tool') : []
+    const tool = tools.filter(b => !b.done).at(-1)
+    const since = tool ? tool.startedAt : L && L.status === COMPACT_TEXT ? L.compactAt : 0
+    const what = tool ? [tool.name || tr('tool'), tool.args].filter(Boolean).join(' · ') : L ? L.status : tr('Working')
+    parts.push(el('div', { class: 'sp-now solo', title: what }, el('span', { class: 'spin' }), el('span', { class: 't', text: what }),
+      since ? el('span', { class: 'w', 'data-span': since, text: span(Date.now() - since) })
+        : tools.length ? el('span', { class: 'w', title: tr('Tools used in this answer'), text: tr('{0} tools', tools.length) }) : null))
+  }
+  if (subs.length) {
+    const list = subs.slice().sort((a, b) => (a.index || 0) - (b.index || 0)).map(sa => `${SUB_ICON[sa.state] || '○'} ${sa.goal || tr('Subagent {0}', (sa.index || 0) + 1)}`).join('\n')
+    parts.push(el('div', { class: 'q-line' + (waiting ? '' : ' muted'), title: list, text: tr('Subagents · {0}/{1}', subs.filter(x => x.state === 'done').length, subs.length) }))
+  }
+  return el('section', { class: 'sp-card' }, ...parts)
+}
+
+function simpleUsageCard() {
+  const conn = S.active
+  const u = P.usage[conn]
+  loadPanelUsage(conn)
+  const head = usageHead(conn)
+  if (!u) { return el('section', { class: 'sp-card' }, head, el('div', { class: 'q-line muted', text: S.conns[conn] && S.conns[conn].state === 'ready' ? tr('Calculating…') : tr('Not connected.') })) }
+  const a = lastActivity(conn, u)
+  const day = a && a.at ? dayLabel(a.at) : ''
+  const when = a && a.at ? (day ? `${day}, ${hhmm(a.at)}` : hhmm(a.at)) : ''
+  const sum = x => { const n = x || { chats: 0, input: 0, output: 0 }; const t = kfmt(n.input + n.output); return n.chats === 1 ? tr('1 chat · {0} tokens', t) : tr('{0} chats · {1} tokens', n.chats, t) }
+  return el('section', { class: 'sp-card' }, head,
+    el('div', { class: 'sp-facts' },
+      !a ? null : !a.at ? fact(tr('Working now'), a.total > 1 ? tr('{0} tasks running', a.total) : tr('one task running'), { wrap: true, title: a.title, open: a.open, focus: 'busy' })
+        : a.busy ? fact(a.total > 1 ? tr('{0} tasks running', a.total) : tr('Task started'), [when + ' · ', el('span', { 'data-span': a.at, text: span(Date.now() - a.at) })], { wrap: true, title: a.title })
+          : fact(tr('Last answer'), [when + ' · ', ...agoPieces(a.at)], { wrap: true, title: a.title, open: a.open, focus: 'last' }),
+      fact(tr('Today'), sum(u.today), { wide: true }),
+      fact(tr('7 days'), sum(u.week), { wide: true })))
+}
+
+function simpleLocalCard() {
+  const conn = S.active
+  const L = localNow(conn)
+  if (!L) { return null }
+  const row = (name, tokens, title) => fact(name, kfmt(tokens), { wide: true, title })
+  if (!L.blocks) {
+    return el('section', { class: 'sp-card' }, el('h4', { text: L.title }),
+      el('div', { class: 'sp-facts', title: modelsHow(P.usage[conn]) }, ...L.models.slice(0, 3).map(m => row(modelName(m.model), tokensOf(m), tr('{0}\n{1} tokens: {2} read · {3} written{4}', m.model, kfmt(tokensOf(m)), kfmt(m.input), kfmt(m.output), '')))))
+  }
+  const id = spanNow()
+  return el('section', { class: 'sp-card' },
+    el('h4', {}, el('span', { class: 'grow', text: L.title, title: `${L.title}\n${LOCAL_HOW}` }), spanTabs('local')),
+    ...L.blocks.map(b => {
+      const now = b.spent[id]
+      return el('div', { class: 'sp-facts' },
+        L.blocks.length > 1 ? el('div', { class: 'sp-fact wide head' }, el('span', { class: 'k', text: b.name })) : null,
+        ...(now.models.length ? now.models.slice(0, 3).map(m => row(modelName(m.model), m.tokens, `${usedTitle(m)}\n${tr('In all: {0} tokens', kfmt(m.tokens))}`)) : [el('div', { class: 'sp-fact wide' }, el('span', { class: 'k', text: tr('Nothing in this time.') }))]))
+    }))
+}
+
+/** Each connection on a line: its state if it isn't connected; if it is, its Hermes's version and the new one, if any. */
+function simpleConnsCard() {
+  return el('section', { class: 'sp-card' }, simpleHead(tr('Connections')),
+    el('div', { class: 'sp-facts' }, ...visibleConns().filter(c => S.conns[c]).map(c => {
+      const st = S.conns[c]
+      const h = (S.hermesUpd && S.hermesUpd[c]) || {}
+      const u = hermesUpdText(c)
+      const version = !u ? '' : h.applying ? u.text : `Hermes ${h.version}${h.available && h.latest ? ' → ' + h.latest : h.available ? ' → …' : ''}`
+      const title = [connLabel(c) + (st.state === 'ready' && st.detail ? ` · ${st.detail}` : ''), u ? u.text : '', u ? tr('Hermes versions: Settings → About') : ''].filter(Boolean).join('\n')
+      const says = version && (st.state === 'ready' || h.applying)
+      const f = fact('', says ? version : stateText(st), { wrap: true, title, open: u ? () => openSettings('about') : null, focus: 'hermes-' + c })
+      f.querySelector('.k').append(el('span', { class: 'dot ' + st.state }), CONN_NAMES[c])
+      f.classList.toggle('warn', Boolean(says && u.warn))
+      return f
+    })))
+}
+
 // ── Adjustable widths: the chat list and the right panel ─────────────────────────────────────
 // Their line is dragged (or arrow keys with the focus on it; Home, Enter or a double click: the default
 // width). Same limits as settings.js. The chat always keeps at least MAIN_MIN pixels: in a narrow window
@@ -3068,7 +3336,8 @@ function panelTasksCard() {
 const MAIN_MIN = 420
 const WIDTHS = {
   side: { key: 'sideWidth', def: 286, min: 240, max: 520, css: '--side-w', box: '#sidebar', dir: 1 },
-  panel: { key: 'panelWidth', def: 300, min: 240, max: 680, css: '--panel-w', box: '#side-panel', dir: -1 }
+  // (Each view of the panel has its width: the simple one needs little.)
+  panel: { get key() { return panelView() === 'simple' ? 'panelWidthSimple' : 'panelWidth' }, def: 300, min: 240, max: 680, css: '--panel-w', box: '#side-panel', dir: -1 }
 }
 // With the list on the right (Layout), each line grows the other way.
 const dirOf = d => d.dir * (layout().swap ? -1 : 1)
@@ -3318,6 +3587,9 @@ function wireExtras() {
   })
   $('#open-usage').addEventListener('click', () => openUsage())
   $('#panel-toggle').addEventListener('click', () => saveSetting({ window: { sidePanel: !panelOn() } }).then(applyPanel))
+  for (const b of document.querySelectorAll('#panel-view button')) {
+    b.addEventListener('click', () => { if (b.dataset.v !== panelView()) { saveSetting({ window: { panelView: b.dataset.v } }) } })
+  }
   wireResizers()
   // When an answer ends usage is worked out again; also, every 2 minutes.
   setInterval(() => { if (panelOn()) { loadPanelUsage(S.active, true) } }, 120000)
@@ -3369,6 +3641,7 @@ const LAY_DEFAULT = {
   conns: ['local', 'server'], connsHidden: [],
   cards: ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones'],
   cardsChats: ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones'],
+  cardsSimple: ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones'],
   swap: false, show: {}
 }
 function layout() {
@@ -3377,13 +3650,13 @@ function layout() {
 }
 const shown = k => layout().show[k] !== false
 const CARDS = {
-  ahora: { name: tr('Now'), make: () => panelNowCard() },
-  tareas: { name: tr('Tasks'), make: () => panelTasksCard() },
-  chat: { name: tr('This chat'), make: () => panelChatCard() },
-  uso: { name: tr('Usage'), make: () => panelUsageCard() },
-  cuotas: { name: tr("Your APIs' quotas"), make: () => panelQuotasCard() },
-  modelos: { name: tr('Most used models'), make: () => panelModelsCard() },
-  conexiones: { name: tr('Connections'), make: () => panelConnsCard() }
+  ahora: { name: tr('Now'), make: () => panelNowCard(), simple: () => simpleNowCard() },
+  tareas: { name: tr('Tasks'), make: () => panelTasksCard(), simple: () => simpleTasksCard() },
+  chat: { name: tr('This chat'), make: () => panelChatCard(), simple: () => simpleChatCard() },
+  uso: { name: tr('Usage'), make: () => panelUsageCard(), simple: () => simpleUsageCard() },
+  cuotas: { name: tr("Your APIs' quotas"), make: () => panelQuotasCard(), simple: () => panelQuotasCard(true) },
+  modelos: { name: tr('Most used models of your local AI'), make: () => panelLocalCard(), simple: () => simpleLocalCard() },
+  conexiones: { name: tr('Connections'), make: () => panelConnsCard(), simple: () => simpleConnsCard() }
 }
 const SHOW_NAMES = {
   attach: tr('📎 Attach images'), model: tr('Model'), reason: tr('🧠 Effort'),
@@ -3422,7 +3695,7 @@ function sortable(box, { items, handle = null, horizontal = false, onStart = nul
     if (e.button !== 0) { return }
     const grip = handle ? e.target.closest(handle) : e.target
     const it = grip && grip.closest(items)
-    if (!it || !box.contains(it) || e.target.closest('input, select, textarea, a, .sp-link, summary')) { return }
+    if (!it || !box.contains(it) || e.target.closest('input, select, textarea, a, .sp-link, .q-span, summary')) { return }
     const x0 = e.clientX
     const y0 = e.clientY
     let dragging = false
@@ -3505,7 +3778,8 @@ function renderLayoutSettings() {
   const toggleIn = (key, id) => on => { const set = new Set(L[key]); if (on) { set.add(id) } else { set.delete(id) } saveLayout({ [key]: [...set] }) }
   $('#lay-conns').replaceChildren(...L.conns.map(c => layRow(c, CONN_NAMES[c], L.conns, 'conns', [[tr('Show'), !L.connsHidden.includes(c), on => toggleIn('connsHidden', c)(!on)]])))
   $('#lay-cards').replaceChildren(...L.cards.map(id => layRow(id, CARDS[id].name, L.cards, 'cards', [
-    [tr('Show'), L.cardsChats.includes(id), toggleIn('cardsChats', id)]
+    [tr('Simple'), L.cardsSimple.includes(id), toggleIn('cardsSimple', id)],
+    [tr('Advanced'), L.cardsChats.includes(id), toggleIn('cardsChats', id)]
   ])))
   $('#lay-show').replaceChildren(...Object.entries(SHOW_NAMES).map(([k, name]) => el('label', { class: 'toggle' },
     el('input', { type: 'checkbox', checked: shown(k), onchange: e => saveLayout({ show: { ...L.show, [k]: e.target.checked } }) }), el('span', { text: name }))))

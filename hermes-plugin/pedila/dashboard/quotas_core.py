@@ -26,12 +26,16 @@ What it gives of each paid API with a key:
   Its documentation has no address for this: it's the one its own web page uses (``/api/user/me``), which takes the
   API key too. That answer also has personal data and a key: only the numbers and the plan's name are taken from
   it. The free models and until when they're free come from its public catalog (``/v1/models``, without a key).
+
+And of the AI on one's own network (llama.cpp, Ollama, LM Studio…), which has no quota: which models Hermes has used
+and how many tokens each one, from the same records of state.db.
 """
 from __future__ import annotations
 
 import calendar
 import hashlib
 import importlib.util
+import ipaddress
 import logging
 import re
 import sqlite3
@@ -45,7 +49,7 @@ from urllib.parse import urlparse
 
 log = logging.getLogger("hermes_dashboard_plugin_pedila")
 
-PLUGIN_VERSION = "1.5.0"
+PLUGIN_VERSION = "1.6.0"
 NAMES = {"openrouter": "OpenRouter", "venice": "Venice", "opencode-go": "OpenCode Go", "opencode-zen": "OpenCode Zen",
          "deepseek": "DeepSeek", "openference": "Openference"}
 ORDER = ["openrouter", "venice", "opencode-go", "opencode-zen", "deepseek", "openference"]
@@ -75,6 +79,8 @@ ROWS_DAYS = 32
 MAX_KEYS = 6
 # The most models of one API that are told apart in what Hermes spent (the rest are added up).
 MAX_MODELS = 12
+# The most providers of the AI on one's own network that are given.
+MAX_LOCAL = 6
 # What Hermes puts when a provider of one's own has no key.
 PLACEHOLDER_KEYS = {"", "no-key-required", "none", "null", "dummy", "sk-dummy"}
 
@@ -135,6 +141,40 @@ def kind_of(base_url: str) -> Optional[str]:
     if host == "api.openference.com":
         return "openference"
     return None
+
+
+# Names that only exist on one's own network (mDNS, the router's, a VPN's, Docker's and other private ones).
+LOCAL_SUFFIXES = (".local", ".lan", ".home", ".internal", ".intranet", ".home.arpa", ".localdomain", ".fritz.box", ".ts.net")
+# What VPNs such as Tailscale give their machines (Python doesn't count it as private).
+VPN_NET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def place_of(base_url: Any) -> Optional[tuple[str, int]]:
+    """(machine, port) of an address on this machine or on one's own network; None if it's on the internet."""
+    try:
+        u = urlparse(base_url.strip() if isinstance(base_url, str) else "")
+        host, port = (u.hostname or "").lower().rstrip("."), u.port
+    except ValueError:
+        return None
+    scheme = u.scheme.lower()
+    if scheme not in ("http", "https") or not host:
+        return None
+    try:
+        ip = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        if host == "localhost" or host.endswith(".localhost"):
+            host = "localhost"
+        elif "." in host and not host.endswith(LOCAL_SUFFIXES):
+            return None
+    else:
+        ip = getattr(ip, "ipv4_mapped", None) or ip
+        if ip.is_loopback or ip.is_unspecified:
+            host = "localhost"
+        elif ip.is_private or ip.is_link_local or ip in VPN_NET:
+            host = str(ip)
+        else:
+            return None
+    return host, port or (443 if scheme == "https" else 80)
 
 
 def _config() -> dict:
@@ -931,8 +971,22 @@ FETCHERS = {"openrouter": fetch_openrouter, "venice": fetch_venice, "opencode-go
 
 # ── What Hermes spent, from its own records ─────────────────────────────────────────────────────
 
+# Ollama's cloud models are used through its local address, but they run in its cloud ("gpt-oss:120b-cloud").
+_CLOUD_MODEL = re.compile(r"[:-]cloud$", re.IGNORECASE)
+# llama.cpp may answer with the path of the file as the model's name.
+_MODEL_FILE = re.compile(r"[\\/]([^\\/]+)\.(?:gguf|ggml|bin|safetensors)$", re.IGNORECASE)
+
+
+def file_model(name: Any) -> str:
+    """A model's name; if it's the path of its file, the file's name ("/models/Qwen3-8B-Q4_K_M.gguf")."""
+    s = str(name or "").strip()
+    m = _MODEL_FILE.search(s)
+    return m.group(1) if m else s
+
+
 def usage_rows(since: float) -> Optional[list[dict]]:
-    """Rows of state.db's ``session_model_usage`` with usage since `since` that go to a paid API.
+    """Rows of state.db's ``session_model_usage`` with usage since `since` that go to a paid API (``kind``: which one)
+    or to the AI on one's own network (``kind``: "local", and ``place``: at which address).
     Each row = one chat, one model and one task (summaries, titles and images go apart).
     None if it couldn't be read."""
     try:
@@ -957,13 +1011,17 @@ def usage_rows(since: float) -> Optional[list[dict]]:
     rows = []
     for model, base, inp, out, cr, cw, calls, cost, first, last in raw:
         kind = kind_of(base or "")
-        if not kind:
+        place = None if kind else place_of(base)
+        if not kind and (not place or _CLOUD_MODEL.search(str(model or "").strip())):
             continue
         first, last = _num(first), _num(last)
-        rows.append({"kind": kind, "model": model or "", "input": int(inp or 0), "output": int(out or 0),
-                     "cache_read": int(cr or 0), "cache_write": int(cw or 0), "calls": int(calls or 0),
-                     "cost": float(cost or 0.0), "first": first if first is not None else last,
-                     "last": last if last is not None else first})
+        row = {"kind": kind or "local", "model": model or "", "input": int(inp or 0), "output": int(out or 0),
+               "cache_read": int(cr or 0), "cache_write": int(cw or 0), "calls": int(calls or 0),
+               "cost": float(cost or 0.0), "first": first if first is not None else last,
+               "last": last if last is not None else first}
+        if place:
+            row.update(place=place, model=file_model(model), cost=0.0)  # one's own AI isn't billed by the token
+        rows.append(row)
     return rows
 
 
@@ -1051,6 +1109,42 @@ def spent_by_kind(rows: list[dict], now: float, catalog: Optional[dict] = None) 
     """What Hermes spent with each API (tokens read + written, cache, calls, cost), in all and model by model:
     24 h, 7 and 30 days."""
     return {k: _present(_tally([r for r in rows if r["kind"] == k], now, catalog)) for k in dict.fromkeys(r["kind"] for r in rows)}
+
+
+def local_names(cfg: dict) -> dict[tuple[str, int], str]:
+    """What config.yaml calls the provider at each address of one's own network."""
+    providers, custom = cfg.get("providers"), cfg.get("custom_providers")
+    blocks = [(k, v) for k, v in providers.items() if isinstance(v, dict)] if isinstance(providers, dict) else []
+    blocks += [("", v) for v in custom if isinstance(v, dict)] if isinstance(custom, list) else []
+    out: dict[tuple[str, int], str] = {}
+    for key, pv in blocks:
+        place = place_of(_url_of(pv))
+        given = pv.get("name")
+        name = " ".join(str(given if isinstance(given, str) and given.strip() else key or "").split())[:40]
+        if place and name:
+            out.setdefault(place, name)
+    return out
+
+
+def local_spent(rows: list[dict], cfg: dict, now: float) -> list[dict[str, Any]]:
+    """What Hermes used of the AI on one's own network, provider by provider (the one used the most, first):
+    [{name, spent}]. The same provider may be at several addresses (at home and through a VPN): they go together if
+    config.yaml gives them the same name. An address that isn't among config.yaml's providers goes by itself."""
+    names = local_names(cfg)
+    spelled: dict[str, str] = {}  # the same name with other capitals is the same provider
+    for name in names.values():
+        spelled.setdefault(name.lower(), name)
+    groups: dict[str, tuple[str, list[dict]]] = {}
+    for r in rows:
+        if r["kind"] != "local":
+            continue
+        host, port = r["place"]
+        name = names.get(r["place"]) or (f"[{host}]:{port}" if ":" in host else f"{host}:{port}")[-40:]
+        groups.setdefault(name.lower(), (spelled.get(name.lower(), name), []))[1].append(r)
+    out = [{"name": name, "spent": _present(_tally(its, now))} for name, its in groups.values()]
+    out = [x for x in out if x["spent"]["month"]["models"]]
+    out.sort(key=lambda x: (-x["spent"]["month"]["tokens"], x["name"].lower()))
+    return out[:MAX_LOCAL]
 
 
 def with_cost(noted: list[dict], rows: list[dict]) -> list[dict]:
@@ -1214,5 +1308,11 @@ def build(runtime: Callable[..., Optional[dict]], **info: Any) -> dict[str, Any]
                 go_decimals(mine, of_kind, catalog, now, len(mine) == len(group))
         except Exception as exc:  # what's worked out from Hermes's records doesn't take the quotas down
             log.warning("pedila: failure working out what was spent with %s: %s", kind, type(exc).__name__)
+    local = None  # Hermes's records couldn't be read
+    if rows is not None:
+        try:
+            local = local_spent(rows, _config(), now)
+        except Exception as exc:
+            log.warning("pedila: failure working out what the local AI was used for: %s", type(exc).__name__)
     return {"plugin": "pedila", "version": PLUGIN_VERSION, "fetched_at": datetime.fromtimestamp(now, UTC).isoformat(),
-            "shell_stale": shell_stale(info), "providers": [row for _e, row in work]}
+            "shell_stale": shell_stale(info), "providers": [row for _e, row in work], "local": local}

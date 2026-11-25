@@ -44,6 +44,14 @@ Also, for each one, what Hermes spent in 24 h, 7 and 30 days, in all and model b
 the cache, calls and estimated cost), taken from its own records. Hermes records the first and the last call of each
 chat and model: a chat longer than that time counts in proportion, so it's approximate.
 
+The AI on one's own network (llama.cpp, Ollama, LM Studio… at an address of this machine, of the local network or of a
+VPN such as Tailscale or ZeroTier) has no quota, but what Hermes used of it is given the same way (`local`), provider by
+provider: 24 h, 7 and 30 days, model by model. It's told apart by the address Hermes recorded for each call and named
+after the provider config.yaml has there; the same provider at two addresses counts as one if it has the same name.
+Nothing is asked of it: it all comes from Hermes's records, and the addresses don't go out in the answer (except to name
+one that isn't among config.yaml's providers). A proxy on one's own network counts as local, whatever is behind it;
+Ollama's cloud models ("…-cloud") don't.
+
 Only the APIs that have a key show up. The keys don't leave Hermes: the plugin uses them to ask the provider and
 returns numbers. A key is only sent, over https, to the address Hermes uses it at: if a provider goes through a proxy
 or a mirror, it isn't asked about. Reading them changes nothing in Hermes (it doesn't count or rotate them). All it

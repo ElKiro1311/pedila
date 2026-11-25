@@ -84,13 +84,22 @@ test('notifications: when yes and when no', () => {
   assert.equal(decide('done', { notify: { ...notify, enabled: false }, focusedOnChat: false, ms: 99999 }), false)
 })
 
-test('local models: home, VPN and cloud addresses', () => {
-  const { isLocalUrl } = require('../src/main/connection')
+test('local models: home, VPN and cloud addresses', async () => {
+  const { isLocalUrl, onOwnNetwork, Connection } = require('../src/main/connection')
   assert.equal(isLocalUrl('http://192.168.1.50:8181/v1'), true)
   assert.equal(isLocalUrl('http://10.0.0.5:8181/v1'), true)
   assert.equal(isLocalUrl('http://localhost:11434'), true)
   assert.equal(isLocalUrl('https://api.example.com/v1'), false)
   assert.equal(isLocalUrl('https://openrouter.ai/api/v1'), false)
+  // What the model picker calls local doesn't change with what the local AI's card needs to know.
+  for (const u of ['http://host.docker.internal:11434', 'http://litellm:4000', 'http://0.0.0.0:1234', 'http://nas.home.arpa']) { assert.equal(isLocalUrl(u), false, u) }
+  const providers = [{ slug: 'cloud', api_url: 'https://api.example.com/v1', models: ['a'] }, { slug: 'docker', api_url: 'http://litellm:4000', models: ['b'] }, { slug: 'home', base_url: 'http://192.168.1.50:8123/v1', models: ['c'] }]
+  const opts = await Connection.prototype.modelOptions.call({ rpc: async () => ({ provider: 'cloud', model: 'a', providers }) })
+  assert.deepEqual(opts.providers.map(p => [p.id, p.local, p.own]), [['home', true, true], ['cloud', false, false], ['docker', false, true]])
+  // For the local AI's card: the same rules as the plugin's place_of (test/plugin/test_quotas_core.py).
+  for (const u of ['http://192.168.1.50:8123/v1', 'http://10.0.0.7:8123/v1', 'http://localhost:11434/v1', 'http://box.tail1234.ts.net:11434', 'http://nas.fritz.box', 'http://127.0.0.1:1234/v1', 'http://[::1]:11434', 'http://0.0.0.0:11434', 'http://LOCALHOST.:11434', 'http://ollama.localhost', 'http://[::ffff:127.0.0.1]:80',
+    'http://[fd00::5]:8000/v1', 'http://[fe80::1]:80', 'http://100.101.1.2:11434', 'http://169.254.3.4', 'https://172.16.3.4/v1', 'http://llama-swap:8080/v1', 'http://Server.LAN:8123', 'http://host.docker.internal:8080', 'http://nas.home.arpa']) { assert.equal(onOwnNetwork(u), true, u) }
+  for (const u of ['http://8.8.8.8', 'http://100.128.0.1', 'http://172.32.0.1', 'http://[2606:4700::1111]/v1', 'http://[::ffff:8.8.8.8]:80', 'https://x.lan.example.com', 'ftp://192.168.1.50', '192.168.1.50:8080', 'file:///models', null, 'http://', 'https://api.venice.ai/api/v1', 'https://ts.net.example.com']) { assert.equal(onOwnNetwork(u), false, String(u)) }
   assert.equal(isLocalUrl(''), false)
 })
 

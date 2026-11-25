@@ -30,10 +30,11 @@ const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 const QUOTA_PLUGIN = 'pedila'
 const QUOTA_PLUGIN_SOURCE = 'ElKiro1311/pedila/hermes-plugin/pedila'
 const QUOTA_KINDS = ['openrouter', 'venice', 'opencode-go', 'opencode-zen', 'deepseek', 'openference']
-// The plugin version this Pedila knows how to show in full (1.5.0: what each key has used;
-// 1.4.0: the models used with each API; 1.3.0: DeepSeek and Openference; 1.2.0: every key of a provider, and OpenCode Go with decimals). With an earlier one, updating it is offered. From 1.2.0 on its calculation reloads by itself
+// The plugin version this Pedila knows how to show in full (1.6.0: the local AI's models; 1.5.0: what each key has used;
+// 1.4.0: the models used with each API; 1.3.0: DeepSeek and Openference; 1.2.0: every key of a provider, and OpenCode
+// Go with decimals). With an earlier one, updating it is offered. From 1.2.0 on its calculation reloads by itself
 // (without restarting Hermes).
-const QUOTA_PLUGIN_WANT = '1.5.0'
+const QUOTA_PLUGIN_WANT = '1.6.0'
 const QUOTA_PLANS = ['go', 'go-teams', 'go-plus']
 const INSTALL_TIMEOUT = 180000
 
@@ -136,7 +137,13 @@ function quotaData(j) {
     }
     return o
   })
-  return { version: cut(str(j.version), 20), shell: cut(str(j.shell), 20), shellStale: j.shell_stale === true, fetchedAt: isoOf(j.fetched_at), providers }
+  // The AI on your own network: what this Hermes has used of it, provider by provider (plugin 1.6.0). null = an
+  // earlier plugin, or it couldn't read Hermes's records.
+  const local = Array.isArray(j.local)
+    ? j.local.filter(x => x && typeof x === 'object').slice(0, 6).map(x => ({ name: cut(str(x.name).trim(), 40), spent: spentOf(x.spent) }))
+      .filter(x => x.name && x.spent && ['day', 'week', 'month'].every(k => x.spent[k].models) && x.spent.month.models.length)
+    : null
+  return { version: cut(str(j.version), 20), shell: cut(str(j.shell), 20), shellStale: j.shell_stale === true, fetchedAt: isoOf(j.fetched_at), providers, local }
 }
 
 /** Is the plugin that Hermes has older than the one this Pedila knows how to show? */
@@ -169,6 +176,32 @@ function isLocalUrl(u) {
     const [a, b] = [Number(m[1]), Number(m[2])]
     return a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 100 && b >= 64 && b <= 127)
   } catch { return false }
+}
+
+// Names that only exist on one's own network (mDNS, the router's, a VPN's, Docker's and other private ones).
+const OWN_SUFFIXES = ['.local', '.lan', '.home', '.internal', '.intranet', '.home.arpa', '.localdomain', '.localhost', '.fritz.box', '.ts.net']
+
+/**
+ * The same question with the plugin's rules (place_of), which also know other containers and more private names.
+ * Only for telling the local AI's models apart: what the model picker calls local is isLocalUrl's.
+ */
+function onOwnNetwork(u) {
+  try {
+    const p = new URL(String(u || ''))
+    const h = p.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+    if (!h || !/^https?:$/.test(p.protocol)) { return false }
+    if (h.includes(':')) { return h === '::1' || h === '::' || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h) || (/^::ffff:/.test(h) && onOwnNetwork(`http://${mappedV4(h)}`)) }
+    const m = h.match(/^(\d+)\.(\d+)\.\d+\.\d+$/)
+    if (!m) { return !h.includes('.') || OWN_SUFFIXES.some(x => h.endsWith(x)) }
+    const [a, b] = [Number(m[1]), Number(m[2])]
+    return a === 0 || a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
+  } catch { return false }
+}
+
+/** "::ffff:7f00:1" (that's how URL writes them) → "127.0.0.1". */
+function mappedV4(h) {
+  const [hi, lo] = h.split(':').slice(-2).map(x => parseInt(x, 16))
+  return [hi >> 8, hi & 255, lo >> 8, lo & 255].join('.')
 }
 
 function contentText(c) {
@@ -1134,6 +1167,7 @@ class Connection extends EventEmitter {
       id: str(pv.slug || pv.id || pv.provider || pv.name),
       name: str(pv.name || pv.label || pv.slug || pv.id),
       local: isLocalUrl(pv.api_url || pv.base_url),
+      own: onOwnNetwork(pv.api_url || pv.base_url),
       paid: paidKindOfProvider(pv),
       models: (Array.isArray(pv.models) ? pv.models : []).map(m => (typeof m === 'string' ? { id: m, name: m } : { id: str(m.id || m.model || m.name), name: str(m.name || m.label || m.id || m.model) })).filter(m => m.id)
     })).filter(pv => pv.id && pv.models.length)
@@ -1308,4 +1342,4 @@ class Connection extends EventEmitter {
   }
 }
 
-module.exports = { quotaData, quotaPluginOutdated, QUOTA_PLUGIN_WANT, paidKindOf, paidKindOfProvider, Connection, normalizeTranscript, sessionRow, argsSummary, boundInput, hermesToolOutput, hermesFailed, splitCompaction, contentImages, isLocalUrl, todoSnapshot, todoStateOf, isTodoCall }
+module.exports = { quotaData, quotaPluginOutdated, QUOTA_PLUGIN_WANT, paidKindOf, paidKindOfProvider, Connection, normalizeTranscript, sessionRow, argsSummary, boundInput, hermesToolOutput, hermesFailed, splitCompaction, contentImages, isLocalUrl, onOwnNetwork, todoSnapshot, todoStateOf, isTodoCall }

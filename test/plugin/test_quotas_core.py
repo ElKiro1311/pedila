@@ -332,9 +332,10 @@ class Build(unittest.TestCase):
         except ImportError:
             self.skipTest("without httpx (tested with the Python of Hermes)")
         self.httpx = httpx
-        self.saved = (httpx.Client, core.usage_rows, core._config, core.time.time)
+        self.saved = (httpx.Client, core.usage_rows, core.key_rows, core._config, core.time.time)
         httpx.Client = FakeClient
         core.usage_rows = lambda since: [REAL, row("x", kind="openrouter", inp=5, out=5)]
+        core.key_rows = lambda since: None  # (not this PC's real record)
         core._config = lambda: {}
         core.time.time = lambda: NOW
         core._catalog.update(at=0.0, failed_at=0.0, models=None)
@@ -343,7 +344,7 @@ class Build(unittest.TestCase):
         FakeClient.by_key = {}
 
     def tearDown(self):
-        self.httpx.Client, core.usage_rows, core._config, core.time.time = self.saved
+        self.httpx.Client, core.usage_rows, core.key_rows, core._config, core.time.time = self.saved
 
     def test_whole_answer_without_keys(self):
         key = "oc_" + "k" * 48
@@ -1041,7 +1042,8 @@ class NewProviders(unittest.TestCase):
         keys = {"deepseek": "sk-deepseek-secret", "openference": "sk-openference-secret"}
         cfg = {"providers": {"openference": {"api": "https://api.openference.com/v1", "key_env": "X"}}}
         with mock.patch.object(httpx, "Client", lambda *a, **k: mock.MagicMock(__enter__=lambda s: fake, __exit__=lambda *x: False)), \
-                mock.patch.object(core, "usage_rows", lambda since: [row("deepseek-flash", kind="deepseek", inp=5, out=5)]), mock.patch.object(core, "_config", lambda: cfg):
+                mock.patch.object(core, "usage_rows", lambda since: [row("deepseek-flash", kind="deepseek", inp=5, out=5)]), mock.patch.object(core, "_config", lambda: cfg), \
+                mock.patch.object(core, "key_rows", lambda since: None):  # (not this PC's real record)
             body = core.build(runtime=lambda name, *a: {"api_key": keys[name]} if name in keys else None)
         self.assertEqual([(p["kind"], p["name"], p["ok"]) for p in body["providers"]], [("deepseek", "DeepSeek", True), ("openference", "Openference", True)])
         self.assertIsNotNone(body["providers"][0]["spent"])
@@ -1384,7 +1386,12 @@ class ReadStateDb(unittest.TestCase):
                         "cache_read_tokens INTEGER, cache_write_tokens INTEGER, reasoning_tokens INTEGER, estimated_cost_usd REAL, "
                         "actual_cost_usd REAL, cost_status TEXT, cost_source TEXT, first_seen REAL, last_seen REAL)")
             rows = [("s1", "glm-5.3", "opencode-go", "https://opencode.ai/zen/go/v1/", "", "", 25, 106000, 35000, 1020000, 0, 28000, 0, 0, "unknown", "none", NOW - 1000, NOW - 10),
-                    ("s1", "qwen", "custom", "http://192.168.1.50:8080/v1/", "", "compression", 1, 4000, 100, 0, 0, 0, 0, 0, None, None, NOW - 900, NOW - 900),
+                    ("s1", "qwen", "custom", "http://192.168.1.50:8080/v1/", "", "compression", 1, 4000, 100, 0, 0, 0, 0.5, 0, None, None, NOW - 900, NOW - 900),
+                    ("s1", "/models/Qwen3-VL-8B-Q4_K_M.gguf", "custom", "http://192.168.1.50:8080/v1", "", "vision", 2, 10, 5, 0, 0, 0, 0, 0, None, None, NOW - 800, NOW - 800),
+                    ("s1", "some-model", "custom", "https://api.example.com/v1", "", "", 1, 7, 7, 0, 0, 0, 0, 0, None, None, NOW - 700, NOW - 700),
+                    ("s1", "gpt-oss:120b-cloud", "custom", "http://localhost:11434/v1", "", "", 1, 99000, 7, 0, 0, 0, 0, 0, None, None, NOW - 700, NOW - 700),
+                    ("s1", "kimi:Cloud ", "custom", "http://localhost:11434/v1", "", "", 1, 99000, 7, 0, 0, 0, 0, 0, None, None, NOW - 700, NOW - 700),
+                    ("s1", "lost", "custom", "", "", "", 1, 7, 7, 0, 0, 0, 0, 0, None, None, NOW - 700, NOW - 700),
                     ("s2", "or-model", "openrouter", "https://openrouter.ai/api/v1", "", "", 4, 30000, 1500, 0, 0, 0, 0.0001, 0.0008, None, None, NOW - 90 * 86400, NOW - 40 * 86400)]
             con.executemany("INSERT INTO session_model_usage VALUES (" + ",".join("?" * 18) + ")", rows)
             con.commit()
@@ -1400,11 +1407,117 @@ class ReadStateDb(unittest.TestCase):
                     sys.modules.pop("hermes_constants", None)
                 else:
                     sys.modules["hermes_constants"] = saved
-            self.assertEqual(len(got), 1)  # what is local isn't paid; what is 40 days old stays out
-            self.assertEqual(got[0]["kind"], "opencode-go")
+            # What is 40 days old stays out, and so does what isn't a known API or on one's own network, or is Ollama's cloud.
+            self.assertEqual([(r["kind"], r["model"]) for r in got], [("opencode-go", "glm-5.3"), ("local", "qwen"), ("local", "Qwen3-VL-8B-Q4_K_M")])
             self.assertEqual((got[0]["input"], got[0]["output"], got[0]["cache_read"], got[0]["calls"]), (106000, 35000, 1020000, 25))
+            self.assertNotIn("place", got[0])
+            # One's own AI isn't billed by the token, whatever Hermes reckons.
+            self.assertEqual([(r["place"], r["cost"]) for r in got[1:]], [(("192.168.1.50", 8080), 0.0)] * 2)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class Local(unittest.TestCase):
+    """The AI on one's own network: what is, what it's called and which models were used."""
+
+    def test_what_is_on_ones_own_network(self):
+        p = core.place_of
+        self.assertEqual(p("http://192.168.1.50:8080/v1/"), ("192.168.1.50", 8080))
+        self.assertEqual([p(" http://10.0.0.7:8123/v1 "), p("http://10.0.0.7:8123 ")], [("10.0.0.7", 8123)] * 2)
+        self.assertEqual(p("https://172.16.3.4/v1"), ("172.16.3.4", 443))
+        self.assertEqual(p("http://100.101.1.2:11434"), ("100.101.1.2", 11434))  # a VPN such as Tailscale
+        self.assertEqual(p("http://169.254.3.4:80"), ("169.254.3.4", 80))
+        for u in ("http://localhost:11434/v1", "http://127.0.0.1:11434", "http://[::1]:11434/v1", "http://0.0.0.0:11434", "http://127.8.9.1:11434",
+                  "http://ollama.localhost:11434", "http://LOCALHOST.:11434", "http://[::ffff:127.0.0.1]:11434"):
+            self.assertEqual(p(u), ("localhost", 11434), u)
+        self.assertEqual(p("http://[fd00::5]:8000/v1"), ("fd00::5", 8000))
+        self.assertEqual(p("http://[::ffff:192.168.1.50]:8080"), ("192.168.1.50", 8080))
+        self.assertEqual(p("http://llama-swap:8080/v1"), ("llama-swap", 8080))  # another container
+        self.assertEqual(p("http://Server.LAN:8123"), ("server.lan", 8123))
+        self.assertEqual([p("http://box.tail1234.ts.net:11434/v1"), p("https://nas.fritz.box")], [("box.tail1234.ts.net", 11434), ("nas.fritz.box", 443)])
+        self.assertEqual(p("http://host.docker.internal:8080"), ("host.docker.internal", 8080))
+        for u in ("https://api.venice.ai/api/v1", "https://llm.example.com/v1", "http://8.8.8.8:80", "http://100.128.0.1", "http://172.32.0.1",
+                  "http://[2606:4700::1111]/v1", "http://evil.example.lan.example.com", "https://ts.net.example.com", "ftp://192.168.1.50", "192.168.1.50:8080", "", None, 7,
+                  "http://", "http://[::1", "http://192.168.1.50:99999/v1", "file:///models"):
+            self.assertIsNone(p(u), u)
+
+    def test_a_models_file(self):
+        f = core.file_model
+        self.assertEqual(f("/models/a/Qwen3-8B-Q4_K_M.gguf"), "Qwen3-8B-Q4_K_M")
+        self.assertEqual(f("C:\\models\\x.SafeTensors"), "x")
+        self.assertEqual(f(" deepseek/deepseek-v4.1 "), "deepseek/deepseek-v4.1")
+        self.assertEqual([f(None), f("a.gguf")], ["", "a.gguf"])
+
+    def test_what_config_yaml_calls_it(self):
+        cfg = {"providers": {"homelab": {"name": " My  server ", "api": "http://10.0.0.7:8123/v1", "key_env": "X"}, "ollama": {"base_url": "http://127.0.0.1:11434"},
+                             "venice": {"name": "Venice", "api": "https://api.venice.ai/api/v1"}, "odd": 3, 7: {"url": "http://nas:9000"},
+                             "same": {"name": "Second", "api": "http://10.0.0.7:8123/other"}},
+               "custom_providers": [{"name": "My server", "base_url": "http://192.168.1.50:8123/v1"}, "x", {"base_url": "http://192.168.1.51:1"}]}
+        self.assertEqual(core.local_names(cfg), {("10.0.0.7", 8123): "My server", ("localhost", 11434): "ollama", ("nas", 9000): "7", ("192.168.1.50", 8123): "My server"})
+        self.assertEqual([core.local_names(c) for c in ({}, {"providers": [], "custom_providers": {}})], [{}, {}])
+
+    def local(self, model, place, **k):
+        return {**row(model, kind="local", **k), "place": place}
+
+    def test_each_provider_with_its_models(self):
+        home, vpn, pc, gone = ("192.168.1.50", 8123), ("10.0.0.7", 8123), ("localhost", 11434), ("fd00::5", 8000)
+        cfg = {"providers": {"homelab": {"name": "Homelab", "api": "http://10.0.0.7:8123/v1"}, "ollama": {"base_url": "http://localhost:11434/v1"}},
+               "custom_providers": [{"name": "HOMELAB", "base_url": "http://192.168.1.50:8123/v1"}]}
+        rows = [self.local("qwen", home, inp=100, out=50, cr=900, calls=3, last=NOW - 3600),
+                self.local("Qwen", vpn, inp=10, out=5, cr=90, calls=1, last=NOW - 2 * 86400),
+                self.local("small", vpn, inp=20, out=0, calls=1, last=NOW - 20 * 86400),
+                self.local("gemma", pc, inp=400, out=4, calls=1, last=NOW - 60),
+                self.local("old", gone, inp=9, out=0, calls=1, last=NOW - 40 * 86400),
+                self.local("rare", gone, inp=1, out=0, calls=1, last=NOW - 5 * 86400),
+                row("paid", kind="venice", inp=10 ** 9, last=NOW)]
+        got = core.local_spent(rows, cfg, NOW)
+        self.assertEqual([x["name"] for x in got], ["ollama", "Homelab", "[fd00::5]:8000"])
+        homelab = got[1]["spent"]
+        self.assertEqual([(m["model"], m["tokens"], m["cache"], m["calls"]) for m in homelab["month"]["models"]], [("qwen", 165, 990, 4), ("small", 20, 0, 1)])
+        self.assertEqual([homelab[s]["tokens"] for s in ("day", "week", "month")], [150, 165, 185])
+        self.assertEqual([homelab[s]["cost"] for s in ("day", "week", "month")], [0.0, 0.0, 0.0])
+        self.assertEqual([m["model"] for m in got[2]["spent"]["month"]["models"]], ["rare"])
+        # Without names, each address by itself; what is older than 30 days doesn't count.
+        self.assertEqual([x["name"] for x in core.local_spent(rows[:3], {}, NOW)], ["192.168.1.50:8123", "10.0.0.7:8123"])
+        self.assertEqual(core.local_spent([rows[4], rows[6]], cfg, NOW), [])
+        many = [self.local("m", ("10.0.0.%d" % i, 80), inp=100 - i, last=NOW) for i in range(core.MAX_LOCAL + 2)]
+        self.assertEqual([x["name"] for x in core.local_spent(many, {}, NOW)], ["10.0.0.%d:80" % i for i in range(core.MAX_LOCAL)])
+
+
+class LocalInTheAnswer(Build):
+    """What build() says of the local AI (it inherits the make-believe Hermes of Build, not its tests)."""
+
+    def answer(self, rows, cfg=None):
+        core.usage_rows = lambda since: rows
+        core._config = lambda: cfg or {}
+        return core.build(runtime=lambda *a: None)
+
+    def test_local_goes_apart_from_the_providers(self):
+        place = ("192.168.1.50", 8123)
+        mine = {**row("qwen", kind="local", inp=100, out=50, last=NOW - 60), "place": place}
+        body = self.answer([REAL, mine], {"providers": {"homelab": {"name": "Homelab", "api": "http://192.168.1.50:8123/v1"}}})
+        self.assertEqual(body["providers"], [])
+        [x] = body["local"]
+        self.assertEqual((x["name"], x["spent"]["day"]["tokens"], x["spent"]["day"]["models"][0]["model"]), ("Homelab", 150, "qwen"))
+        self.assertEqual(FakeClient.calls, [])  # nothing is asked of the local AI
+        self.assertNotIn("192.168.1.50", json.dumps(body))
+        # With a paid API too: each one its own, and the API's tokens don't change.
+        key = "oc_" + "k" * 48
+        core.usage_rows = lambda since: [REAL, mine]
+        both = core.build(runtime=lambda name, *a: {"api_key": key} if name == "opencode-go" else None)
+        self.assertEqual([p["spent"]["day"]["tokens"] for p in both["providers"]], [200000])
+        self.assertEqual(len(both["local"]), 1)
+
+    def test_without_records_or_with_bad_ones(self):
+        self.assertEqual(self.answer([])["local"], [])
+        self.assertIsNone(self.answer(None)["local"])
+        # Something odd in the local AI's rows doesn't take the quotas down.
+        self.assertIsNone(self.answer([{**row("qwen", kind="local", inp=1, last=NOW), "place": None}])["local"])
+
+
+# Only its own tests: Build's would be repeated.
+for _name in [n for n in dir(Build) if n.startswith("test_")]:
+    setattr(LocalInTheAnswer, _name, None)
 
 
 class Reload(unittest.TestCase):

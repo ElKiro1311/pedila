@@ -42,6 +42,7 @@ That is what this app wants to be: the sandals that carry your messages to Herme
   - If you gave Hermes **several keys for the same API** (`hermes auth add`), each one is a quota of its own, with its label: which one is in use, which ones are in reserve and which ones are resting until their limit resets.
   - For each one, which models Hermes has used and how many tokens each one, in 24 hours, 7 days or 30 days; with several keys for the same API, each key with its own.
   - A small Pedila plugin reads it inside Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): your keys never leave Hermes, only numbers come out. It is installed with the panel's "Turn on quotas" button, without restarting Hermes, and updated from there too (going from a version before 1.2.0, Hermes has to restart once). APIs you don't have don't show up.
+- **Your local AI:** which models of the AI on your own network (llama.cpp, Ollama, LM Studio…) Hermes has used the most and how many tokens each one, in 24 hours, 7 days or 30 days. The plugin tells them apart by the address Hermes used them at, so a model with the same name in the cloud doesn't get mixed in (a proxy on your own network counts as local, whatever is behind it). Without the plugin, the panel goes by the names of your local providers' models, over the last year.
 - **Model and effort of a chat that has already started:** they can be changed with the chat going (Hermes changes them with its `/model` and `/reasoning` commands), with reasoning levels up to "maximum".
 - **Tools as in Claude Code:** consecutive ones go together on one line that opens ("Ran 2 commands, read screenshot.png · +12 −3 · 1 failed"). Inside, each one with its title, what it was given (the command, the code or the change in green and red), what it returned and, if it failed, in red. The images it looks at or makes come out right there.
 - **Images:** the ones you attach show in your message and in the writing box; a click opens them big.
@@ -62,17 +63,18 @@ That is what this app wants to be: the sandals that carry your messages to Herme
   - quick phrases with "/".
 - **Notifications:** Windows notifications, a sound of its own when it finishes, a dot on the taskbar icon, and flashing if Windows notifications are off.
 - **More:**
-  - a panel on the right, like Claude Panel's, with what Hermes is doing, the open chat's memory and tokens, today's and the last 7 days' usage, the models that have spent the most tokens (summarizing memory, writing titles or looking at images count too) and the connections (it folds with ◨);
+  - a panel on the right, like Claude Panel's, with what Hermes is doing, the open chat's memory and tokens, today's and the last 7 days' usage, the quotas, your local AI's models and the connections (it folds with ◨);
+  - two views of the panel, with the switch at the top: **simple**, with everything in less space and, for each quota, only how much of its total has been used (for a plan with several windows, the longest one; if a shorter one is about to stop it, that's said too), and **advanced**, with every detail;
   - the time of Hermes's last answer and how long ago it was (or, if it's working, since when), even if Hermes Desktop started the task;
-  - "Tasks", as in Claude Code: Hermes's plan (its task list, with subtasks) and how much is done, what it's doing now, the running tools and its subagents;
-  - the chat list and the panel get wider or narrower by dragging their line (or with the arrow keys; double-click: the default width);
+  - "Tasks", as in Claude Code: Hermes's plan (its task list, with subtasks) and how much is done, what it's doing now, the running tools and its subagents (the simple view says the step it's on);
+  - the chat list and the panel get wider or narrower by dragging their line (or with the arrow keys; double-click: the default width); each view of the panel keeps its own;
   - "Your usage", worked out only from your data;
   - system tray and **Ctrl+Alt+H** shortcut; "Start with Windows" in Settings → Window and in the tray icon's menu;
   - updates from GitHub Releases, which install themselves when you aren't using Pedila (10 minutes without touching it, nothing typed and not sent, and Hermes not working) and open it again the way it was, without taking the focus;
   - **Hermes versions:** Pedila checks every 6 hours whether there's a new one (the "Connections" card and Settings → About say so). This PC's Hermes, if it's an installation Hermes knows how to update (the official installer's), updates itself with its own `hermes update` command after 10 minutes unused: no chats working or active. A Hermes in Docker (a server) can't update itself: Pedila gives notice, and it's updated from its server;
   - Pedila, the pet, who reacts to what Hermes does; if you prefer another one, there are more than 5,000 to choose from on [Petdex](https://petdex.dev).
-- **Your own layout** (Settings → Layout): sort and hide the tabs (This PC/Server), choose which panel cards show and in what order, hide the buttons you don't use and put the chat list on the right if you like. The tabs and the cards can also be dragged right where they are.
-- **Quotas with the same design for all:** every provider (OpenRouter, Venice, OpenCode, DeepSeek and Openference) looks the same: what's left, big, and below it each measure with its bar and when it resets. For balances without a total (Venice, DeepSeek, and Openference if no credits were bought), the bar counts what was spent since the highest balance Pedila has seen.
+- **Your own layout** (Settings → Layout): sort and hide the tabs (This PC/Server), choose which cards each view of the panel shows and in what order (the same one in both), hide the buttons you don't use and put the chat list on the right if you like. The tabs and the cards can also be dragged right where they are.
+- **Quotas with the same design for all** (in the advanced view): every provider (OpenRouter, Venice, OpenCode, DeepSeek and Openference) looks the same: what's left, big, and below it each measure with its bar and when it resets. For balances without a total (Venice, DeepSeek, and Openference if no credits were bought), the bar counts what was spent since the highest balance Pedila has seen, and starts over when you top up.
 - **Themes:** six, each in dark and light mode, with a preview in Settings → Appearance:
   - **Messenger** (the default): ink, grays and gold, like Pedila;
   - **Classic**: cool grays and violet, from the first versions;
@@ -101,7 +103,8 @@ That is what this app wants to be: the sandals that carry your messages to Herme
 | Signing in | No password. Single-use tickets come out of the gateway's private pipe, asked for with Hermes's Python | `POST /auth/password-login`; the `hermes_session_*` cookies are stored encrypted |
 | Live chat | `/api/ws`, with the ticket as a subprotocol next to `hermes-gateway-v1` | `/api/ws?ticket=` (from `POST /api/auth/ws-ticket`) |
 | List, search and changes | REST `/api/sessions…`, with a `native-http` ticket per request | REST with the cookies |
-| Tokens per model | `GET /api/analytics/usage?days=365` (what Hermes Desktop's usage page shows); without that route, the sum of the chat list | Same, with the cookies |
+| Quotas and your local AI | `GET /api/plugins/pedila/cuotas` (Pedila's plugin) | Same, with the cookies |
+| Tokens per model ("Your usage") | `GET /api/analytics/usage?days=365` (what Hermes Desktop's usage page shows); without that route, the sum of the chat list | Same, with the cookies |
 
 Changes to a chat (rename, pin, archive, delete) use Hermes's protected edits: first `/mutation-snapshot` and then `request_id` + `expected_revision` + `expected_generation`. Both gateway protocols are spoken, the new one (`session_authority`) and the classic one.
 

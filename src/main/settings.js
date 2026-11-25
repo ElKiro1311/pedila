@@ -27,6 +27,8 @@ const PANEL_WIDTH = [240, 680]
 // What can be ordered or hidden (the screen uses the same names).
 const LAYOUT_CONNS = ['local', 'server']
 const LAYOUT_CARDS = ['ahora', 'tareas', 'chat', 'uso', 'cuotas', 'modelos', 'conexiones']
+// How the panel is seen: everything in less space, or with every detail.
+const PANEL_VIEWS = ['simple', 'advanced']
 const LAYOUT_SHOW = ['attach', 'model', 'reason', 'readonly', 'hint', 'suggestions', 'search', 'version', 'usageButton']
 
 function defaultLayout() {
@@ -34,8 +36,9 @@ function defaultLayout() {
     conns: LAYOUT_CONNS.slice(),
     connsHidden: [],
     cards: LAYOUT_CARDS.slice(),
-    // The cards that are shown (`cards` gives the order).
+    // The cards that are shown in the panel's advanced view and in the simple one (`cards` gives the order).
     cardsChats: LAYOUT_CARDS.slice(),
+    cardsSimple: LAYOUT_CARDS.slice(),
     swap: false,
     show: Object.fromEntries(LAYOUT_SHOW.map(k => [k, true]))
   }
@@ -54,11 +57,14 @@ function idList(v, known, complete) {
 function sanitizeLayout(raw) {
   const d = defaultLayout()
   if (!isObj(raw)) { return d }
+  const cardsChats = Array.isArray(raw.cardsChats) ? idList(raw.cardsChats, LAYOUT_CARDS, false) : d.cardsChats
   const l = {
     conns: idList(raw.conns, LAYOUT_CONNS, true),
     connsHidden: idList(raw.connsHidden, LAYOUT_CONNS, false),
     cards: idList(raw.cards, LAYOUT_CARDS, true),
-    cardsChats: Array.isArray(raw.cardsChats) ? idList(raw.cardsChats, LAYOUT_CARDS, false) : d.cardsChats,
+    cardsChats,
+    // Settings from before there were two views: the cards that were hidden stay hidden in both.
+    cardsSimple: Array.isArray(raw.cardsSimple) ? idList(raw.cardsSimple, LAYOUT_CARDS, false) : cardsChats.slice(),
     swap: bool(raw.swap, false),
     show: {}
   }
@@ -96,9 +102,10 @@ function defaults() {
     // Hermes: update it by itself (the installations Hermes knows how to update) after 10 min unused.
     hermes: { autoUpdate: true },
     pet: { visible: true, size: 'normal', slug: DEFAULT_PET },
-    // sidePanel: the right panel with usage and parameters. sideWidth / panelWidth: the width of the chat
-    // list and of the panel in pixels, adjusted by dragging their line (null = the default).
-    window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false, sidePanel: true, sideWidth: null, panelWidth: null },
+    // sidePanel: the right panel with usage and parameters, and panelView how it's seen. sideWidth / panelWidth:
+    // the width of the chat list and of the panel in pixels, adjusted by dragging their line (null = the
+    // default). The simple view has a width of its own.
+    window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false, sidePanel: true, panelView: 'simple', sideWidth: null, panelWidth: null, panelWidthSimple: null },
     // Layout: order and visibility of the tabs, the panel's cards and the buttons; swap = chat list on the
     // right and panel on the left.
     layout: defaultLayout(),
@@ -173,6 +180,8 @@ function sanitize(raw) {
   s.window.sidePanel = bool(w.sidePanel, true)
   s.window.sideWidth = clampInt(w.sideWidth, SIDE_WIDTH[0], SIDE_WIDTH[1], null)
   s.window.panelWidth = clampInt(w.panelWidth, PANEL_WIDTH[0], PANEL_WIDTH[1], null)
+  s.window.panelWidthSimple = clampInt(w.panelWidthSimple, PANEL_WIDTH[0], PANEL_WIDTH[1], null)
+  s.window.panelView = pick(w.panelView, PANEL_VIEWS, 'simple')
   s.layout = sanitizeLayout(raw.layout)
   const sec = isObj(raw.secrets) ? raw.secrets : {}
   s.secrets.server = typeof sec.server === 'string' && sec.server.length < 20000 ? sec.server : null
@@ -228,4 +237,4 @@ class Settings {
   }
 }
 
-module.exports = { Settings, sanitize, defaults, defaultLayout, LAYOUT_CARDS, ACCENTS, PALETTES, THEMES, LANGUAGES, PET_SIZES, DEFAULT_PET, SLUG, SIDE_WIDTH, PANEL_WIDTH }
+module.exports = { Settings, sanitize, defaults, defaultLayout, LAYOUT_CARDS, PANEL_VIEWS, ACCENTS, PALETTES, THEMES, LANGUAGES, PET_SIZES, DEFAULT_PET, SLUG, SIDE_WIDTH, PANEL_WIDTH }

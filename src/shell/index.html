@@ -32,6 +32,10 @@
 
     <aside id="side-panel" aria-label="Usage and parameters">
       <header class="sp-head drag"><span class="sp-title">Panel</span></header>
+      <div id="panel-view" class="segmented" role="group" aria-label="Panel view">
+        <button data-v="simple" title="Everything in less space; for each quota, only how much of its total has been used">Simple</button>
+        <button data-v="advanced" title="With every detail">Advanced</button>
+      </div>
       <div id="panel-body" class="sp-body"></div>
     </aside>
 
@@ -137,6 +141,9 @@
           <h4>Who you talk to</h4>
           <div id="lay-conns" class="lay-list"></div>
           <h4>Panel cards</h4>
+          <div class="row"><span>Panel view</span><div class="segmented" data-set="window.panelView">
+            <button data-v="simple">Simple</button><button data-v="advanced">Advanced</button></div></div>
+          <p class="muted small">Choose which cards each of the two views shows. The panel's width is kept for each view too.</p>
           <div id="lay-cards" class="lay-list"></div>
           <h4>Buttons and extras</h4>
           <div id="lay-show"></div>

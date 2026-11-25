@@ -71,6 +71,180 @@ test('quotas: the models used with each API (plugin 1.4.0)', () => {
   assert.equal(of({ day: 3 }).day.models, null)
 })
 
+test('quotas: the AI on your own network (plugin 1.6.0)', () => {
+  const day = { tokens: 12, calls: 2, cost: 0, cache: 100, others: null, models: [{ model: 'qwen', tokens: 12, input: 8, output: 4, cache: 100, calls: 2, cost: 0 }] }
+  const none = { tokens: 0, calls: 0, cost: 0, cache: 0, others: null, models: [] }
+  const of = local => quotaData({ plugin: 'pedila', version: '1.6.0', providers: [], local }).local
+  const [x, ...rest] = of([{ name: ' Homelab ', spent: { day: none, week: day, month: day } }, { name: '', spent: { day, week: day, month: day } }, { name: 'Unused', spent: { day: none, week: none, month: none } }, { name: 'Odd', spent: 3 }, null, 'x', { name: 7, spent: { day, week: day, month: day } }])
+  assert.deepEqual(rest, [])
+  assert.deepEqual([x.name, x.spent.week.tokens, x.spent.week.models[0].model, x.spent.day.models], ['Homelab', 12, 'qwen', []])
+  assert.equal(of(Array.from({ length: 9 }, (_, i) => ({ name: 'p' + i, spent: { day, week: day, month: day } }))).length, 6)
+  assert.equal(of([{ name: 'n'.repeat(90), spent: { day, week: day, month: day } }])[0].name.length, 40)
+  assert.deepEqual(of([{ name: 'Half', spent: { month: day } }, { name: 'Half', spent: { day, month: day } }, { name: 'Half', spent: { week: day, month: day } }]), []) // it can't be painted
+  // Nothing used = an empty list; null = an earlier plugin, or it couldn't read Hermes's records.
+  assert.deepEqual([of([]), of(null), of(undefined), of('x'), of({})], [[], null, null, null, null])
+})
+
+test('quotas: what the local AI card shows', async () => {
+  const { localUse } = await import('../src/shell/quotas.mjs')
+  const isFile = m => m.endsWith('.gguf')
+  const u = { models: [{ model: 'qwen', input: 5, output: 5 }, { model: 'cloudy', input: 900, output: 0 }, { model: '/m/x.gguf', input: 1, output: 0 }, { model: 'gemma', input: 0, output: 0 }] }
+  const blocks = [{ name: 'Homelab', spent: {} }]
+  // The plugin says it; with nothing used, there's no card (whatever the statistics say).
+  assert.deepEqual(localUse({ state: 'ok', data: { local: blocks }, localModels: [{ name: 'Homelab', models: ['qwen'] }] }, u, isFile), { blocks })
+  assert.equal(localUse({ state: 'ok', data: { local: [] }, localModels: [{ name: 'Homelab', models: ['qwen'] }] }, u, isFile), null)
+  // Without the plugin or with an earlier one: the models of your providers (and the ones named after a file).
+  const mine = [{ name: 'Homelab', models: ['qwen', 'gemma'] }]
+  const names = r => r && [r.name, r.models.map(m => m.model)]
+  assert.deepEqual(names(localUse({ state: 'missing', localModels: mine }, u, isFile)), ['Homelab', ['qwen', '/m/x.gguf']])
+  assert.deepEqual(names(localUse({ state: 'ok', data: { local: null }, localModels: [...mine, { name: 'Ollama', models: ['cloudy'] }] }, u, isFile)), ['', ['qwen', 'cloudy', '/m/x.gguf']])
+  assert.deepEqual(names(localUse({ state: 'missing', localModels: [] }, u, isFile)), ['', ['/m/x.gguf']])
+  assert.equal(localUse({ state: 'missing', localModels: [] }, u), null)
+  assert.deepEqual(names(localUse({ state: 'missing', localModels: [{ name: 'Ollama', models: ['gpt-oss:120b-cloud', 'llama3.2:3b', 'x:cloud'] }] }, { models: [{ model: 'gpt-oss:120b-cloud', input: 9, output: 0 }, { model: 'x:Cloud', input: 9, output: 0 }, { model: 'llama3.2:3b', input: 1, output: 0 }] }, () => true)), ['Ollama', ['llama3.2:3b']])
+  // It isn't known yet: the quotas haven't been read (or that couldn't be), or the providers couldn't be asked.
+  assert.deepEqual([localUse(null, u, isFile), localUse(undefined, u, isFile), localUse({ state: 'missing' }, u, isFile), localUse({ state: 'missing', localModels: null }, u, isFile), localUse({ state: 'missing', localModels: mine }, { models: 'x' }, isFile), localUse({ state: 'missing', localModels: mine }, null, isFile)], [null, null, null, null, null, null])
+})
+
+test("quotas: the simple view's figure (how much of the total has been used)", async () => {
+  const { quotaTotal, usedOf } = await import('../src/shell/quotas.mjs')
+  const now = Date.parse('2026-11-25T12:00:00Z')
+  const win = (id, percent, more) => ({ id, percent, resetsAt: '2026-11-25T14:00:00Z', estimate: null, ...more })
+  const at = Date.parse('2026-11-25T14:00:00Z')
+  const seen = {}
+  const peak = { bundled: 60, usd: 40, diem: 10, cny: 50 }
+  let ranOut = now - 10 * 86400e3
+  const observe = (name, value, epoch) => { seen[name] = [value, epoch]; const max = Math.max(value, peak[name] || 0); return { max, spent: max - value, pct: max > 0 ? (max - value) / max * 100 : 0, out: value > max * 0.02 ? 0 : ranOut } }
+  const of = p => quotaTotal({ ok: true, ...p }, observe, now)
+  const full = p => { const t = of(p); return [t.pct, t.text, t.warn, t.tight] }
+
+  // OpenRouter: the credits; the key's limit only if there are none, or if it's about to run out before.
+  const or = (more, limit) => ({ kind: 'openrouter', balance: 7.5, creditsTotal: 10, creditsUsed: 2.5, keyLimit: limit ? { limit: 5, remaining: limit[0], reset: limit[1] } : null, ...more })
+  assert.deepEqual(full(or()), [25, '$7.50 left', false, null])
+  assert.deepEqual(full(or({}, [4, 'daily'])), [25, '$7.50 left', false, null])
+  assert.deepEqual(of(or({}, [0.5, 'daily'])).tight, { id: 'key', hours: null, pct: 90, at: Date.UTC(2026, 10, 26) })
+  assert.deepEqual(of(or({}, [0, null])).tight, { id: 'key', hours: null, pct: 100, at: null })
+  assert.equal(of(or({ creditsUsed: 9.9 }, [0.5, 'daily'])).tight, null) // the credits are nearer to their end
+  assert.equal(of(or({}, [2, 'daily'])).tight, null) // 60%: not nearly spent yet
+  assert.deepEqual(full(or({ creditsTotal: 0, creditsUsed: 0 }, [null, 'daily'])).slice(0, 2), [null, '$7.50 left']) // what's left of the limit isn't known
+  assert.deepEqual(full(or({ creditsTotal: 0, creditsUsed: 0, balance: 0 }, [4, 'weekly'])), [20, 'no balance', false, null])
+  assert.deepEqual(full(or({ creditsTotal: 0, creditsUsed: 0.31, balance: -0.31 })), [null, 'no balance', false, null])
+  assert.deepEqual(full(or({ creditsTotal: null, creditsUsed: null, balance: null })), [null, '—', false, null])
+  assert.equal(of(or({ creditsUsed: 12 })).pct, 100) // spent more than what was bought
+
+  // Venice: its two balances together, against the highest Pedila has seen; with neither, the day's DIEM.
+  const ve = more => full({ kind: 'venice', usd: null, bundled: null, diem: null, nextEpoch: 'x', access: true, ...more })
+  assert.deepEqual(ve({ usd: 30, bundled: 45, diem: 6 }), [25, '$75.00 left', false, null])
+  assert.deepEqual(seen.diem, [6, 'x'])
+  assert.deepEqual(ve({ diem: 6 }), [40, 'no balance', false, null])
+  // What ran out in the last month is part of what has been used; with odd cents left, it's as good as spent…
+  const t1 = x => Math.floor(x * 10) / 10
+  assert.equal(t1(ve({ usd: 0, bundled: 45 })[0]), 55)
+  assert.equal(t1(ve({ usd: 40, bundled: 0 })[0]), 60)
+  assert.deepEqual([t1(ve({ usd: 0.099, bundled: 0, diem: 0, access: false })[0]), ...ve({ usd: 0.099, bundled: 0, diem: 0, access: false }).slice(1)], [99.9, '$0.099 left', true, null])
+  // …and what ran out before that doesn't weigh on what's left.
+  ranOut = now - 31 * 86400e3
+  assert.equal(ve({ usd: 0, bundled: 45 })[0], 25)
+  assert.equal(ve({ usd: 40, bundled: 0 })[0], 0)
+  assert.equal(ve({ usd: 0, bundled: 0, diem: 0 })[0], 100)
+  assert.equal(ve({ usd: 0, bundled: 0 })[0], 100)
+  // Odd cents are as good as nothing here too, unless Venice doesn't let you use anything: then it's all spent.
+  assert.equal(ve({ usd: 0.3, bundled: 45 })[0], 25)
+  assert.equal(t1(ve({ usd: 0.3, bundled: 45, access: false })[0]), 54.7)
+  assert.equal(t1(ve({ usd: 0.099, bundled: 0, access: false })[0]), 99.9)
+  ranOut = 0 // not known since when
+  assert.equal(ve({ usd: 0, bundled: 45 })[0], 25)
+  ranOut = now - 10 * 86400e3
+  // With nothing but odd cents, what it works with is the day's DIEM.
+  assert.equal(ve({ usd: 0, bundled: 0, diem: 8 })[0], 20)
+  assert.equal(ve({ usd: 0.099, bundled: 0, diem: 6 })[0], 40)
+  assert.equal(t1(ve({ usd: 5, bundled: 0, diem: 6 })[0]), 95)
+  assert.equal(ve({ usd: 0, bundled: 0, diem: 0 })[0], 100)
+  assert.equal(ve({ usd: -0.5 })[0], 100)
+  assert.equal(ve({ usd: -0.5, diem: 8 })[0], 20)
+  assert.equal(ve({ diem: 0 })[0], 100)
+  assert.deepEqual(ve({}), [null, 'no balance', false, null])
+  assert.deepEqual(full({ kind: 'venice', usd: 0, bundled: null, diem: null, access: false }).slice(2), [true, null])
+  assert.deepEqual([null, undefined].map(access => of({ kind: 'venice', usd: 1, bundled: null, diem: null, access }).warn), [false, false]) // not known isn't "no"
+
+  // A plan's windows: the longest is the total; a shorter one nearly spent is told apart.
+  const go = (...windows) => ({ kind: 'opencode-go', windows })
+  assert.deepEqual(full(go(win('rolling', 20), win('weekly', 79), win('monthly', 46))), [46, '—', false, null])
+  assert.deepEqual(of(go(win('rolling', 100), win('weekly', 85), win('monthly', 46))).tight, { id: 'rolling', hours: null, pct: 100, at })
+  assert.equal(of(go(win('rolling', 85), win('monthly', 90))).tight, null)
+  assert.equal(of(go(win('rolling', 3), win('weekly', 12))).pct, 12)
+  assert.equal(of(go(win('monthly', 0, { estimate: 0.5691 }), win('rolling', 2))).pct, 0.5) // the decimal, cut off
+  assert.deepEqual(full(go()), [null, '—', false, null])
+  assert.equal(usedOf(win('weekly', 12.9)), 12)
+
+  // Openference: its plan's windows or, without a plan, its credits.
+  const ofc = more => ({ kind: 'openference', balance: 3, creditsTotal: 10, active: true, windows: [], ...more })
+  assert.deepEqual(full(ofc()), [70, '$3.00 left', false, null])
+  assert.deepEqual(full(ofc({ windows: [win('rolling', 84, { hours: 6, resetsAt: null }), win('weekly', 12), win('weekly-tokens', 33)] })), [33, '—', false, { id: 'rolling', hours: 6, pct: 84, at: null }])
+  assert.deepEqual(full(ofc({ balance: 0, creditsTotal: 0 })), [null, 'no balance', false, null])
+  assert.deepEqual(full(ofc({ balance: 12, creditsTotal: 10 })), [0, '$12.00 left', false, null])
+  assert.deepEqual(full(ofc({ balance: null, active: false })), [null, '—', true, null])
+
+  // DeepSeek: a balance without its total; with two currencies, the one with the most left.
+  const ds = (balances, available = true) => ({ kind: 'deepseek', balances: balances.map(([currency, total]) => ({ currency, total })), available })
+  assert.deepEqual(full(ds([['USD', 30]])), [25, '$30.00 left', false, null])
+  assert.deepEqual(full(ds([['CNY', 0], ['USD', 40]])), [0, '$40.00 left', false, null]) // what was in yuan ran out
+  assert.deepEqual(full(ds([['USD', 10], ['CNY', 40]])), [75, '$10.00 + ¥40.00 left', false, null]) // 40 yuan are less than 10 dollars
+  assert.deepEqual(full(ds([['USD', 5], ['CNY', 45]])), [10, '$5.00 + ¥45.00 left', false, null])
+  assert.deepEqual(full(ds([['CNY', 0], ['USD', 0]], false)), [100, 'no balance', true, null])
+  assert.deepEqual(full(ds([['', 0]], false)), [null, 'no balance', true, null])
+  assert.deepEqual(full(ds([])), [null, '—', false, null])
+  assert.equal(of(ds([['USD', 4.2]], null)).warn, false)
+
+  // With no total at all, what there is says by itself that it's what's left.
+  assert.deepEqual([quotaTotal({ ok: true, ...or({ creditsTotal: null, creditsUsed: null }) }).text, quotaTotal({ ok: true, ...ds([['CNY', 3], ['USD', 0]]) }).text], ['$7.50 left', '¥3.00 left'])
+  // What has no API for its balance, and what couldn't be read.
+  assert.deepEqual(full({ kind: 'opencode-zen', noApi: true }), [null, '—', false, null])
+  assert.deepEqual(full({ kind: 'venice', ok: false, error: 'x' }), [null, 'error', true, null])
+})
+
+test("quotas: the highest balance seen, for the ones that come without their total", async () => {
+  const { nextPeak } = await import('../src/shell/quotas.mjs')
+  let r = nextPeak(undefined, 60, '', 1)
+  assert.deepEqual(r, { max: 60, since: 1, epoch: '', last: 60 })
+  assert.equal(nextPeak(r, 60, '', 2), r) // nothing changes: nothing to store
+  r = nextPeak(r, 12, '', 3)
+  assert.deepEqual(r, { max: 60, since: 1, epoch: '', last: 12 })
+  // A correction of some cents isn't a top-up; a top-up is, even one smaller than the one before.
+  r = nextPeak(r, 12.04, '', 4)
+  assert.deepEqual(r, { max: 60, since: 1, epoch: '', last: 12.04 })
+  assert.deepEqual(nextPeak(r, 13, '', 5), { max: 60, since: 1, epoch: '', last: 13 })
+  assert.deepEqual(nextPeak(r, 14, '', 5), { max: 14, since: 5, epoch: '', last: 14 })
+  assert.deepEqual(nextPeak({ max: 0, since: 1, epoch: '', last: 0 }, 0.5, '', 6), { max: 0.5, since: 6, epoch: '', last: 0.5 })
+  assert.deepEqual(nextPeak(nextPeak(r, 0, '', 6), 10, '', 7), { max: 10, since: 7, epoch: '', last: 10 })
+  // Above the highest one, and in another day, it starts over too.
+  assert.deepEqual(nextPeak(r, 60.5, '', 8), { max: 60.5, since: 8, epoch: '', last: 60.5 })
+  assert.deepEqual(nextPeak({ max: 60, since: 1, epoch: '', last: 60 }, 60.5, '', 8), { max: 60.5, since: 8, epoch: '', last: 60.5 })
+  assert.deepEqual(nextPeak({ max: 1, since: 1, epoch: '', last: 0.5 }, 0.54, '', 8), { max: 1, since: 1, epoch: '', last: 0.54 }) // four cents
+  assert.deepEqual(nextPeak({ max: 10, since: 1, epoch: 'a', last: 2 }, 1.9, 'b', 9), { max: 1.9, since: 9, epoch: 'b', last: 1.9 })
+  assert.deepEqual(nextPeak({ max: 10, since: 1, epoch: 'a', last: 2 }, 1.9, 'a', 9), { max: 10, since: 1, epoch: 'a', last: 1.9 })
+  // What earlier versions stored has no `last`: what's below its highest one isn't a top-up.
+  assert.deepEqual(nextPeak({ max: 58.7, since: 1, epoch: '' }, 4, '', 9), { max: 58.7, since: 1, epoch: '', last: 4 })
+  assert.deepEqual(nextPeak({}, 5, '', 9), { max: 5, since: 9, epoch: '', last: 5 }) // garbage
+  // When it ran out: the first time it's seen at zero (or below, or at odd cents), until there's something again.
+  r = nextPeak({ max: 60, since: 1, epoch: '', last: 3 }, 0, '', 10)
+  assert.deepEqual(r, { max: 60, since: 1, epoch: '', last: 0, out: 10 })
+  assert.equal(nextPeak(r, 0, '', 11), r)
+  assert.deepEqual(nextPeak(r, -0.2, '', 12), { max: 60, since: 1, epoch: '', last: -0.2, out: 10 })
+  assert.deepEqual(nextPeak(r, 0.03, '', 12), { max: 60, since: 1, epoch: '', last: 0.03, out: 10 })
+  assert.deepEqual(nextPeak(r, 20, '', 12), { max: 20, since: 12, epoch: '', last: 20 })
+  assert.deepEqual(nextPeak({ max: 60, since: 1, epoch: '' }, 0, '', 13), { max: 60, since: 1, epoch: '', last: 0, out: 13 })
+  assert.deepEqual(nextPeak({ max: 60, since: 1, epoch: '', last: 3 }, 0.9, '', 13), { max: 60, since: 1, epoch: '', last: 0.9, out: 13 })
+  assert.deepEqual(nextPeak({ max: 60, since: 1, epoch: '', last: 0.9, out: 13 }, 2, '', 14), { max: 60, since: 1, epoch: '', last: 2 })
+  // A debt that is forgiven isn't a top-up.
+  assert.deepEqual(nextPeak({ max: 5, since: 1, epoch: '', last: -0.3, out: 2 }, 0, '', 14), { max: 5, since: 1, epoch: '', last: 0, out: 2 })
+})
+
+test('quotas: percentages in few characters, and money', async () => {
+  const { pctShort, money } = await import('../src/shell/fmt.mjs')
+  assert.deepEqual([0, 0.04, 0.5691, 0.99, 2, 2.5351, 9.99, 10, 10.9, 25.8, 99.96, 100, 130, -3, NaN].map(pctShort), ['0%', '0%', '0.5%', '0.9%', '2%', '2.5%', '9.9%', '10%', '10%', '25%', '99%', '100%', '100%', '0%', '0%'])
+  assert.deepEqual([money(4.2, 'USD'), money(4.2, 'CNY'), money(0, ''), money(null, 'CNY')], ['$4.20', '¥4.20', '$0', '—'])
+})
+
 test('quotas: DeepSeek and Openference (their shape on 2026-11-24)', () => {
   const free = { kind: 'openference', name: 'Openference', ok: true, balance: 0, credits_total: 0, plan_name: 'Promo', subscribed: false, expires_at: null, active: true, windows: [], account_usage: { requests: 8, tokens: 25529, cost: 0 }, free_models: [{ model: 'GLM-5.3-Flash-Free', until: '2026-12-04' }, { model: 'Other', until: 'soon' }, { model: 'Odd', until: '2026-13-45' }, null, { until: '2026-12-04' }], email: 'x@example.com', apiKey: 'sk-something' }
   const d = quotaData({ plugin: 'pedila', version: '1.3.0', providers: [
@@ -182,8 +356,9 @@ test('quotas: does the plugin have to be updated?', () => {
   assert.equal(quotaPluginOutdated('1.2.0'), true)
   assert.equal(quotaPluginOutdated('1.3.0'), true)
   assert.equal(quotaPluginOutdated('1.4.0'), true)
-  assert.equal(quotaPluginOutdated('1.5.0'), false)
-  assert.equal(quotaPluginOutdated('1.5.1'), false)
+  assert.equal(quotaPluginOutdated('1.5.0'), true)
+  assert.equal(quotaPluginOutdated('1.6.0'), false)
+  assert.equal(quotaPluginOutdated('1.6.1'), false)
   assert.equal(quotaPluginOutdated('2.0.0'), false)
 })
 
@@ -287,14 +462,14 @@ test("quotas: a plugin updated on disk but not loaded yet isn't offered again", 
   const Q = 'GET /api/plugins/pedila/cuotas'
   const D = 'GET plugins'
   const ask = async routes => { const h = fakeHermes(routes); const r = await h.c.quotas(); return [r.outdated, r.onDisk, r.restart, h.calls.length] }
-  assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.5.0') }), [true, '1.5.0', true, 2])
+  assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.6.0') }), [true, '1.6.0', true, 2])
   assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.0.1') }), [true, '1.0.1', false, 2])
   // Not being able to know is taken as "not updated"; up to date, it isn't even asked.
   assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: { status: 401 } }), [true, '', false, 2])
   assert.deepEqual(await ask({ [Q]: answer('1.0.0') }), [true, '', false, 2])
-  assert.deepEqual(await ask({ [Q]: answer('1.5.0') }), [false, '', false, 1])
+  assert.deepEqual(await ask({ [Q]: answer('1.6.0') }), [false, '', false, 1])
   // Up to date in what reloads by itself, but with the fixed part from before.
-  assert.deepEqual(await ask({ [Q]: answer('1.5.0', { shell: '1.2.0', shell_stale: true }) }), [false, '', true, 1])
+  assert.deepEqual(await ask({ [Q]: answer('1.6.0', { shell: '1.2.0', shell_stale: true }) }), [false, '', true, 1])
 })
 
 test('quotas: what the card says about the plugin', async () => {

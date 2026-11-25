@@ -6,7 +6,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { Settings, sanitize, defaultLayout } = require('../src/main/settings')
+const { Settings, sanitize, defaults, defaultLayout } = require('../src/main/settings')
 
 test("settings: a settings.json saved with a BOM is read the same (it isn't lost)", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pedila-bom-'))
@@ -31,6 +31,30 @@ test('layout: full order, known names and always something in sight', () => {
   assert.equal(l.show.raro, undefined)
   assert.deepEqual(sanitize({ layout: { connsHidden: ['server'] } }).layout.connsHidden, ['server'])
   assert.deepEqual(sanitize({}).layout, defaultLayout())
+})
+
+test("the panel's two views: which one, each one's cards and each one's width", () => {
+  const s = raw => sanitize(raw)
+  assert.equal(defaults().window.panelView, 'simple')
+  assert.equal(s({ window: {} }).window.panelView, 'simple') // settings from before there were two
+  assert.equal(s({ window: { panelView: 'advanced' } }).window.panelView, 'advanced')
+  assert.equal(s({ window: { panelView: 'huge' } }).window.panelView, 'simple')
+  const w = s({ window: { panelWidth: 680, panelWidthSimple: 90 } }).window
+  assert.deepEqual([w.panelWidth, w.panelWidthSimple, s({ window: { panelWidth: 500 } }).window.panelWidthSimple], [680, 240, null])
+  // The cards hidden before there were two views stay hidden in both; then each one goes its way.
+  const old = s({ layout: { cardsChats: ['cuotas', 'ahora'] } }).layout
+  assert.deepEqual([old.cardsChats, old.cardsSimple], [['cuotas', 'ahora'], ['cuotas', 'ahora']])
+  assert.deepEqual(s({ layout: { cardsChats: ['cuotas'], cardsSimple: ['ahora', 'x', 'ahora'] } }).layout.cardsSimple, ['ahora'])
+  assert.deepEqual(s({ layout: { cardsChats: ['cuotas'], cardsSimple: [] } }).layout.cardsSimple, [])
+  assert.deepEqual(s({ layout: { cards: ['cuotas'] } }).layout.cardsSimple, defaultLayout().cardsSimple)
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pedila-vistas-'))
+  try {
+    const st = new Settings(dir)
+    st.patch({ window: { panelView: 'advanced', panelWidthSimple: 320 } })
+    st.patch({ window: { sidePanel: false } })
+    const again = new Settings(dir).load().window
+    assert.deepEqual([again.panelView, again.panelWidthSimple, again.panelWidth, again.sidePanel], ['advanced', 320, null, false])
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
 test("settings from 0.13 (with Claude Code and consoles): only Hermes's stay", () => {

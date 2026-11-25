@@ -666,11 +666,14 @@ function main() {
     // Quotas of the paid APIs (the "pedila" plugin inside Hermes) and the APIs it has set.
     handle('hp:quotas', async (id, fresh) => {
       const c = connOf(id)
-      const [q, paid] = await Promise.all([
+      const [q, opts] = await Promise.all([
         c.quotas(fresh === true),
-        c.state === 'ready' ? c.modelOptions().then(m => m.paid).catch(() => []) : []
+        c.state === 'ready' ? c.modelOptions().catch(() => null) : null
       ])
-      return { ...q, paid }
+      // The models on your own network (to tell them apart when the plugin can't say what was used of them);
+      // null = it couldn't be asked.
+      const local = opts ? opts.providers.filter(p => p.own).map(p => ({ name: p.name, models: p.models.map(m => m.id) })) : null
+      return { ...q, paid: opts ? opts.paid : [], localModels: local }
     })
     handle('hp:quotas-install', async (id, force) => {
       const c = connOf(id)

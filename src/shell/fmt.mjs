@@ -167,6 +167,9 @@ export function usd(n) {
   return (n < 0 ? '-$' : '$') + s
 }
 
+/** A balance in its currency (some providers bill in dollars or in yuan): "$4.21", "¥4.21". */
+export const money = (n, currency) => (currency === 'CNY' ? usd(n).replace('$', '¥') : usd(n))
+
 /**
  * A percentage cut off (not rounded) to one decimal: 2.5351 → 2.5, 0.99 → 0.9. That way more than what was
  * spent is never shown. The 1e-9 absorbs floating-point errors (99.3 * 10 = 992.99…).
@@ -181,6 +184,12 @@ export function trunc1(n) {
 export function pct1(n) {
   const s = trunc1(n).toFixed(1)
   return getLang() === 'es' ? s.replace('.', ',') + ' %' : s + '%'
+}
+
+/** A percentage as short as it can be, cut off too: "0%", "0.5%", "2%", "25%", "100%". */
+export function pctShort(n) {
+  const v = trunc1(n)
+  return v < 10 && v % 1 ? pct1(v) : tr('{0}%', Math.floor(v))
 }
 
 /**

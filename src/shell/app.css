@@ -2,6 +2,7 @@
   --scale: 1;
   --ok: #3ecf8e;
   --warn: #f5a524;
+  --warn-text: var(--warn);
   --bad: #f05252;
   --info: #5aa9ff;
   --radius: 12px;
@@ -39,6 +40,8 @@
 :root[data-accent="turquesa"] { --accent: #22b8e6; --on-accent: #0b1a20; }
 :root[data-accent="ambar"] { --accent: #f59e0b; --on-accent: #1d1303; }
 :root[data-accent="rosa"] { --accent: #ec4899; --on-accent: #fff; }
+/* Amber figures, in the light modes: darker, so that they can be read (4.9:1 or more). */
+:root[data-mode="light"] { --warn-text: color-mix(in srgb, var(--warn) 45%, var(--text)); }
 /* The ring of the chosen theme's card uses the window's accent, not the card's. */
 :root { --ring: var(--accent); }
 
@@ -413,7 +416,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .sp-spark > div { flex: 1; min-height: 2px; background: color-mix(in srgb, var(--accent) 75%, transparent); border-radius: 2px 2px 0 0; }
 .sp-spark > div.zero { background: var(--surface-3); }
 .sp-spark-l { display: flex; justify-content: space-between; font-size: .68rem; color: var(--muted); margin-top: 3px; }
-.sp-model { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: .82rem; margin-bottom: 6px; }
+.sp-model { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; font-size: .82rem; margin-bottom: 6px; }
 .sp-model .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-model .sp-bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
 .sp-model .sp-bar > i { display: block; height: 100%; background: var(--accent); }
@@ -519,7 +522,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none !i
 .q-win > b.warn { color: var(--warn); }
 .q-win .q-bar { margin-top: 2px; }
 
-/* Quotas: the models used with each API (the same rows as the "Most used models" card). */
+/* The models used with each API and of the local AI. */
 .q-used { margin-top: 6px; }
 .q-used-h { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .q-used-h .grow { flex: 1; min-width: 0; }
@@ -528,6 +531,70 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none !i
 .q-span:hover { color: var(--text); }
 .q-span.on { background: var(--surface-3); color: var(--accent); }
 .q-used .sp-model > .muted { font-variant-numeric: tabular-nums; }
+
+/* ── The panel's two views: simple (everything in less space) and advanced ────────────────── */
+#panel-view { flex: none; margin: 8px 12px 0; padding: 2px; border-radius: 9px; }
+#panel-view button { padding: 3px 8px; font-size: .78rem; border-radius: 7px; }
+/* As wide as the body leaves it: with room (a wide panel) the quotas go in two columns. */
+.sp-body { container: panel / inline-size; }
+#side-panel.simple .sp-body { gap: 6px; padding-top: 8px; }
+#side-panel.simple .sp-card { padding: 8px 11px; border-radius: 10px; }
+#side-panel.simple .sp-card h4 { margin-bottom: 5px; font-size: .7rem; min-width: 0; }
+#side-panel.simple .sp-card h4:only-child { margin-bottom: 0; }
+#side-panel.simple .sp-card h4 > span:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#side-panel.simple .sp-card h4 > .grow:first-child { flex: 1 1 auto; }
+#side-panel.simple .sp-state { margin: 0; gap: 6px; }
+#side-panel.simple .sp-progress { margin: 0 0 6px; }
+#side-panel.simple .sp-progress:last-child { margin-bottom: 1px; }
+#side-panel.simple .sp-where { margin: 0 0 5px; }
+#side-panel.simple .sp-todo, #side-panel.simple .sp-now { font-size: .79rem; }
+#side-panel.simple .sp-now { margin-top: 4px; }
+#side-panel.simple .sp-now .spin { justify-self: center; }
+#side-panel.simple .sp-now + .q-line, #side-panel.simple .sp-todo + .q-line { margin-top: 4px; }
+#side-panel.simple .q-ask { margin: 6px 0 0; }
+#side-panel.simple .q-ask .small { margin: 0; font-size: .76rem; line-height: 1.35; }
+#side-panel.simple .q-ask button { padding: 4px 10px; font-size: .78rem; }
+.sp-hint.one, .sp-todo.one .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The main thing of a card, on the right of its title. */
+.sp-side { flex: none; max-width: 80%; margin-left: auto; display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px 9px; text-transform: none; letter-spacing: 0; font-size: .78rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; }
+.sp-side .sp-state, .sp-side .muted { overflow: hidden; text-overflow: ellipsis; }
+.sp-side .muted { font-weight: 400; }
+/* What it is and its value, two to a line (as many as fit in a wide panel). */
+.sp-facts { display: flex; flex-wrap: wrap; gap: 3px 14px; font-size: .78rem; line-height: 1.35; }
+.sp-facts + .sp-facts { margin-top: 6px; }
+.sp-fact { flex: 1 1 7rem; display: flex; justify-content: space-between; gap: 0 8px; min-width: 0; }
+.sp-fact.wide { flex-basis: 100%; }
+.sp-fact .k { flex: 0 1 auto; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-fact .v { flex: 0 1 auto; min-width: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+/* The value stays whole and the name gives way; a long value (a model) goes below if it doesn't fit. */
+.sp-fact .v { flex-shrink: 0; max-width: 70%; }
+.sp-fact.wrap { flex-wrap: wrap; }
+.sp-fact.wrap .v { flex-shrink: 1; max-width: 100%; margin-left: auto; }
+.sp-fact.head .k { color: var(--text); font-weight: 600; }
+.sp-fact.warn .v { color: var(--warn-text); }
+.sp-fact .dot { display: inline-block; margin-right: 7px; vertical-align: 1px; }
+.sp-fact.sp-go { cursor: pointer; border-radius: 4px; }
+.sp-fact.sp-go:hover .v { color: var(--accent); }
+.sp-fact.sp-go:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* One quota to a line: its name, the bar and how much of its total has been used. */
+.qs-list { display: grid; grid-template-columns: fit-content(60%) minmax(34px, 1fr) auto; gap: 5px 10px; align-items: center; font-size: .8rem; }
+.qs-list.one { margin-bottom: 5px; font-size: .78rem; }
+.qs-list.one .n { color: var(--muted); }
+.qs-row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; row-gap: 1px; }
+.qs-row .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qs-row.off .n { color: var(--muted); }
+.qs-row b { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qs-row b.wide { grid-column: 2 / -1; }
+.qs-row b.warn, .qs-note.warn { color: var(--warn-text); }
+.qs-row .qs-note { grid-column: 1 / -1; font-size: .74rem; color: var(--warn-text); }
+/* Which of several keys Hermes is using. */
+.qs-key { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--muted); }
+.qs-key.on { background: var(--accent); }
+.qs-key.rest { background: none; box-shadow: inset 0 0 0 1.5px var(--warn); }
+@container panel (min-width: 520px) {
+  .qs-list:not(.one) { grid-template-columns: repeat(2, fit-content(30%) minmax(34px, 1fr) auto); column-gap: 12px; }
+  .qs-list:not(.one) > .qs-row { grid-column: span 3; }
+}
 
 /* Badge of the active chats (open or working now). */
 .live-badge { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: .68rem; font-weight: 600; line-height: 1; padding: 3px 7px; border-radius: 999px; background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent); }

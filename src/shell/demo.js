@@ -13,7 +13,7 @@ let settings = {
   lastConnection: 'local',
   notify: { enabled: true, done: true, needs: true, failed: true, minDurationSec: 10, sound: true },
   pet: { visible: true, size: 'normal', slug: 'pedila' },
-  window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false },
+  window: { bounds: null, maximized: false, closeToTray: true, openAtLogin: false, panelView: 'simple' },
   updates: { url: '', auto: true, autoInstall: true },
   hermes: { autoUpdate: true },
   serverSignedIn: false
@@ -137,10 +137,11 @@ export const demoApi = {
   },
   attachImage: () => ok({ ok: true }),
   subagents: () => ok(null),
-  // Sample quotas: "This PC" with the plugin installed (OpenRouter and OpenCode Go); the server without
-  // it.
+  // Sample quotas: "This PC" with the plugin installed (and the AI of the home server); the server without it.
   quotas: conn => ok(conn === 'local'
-    ? { state: 'ok', outdated: false, onDisk: '', restart: false, paid: ['openrouter', 'opencode-go'], data: { version: '1.5.0', shell: '1.2.0', fetchedAt: new Date(now - 40e3).toISOString(), providers: [
+    ? { state: 'ok', outdated: false, onDisk: '', restart: false, paid: ['openrouter', 'opencode-go'], localModels: [{ name: 'My server', models: ['qwen3-32b', 'gemma-3-27b'] }], data: { version: '1.6.0', shell: '1.2.0', fetchedAt: new Date(now - 40e3).toISOString(), local: [
+      { name: 'My server', spent: used(['qwen3-32b', 'gemma-3-27b', 'Qwen3-VL-8B-Instruct-Q4_K_M', 'qwen3-8b'], { tokens: 1400000, calls: 310, cost: 0 }, { tokens: 13500000, calls: 2300, cost: 0 }, { tokens: 38800000, calls: 6970, cost: 0 }) }
+    ], providers: [
       { kind: 'openrouter', name: 'OpenRouter', ok: true, error: '', noApi: false, balance: 7.42, creditsTotal: 10, creditsUsed: 2.58, freeTier: false, keyLimit: { limit: 5, remaining: 3.9, reset: 'daily' }, keyUsage: { total: 2.58, day: 1.1, week: 1.9, month: 2.58 }, spent: used(['deepseek/deepseek-v4.1-flash', 'qwen/qwen3.8-flash'], { tokens: 412000, calls: 37, cost: 1.08 }, { tokens: 1650000, calls: 140, cost: 1.87 }, { tokens: 2310000, calls: 201, cost: 2.55 }) },
       { kind: 'venice', name: 'Venice', ok: true, error: '', noApi: false, usd: 0.099, bundled: 58.51, diem: 0, tier: 'paid', nextEpoch: new Date(now + 61 * 60e3).toISOString(), access: true, keyExpires: null, modelLimits: [{ model: 'venice-uncensored', rpm: 50, rpd: 0, tpm: 1000000 }], spent: used(['venice-uncensored', 'gemma-4-uncensored', 'deepseek-v4-flash'], { tokens: 2090000, calls: 12, cost: 0 }, { tokens: 2120000, calls: 14, cost: 0 }, { tokens: 3170000, calls: 20, cost: 0 }) },
       { kind: 'opencode-go', name: 'OpenCode Go', ok: true, error: '', noApi: false, account: { id: 'a1', n: 1, of: 2, active: true, resting: false, until: null, hidden: 0 }, plan: 'go', unpriced: [], catalog: true, windows: [{ id: 'rolling', label: '5 h', percent: 2, estimate: 2.5351, cost: 2.53, tokens: 680000, calls: 94, resetsAt: new Date(now + 95 * 60e3).toISOString() }, { id: 'weekly', label: 'week', percent: 1, estimate: 1.014, cost: 2.53, tokens: 680000, calls: 94, resetsAt: new Date(now + 4 * 86400e3).toISOString() }, { id: 'monthly', label: 'month', percent: 0, estimate: 0.507, cost: 2.53, tokens: 680000, calls: 94, resetsAt: new Date(now + 19 * 86400e3).toISOString() }], spent: used(['glm-5.3-flash', 'glm-5.3', 'claude-haiku-5-5'], { tokens: 680000, calls: 94, cost: 2.53 }, { tokens: 680000, calls: 94, cost: 2.53 }, { tokens: 680000, calls: 94, cost: 2.53 }) },
@@ -149,7 +150,7 @@ export const demoApi = {
       { kind: 'deepseek', name: 'DeepSeek', ok: true, error: '', noApi: false, available: true, balances: [{ currency: 'USD', total: 4.21, granted: 0, toppedUp: 4.21 }], spent: used(['deepseek-flash'], { tokens: 91000, calls: 9, cost: 0.04 }, { tokens: 91000, calls: 9, cost: 0.04 }, { tokens: 91000, calls: 9, cost: 0.04 }) },
       { kind: 'openference', name: 'Openference', ok: true, error: '', noApi: false, balance: 0, creditsTotal: 0, planName: 'Free', subscribed: false, expiresAt: null, active: true, windows: [], usage: { requests: 8, tokens: 25529, cost: 0 }, freeModels: [{ model: 'GLM-5.3-Flash-Free', until: '2026-12-04' }, { model: 'DeepSeek-V4.1-Flash-1017-Free', until: '2026-12-31' }], spent: used(['DeepSeek-V4.1-Flash-1017-Free', 'GLM-5.3-Flash-Free'], { tokens: 3430000, calls: 669, cost: 0 }, { tokens: 3430000, calls: 669, cost: 0 }, { tokens: 3430000, calls: 669, cost: 0 }) }
     ] } }
-    : { state: 'missing', paid: ['venice'] }),
+    : { state: 'missing', paid: ['venice'], localModels: [] }),
   quotasUpdate: () => ok({ ok: true, restart: false }),
   hermesWorking: () => ok(false),
   hermesRestart: () => new Promise(r => setTimeout(() => r({ ok: true, value: true }), 600)),
