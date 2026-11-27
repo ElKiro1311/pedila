@@ -981,7 +981,7 @@ class NewProviders(unittest.TestCase):
             self.assertEqual(core.kind_of(url), kind, url)
         # Its real answer (2026-11-27): /key and /credits are OpenRouter's, under /api/v1 and not under /v1, where the chats go.
         key = {"data": {"label": "hermes", "limit": None, "limit_remaining": None, "limit_reset": None, "usage": 0, "usage_daily": 0, "usage_weekly": 0,
-                        "usage_monthly": 0, "is_free_tier": True, "is_management_key": False, "workspace_id": "339449", "rate_limit": {"requests": -1, "interval": "10s"}}}
+                        "usage_monthly": 0, "is_free_tier": True, "is_management_key": False, "workspace_id": "1000", "rate_limit": {"requests": -1, "interval": "10s"}}}
         routes = {"https://api.orcarouter.ai/api/v1/key": (200, key), "https://api.orcarouter.ai/api/v1/credits": (200, {"data": {"total_credits": 5, "total_usage": 1.25}})}
         e = {"base": "https://api.orcarouter.ai/v1/", "key": "sk-orca-key-of-the-test"}
         self.assertEqual(core.fetch_orcarouter(self.client(routes), e), {
