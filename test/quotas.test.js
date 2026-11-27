@@ -19,6 +19,9 @@ test('quotas: which paid API each address is', () => {
   assert.equal(paidKindOf('https://api.openference.com/v1'), 'openference')
   assert.equal(paidKindOf('https://api.deepseek.com.evil.example/v1'), null)
   assert.equal(paidKindOf('https://notapi.openference.com.example/v1'), null)
+  assert.equal(paidKindOf('https://api.orcarouter.ai/v1'), 'orcarouter')
+  assert.equal(paidKindOf('https://api.orcarouter.ai.evil.example/v1'), null)
+  assert.equal(paidKindOf('https://notorcarouter.ai/v1'), null)
   assert.equal(paidKindOf(''), null)
 })
 
@@ -44,6 +47,21 @@ test('quotas: the real answer of OpenRouter and Venice (its shape on 2026-11-18)
   assert.deepEqual(ve.modelLimits, [{ model: 'deepseek-v4-1-flash-uncensored', rpm: 1000, rpd: null, tpm: 30000000 }])
 })
 
+test("quotas: OrcaRouter's answer, the same as OpenRouter's (plugin 1.7.0)", () => {
+  const d = quotaData({ plugin: 'pedila', version: '1.7.0', providers: [
+    { kind: 'orcarouter', name: 'OrcaRouter', ok: true, credits_total: 0, credits_used: 0, balance: 0, free_tier: true, key_limit: { limit: 3, remaining: 1, reset: 'weekly' }, key_usage: { total: 0, day: 0, week: 0, month: 0 } },
+    { kind: 'orcarouter', name: 'OrcaRouter', ok: false, error: "the key isn't valid or isn't allowed to see this" }
+  ] })
+  assert.equal(d.providers.length, 2)
+  const [o, bad] = d.providers
+  assert.deepEqual([o.kind, o.balance, o.freeTier, o.keyUsage.week], ['orcarouter', 0, true, 0])
+  assert.deepEqual(o.keyLimit, { limit: 3, remaining: 1, reset: 'weekly' })
+  assert.equal(bad.ok, false)
+  assert.equal(QUOTA_PLUGIN_WANT, '1.7.0')
+  assert.equal(quotaPluginOutdated('1.6.0'), true)
+  assert.equal(quotaPluginOutdated('1.7.0'), false)
+})
+
 test("quotas: Hermes's own providers, which come without an address", () => {
   assert.equal(paidKindOfProvider({ slug: 'deepseek', is_user_defined: false }), 'deepseek')
   assert.equal(paidKindOfProvider({ slug: 'OpenRouter' }), 'openrouter')
@@ -51,6 +69,8 @@ test("quotas: Hermes's own providers, which come without an address", () => {
   assert.equal(paidKindOfProvider({ slug: 'deepseek', is_user_defined: true }), null)
   assert.equal(paidKindOfProvider({ slug: 'deepseek', api_url: 'https://proxy.example/v1' }), null)
   assert.equal(paidKindOfProvider({ slug: 'mine', api_url: 'https://api.openference.com/v1' }), 'openference')
+  assert.equal(paidKindOfProvider({ slug: 'orcarouter', is_user_defined: true, api_url: 'https://api.orcarouter.ai/v1' }), 'orcarouter')
+  assert.equal(paidKindOfProvider({ slug: 'orcarouter' }), null) // not one of Hermes's own: only by its address
   assert.equal(paidKindOfProvider({ slug: 'tower' }), null)
   assert.equal(paidKindOfProvider({}), null)
 })
@@ -130,6 +150,9 @@ test("quotas: the simple view's figure (how much of the total has been used)", a
   assert.deepEqual(full(or({ creditsTotal: 0, creditsUsed: 0.31, balance: -0.31 })), [null, 'no balance', false, null])
   assert.deepEqual(full(or({ creditsTotal: null, creditsUsed: null, balance: null })), [null, '—', false, null])
   assert.equal(of(or({ creditsUsed: 12 })).pct, 100) // spent more than what was bought
+  // OrcaRouter: the same as OpenRouter.
+  assert.deepEqual(full(or({ kind: 'orcarouter' })), [25, '$7.50 left', false, null])
+  assert.deepEqual(full(or({ kind: 'orcarouter', creditsTotal: 0, creditsUsed: 0, balance: 0 })), [null, 'no balance', false, null])
 
   // Venice: its two balances together, against the highest Pedila has seen; with neither, the day's DIEM.
   const ve = more => full({ kind: 'venice', usd: null, bundled: null, diem: null, nextEpoch: 'x', access: true, ...more })
@@ -357,8 +380,9 @@ test('quotas: does the plugin have to be updated?', () => {
   assert.equal(quotaPluginOutdated('1.3.0'), true)
   assert.equal(quotaPluginOutdated('1.4.0'), true)
   assert.equal(quotaPluginOutdated('1.5.0'), true)
-  assert.equal(quotaPluginOutdated('1.6.0'), false)
-  assert.equal(quotaPluginOutdated('1.6.1'), false)
+  assert.equal(quotaPluginOutdated('1.6.0'), true)
+  assert.equal(quotaPluginOutdated('1.7.0'), false)
+  assert.equal(quotaPluginOutdated('1.7.1'), false)
   assert.equal(quotaPluginOutdated('2.0.0'), false)
 })
 
@@ -462,14 +486,14 @@ test("quotas: a plugin updated on disk but not loaded yet isn't offered again", 
   const Q = 'GET /api/plugins/pedila/cuotas'
   const D = 'GET plugins'
   const ask = async routes => { const h = fakeHermes(routes); const r = await h.c.quotas(); return [r.outdated, r.onDisk, r.restart, h.calls.length] }
-  assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.6.0') }), [true, '1.6.0', true, 2])
+  assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.7.0') }), [true, '1.7.0', true, 2])
   assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: onDisk('1.0.1') }), [true, '1.0.1', false, 2])
   // Not being able to know is taken as "not updated"; up to date, it isn't even asked.
   assert.deepEqual(await ask({ [Q]: answer('1.0.0'), [D]: { status: 401 } }), [true, '', false, 2])
   assert.deepEqual(await ask({ [Q]: answer('1.0.0') }), [true, '', false, 2])
-  assert.deepEqual(await ask({ [Q]: answer('1.6.0') }), [false, '', false, 1])
+  assert.deepEqual(await ask({ [Q]: answer('1.7.0') }), [false, '', false, 1])
   // Up to date in what reloads by itself, but with the fixed part from before.
-  assert.deepEqual(await ask({ [Q]: answer('1.6.0', { shell: '1.2.0', shell_stale: true }) }), [false, '', true, 1])
+  assert.deepEqual(await ask({ [Q]: answer('1.7.0', { shell: '1.2.0', shell_stale: true }) }), [false, '', true, 1])
 })
 
 test('quotas: what the card says about the plugin', async () => {

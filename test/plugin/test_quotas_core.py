@@ -975,6 +975,29 @@ class NewProviders(unittest.TestCase):
                           ("https://api.openference.com/", "openference"), ("https://openference.com.example", None)):
             self.assertEqual(core.kind_of(url), kind, url)
 
+    def test_orcarouter(self):
+        for url, kind in (("https://api.orcarouter.ai/v1", "orcarouter"), ("https://orcarouter.ai/api/v1", "orcarouter"), ("http://api.orcarouter.ai/v1", None),
+                          ("https://api.orcarouter.ai.evil.example/v1", None), ("https://notorcarouter.ai/v1", None)):
+            self.assertEqual(core.kind_of(url), kind, url)
+        # Its real answer (2026-11-27): /key and /credits are OpenRouter's, under /api/v1 and not under /v1, where the chats go.
+        key = {"data": {"label": "hermes", "limit": None, "limit_remaining": None, "limit_reset": None, "usage": 0, "usage_daily": 0, "usage_weekly": 0,
+                        "usage_monthly": 0, "is_free_tier": True, "is_management_key": False, "workspace_id": "339449", "rate_limit": {"requests": -1, "interval": "10s"}}}
+        routes = {"https://api.orcarouter.ai/api/v1/key": (200, key), "https://api.orcarouter.ai/api/v1/credits": (200, {"data": {"total_credits": 5, "total_usage": 1.25}})}
+        e = {"base": "https://api.orcarouter.ai/v1/", "key": "sk-orca-key-of-the-test"}
+        self.assertEqual(core.fetch_orcarouter(self.client(routes), e), {
+            "credits_total": 5.0, "credits_used": 1.25, "balance": 3.75, "free_tier": True, "key_limit": None,
+            "key_usage": {"total": 0.0, "day": 0.0, "week": 0.0, "month": 0.0}})
+        self.assertEqual([u for u, _h in self.calls], list(routes))
+        self.assertTrue(all(h["Authorization"] == "Bearer sk-orca-key-of-the-test" for _u, h in self.calls))
+        # Without the balance it goes on; without /key, it fails without saying the key.
+        del routes["https://api.orcarouter.ai/api/v1/credits"]
+        self.assertIsNone(core.fetch_orcarouter(self.client(routes), e)["balance"])
+        with self.assertRaises(core._Fail) as err:
+            core.fetch_orcarouter(self.client({}), e)
+        self.assertNotIn("sk-orca", str(err.exception))
+        self.assertIs(core.FETCHERS["orcarouter"], core.fetch_orcarouter)
+        self.assertEqual(core.NAMES["orcarouter"], "OrcaRouter")
+
     def test_deepseek(self):
         url = "https://api.deepseek.com/user/balance"
         e = {"base": "https://api.deepseek.com/v1", "key": "sk-deepseek-key"}

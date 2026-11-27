@@ -841,7 +841,7 @@
  "{0} more models": "{0} modelos más",
  "In all: {0} tokens": "En total: {0} tokens",
  "{0} in the cache": "{0} de caché",
- "There's a new quotas plugin: it shows which models you've used with each API, with each key and on your local AI, and it also reads DeepSeek and Openference.": "Hay un complemento de cuotas nuevo: enseña qué modelos has usado con cada API, con cada clave y de tu IA local, y también lee DeepSeek y Openference.",
+ "There's a new quotas plugin: it shows which models you've used with each API, with each key and on your local AI, and it also reads DeepSeek, Openference and OrcaRouter.": "Hay un complemento de cuotas nuevo: enseña qué modelos has usado con cada API, con cada clave y de tu IA local, y también lee DeepSeek, Openference y OrcaRouter.",
  "Without a plan or credits, at most the free models answer: Openference limits them per day and may ask for a credit balance for them too (it only says so when it happens).": "Sin plan ni créditos responden, como mucho, los modelos gratis: Openference los limita por día y también puede pedir saldo para usarlos (solo lo dice cuando pasa).",
  "With other keys, or not known which one": "Con otras claves, o sin saber cuál",
  "What was spent before the plugin noted down the key (from its version 1.5.0 on), by a part of Hermes that hasn't restarted since, or with a key that isn't in the list.": "Lo gastado antes de que el complemento apuntara la clave (desde su versión 1.5.0), por una parte de Hermes que no se ha reiniciado desde entonces o con una clave que no está en la lista.",
@@ -869,5 +869,7 @@
  "{0} left": "quedan {0}",
  "no balance": "sin saldo",
  "Last 24 hours": "Últimas 24 horas",
- "Last 30 days": "Últimos 30 días"
+ "Last 30 days": "Últimos 30 días",
+ "Credit balance you have left on OrcaRouter": "Saldo de créditos que te queda en OrcaRouter",
+ "No credits bought: only the “-free” models answer, when OrcaRouter has free capacity, and only if your account has a GitHub account linked that isn’t new.": "Sin créditos comprados: solo responden los modelos «-free», cuando OrcaRouter tiene capacidad libre, y solo si tu cuenta tiene vinculada una cuenta de GitHub que no sea nueva."
 }

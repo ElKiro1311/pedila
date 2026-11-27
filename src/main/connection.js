@@ -29,12 +29,12 @@ const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 // The Hermes plugin that reads the quotas (the hermes-plugin/pedila folder of this repository).
 const QUOTA_PLUGIN = 'pedila'
 const QUOTA_PLUGIN_SOURCE = 'ElKiro1311/pedila/hermes-plugin/pedila'
-const QUOTA_KINDS = ['openrouter', 'venice', 'opencode-go', 'opencode-zen', 'deepseek', 'openference']
-// The plugin version this Pedila knows how to show in full (1.6.0: the local AI's models; 1.5.0: what each key has used;
+const QUOTA_KINDS = ['openrouter', 'venice', 'opencode-go', 'opencode-zen', 'deepseek', 'openference', 'orcarouter']
+// The plugin version this Pedila knows how to show in full (1.7.0: OrcaRouter; 1.6.0: the local AI's models; 1.5.0: what each key has used;
 // 1.4.0: the models used with each API; 1.3.0: DeepSeek and Openference; 1.2.0: every key of a provider, and OpenCode
 // Go with decimals). With an earlier one, updating it is offered. From 1.2.0 on its calculation reloads by itself
 // (without restarting Hermes).
-const QUOTA_PLUGIN_WANT = '1.6.0'
+const QUOTA_PLUGIN_WANT = '1.7.0'
 const QUOTA_PLANS = ['go', 'go-teams', 'go-plus']
 const INSTALL_TIMEOUT = 180000
 
@@ -48,6 +48,7 @@ function paidKindOf(u) {
     if (h === 'opencode.ai' || h.endsWith('.opencode.ai')) { return p.pathname.toLowerCase().includes('/go') ? 'opencode-go' : 'opencode-zen' }
     if (h === 'api.deepseek.com') { return 'deepseek' }
     if (h === 'api.openference.com') { return 'openference' }
+    if (h === 'orcarouter.ai' || h.endsWith('.orcarouter.ai')) { return 'orcarouter' }
   } catch {}
   return null
 }
@@ -87,7 +88,7 @@ function quotaData(j) {
     : null)
   const providers = (Array.isArray(j.providers) ? j.providers : []).filter(p => p && QUOTA_KINDS.includes(p.kind)).slice(0, 30).map(p => {
     const o = { kind: p.kind, name: cut(str(p.name) || p.kind, 40), ok: p.ok !== false, error: p.ok === false ? cut(str(p.error) || tr("couldn't be read"), 200) : '', noApi: Boolean(p.no_api), spent: spentOf(p.spent), spentAll: spentOf(p.spent_all), spentRest: spentOf(p.spent_rest), account: accountOf(p.account) }
-    if (p.kind === 'openrouter') {
+    if (p.kind === 'openrouter' || p.kind === 'orcarouter') { // (OrcaRouter's API copies OpenRouter's)
       const kl = p.key_limit && typeof p.key_limit === 'object' ? p.key_limit : null
       const ku = p.key_usage && typeof p.key_usage === 'object' ? p.key_usage : {}
       Object.assign(o, {
@@ -1060,7 +1061,7 @@ class Connection extends EventEmitter {
   }
 
   /**
-   * What's left of this Hermes's paid APIs (OpenRouter, Venice, OpenCode, DeepSeek, Openference), read by the "pedila" plugin that
+   * What's left of this Hermes's paid APIs (OpenRouter, Venice, OpenCode, DeepSeek, Openference, OrcaRouter), read by the "pedila" plugin that
    * runs inside Hermes: the keys don't leave it, only numbers arrive.
    * { state: 'ok', data } · { state: 'missing' } if the plugin isn't there (or isn't turned on).
    */

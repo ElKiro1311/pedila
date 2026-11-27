@@ -68,7 +68,7 @@ export function quotaTotal(p, observe = () => null, now = Date.now()) {
   // Next to the others' "used", it must be plain that this is what's left.
   const left = (n, text) => (typeof n !== 'number' ? '—' : n > 0 ? tr('{0} left', text) : tr('no balance'))
   const seen = (name, value, epoch) => { const o = some(value) ? observe(name, value, epoch) : null; return o ? { ...o, left: value } : null }
-  if (p.kind === 'openrouter') {
+  if (p.kind === 'openrouter' || p.kind === 'orcarouter') {
     const kl = p.keyLimit && some(p.keyLimit.remaining) && p.keyLimit.limit > 0 ? share(p.keyLimit.limit - p.keyLimit.remaining, p.keyLimit.limit) : null
     out.text = left(p.balance, usd(p.balance))
     if (p.creditsTotal > 0 && some(p.creditsUsed)) {

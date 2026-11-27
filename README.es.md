@@ -33,12 +33,13 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - **Este PC** usa el mismo Hermes que Hermes Desktop, con los mismos chats. Solo aparece si Hermes está instalado en el PC.
   - **Servidor** es un Hermes en otra máquina (`hermes dashboard` con usuario y contraseña). Solo aparece cuando pones su dirección en Ajustes → Servidor.
   - Con un único Hermes no hay selector: se usa ese.
-- **Cuotas de tus APIs:** si tu Hermes usa OpenRouter, Venice, OpenCode, DeepSeek u Openference, el panel enseña lo que te queda de cada una:
+- **Cuotas de tus APIs:** si tu Hermes usa OpenRouter, Venice, OpenCode, DeepSeek, Openference u OrcaRouter, el panel enseña lo que te queda de cada una:
   - **OpenRouter:** saldo de créditos; límite de la clave, cuándo se reinicia y lo gastado hoy, en la semana y en el mes.
   - **Venice:** saldo USD, créditos del plan y DIEM; cuándo se reinicia el DIEM; límites por modelo.
   - **OpenCode Go:** % usado de las ventanas de 5 h, semana y mes (con un decimal cuando se puede calcular), y cuándo se reinician. De **OpenCode Zen**, OpenCode no publica el saldo.
   - **DeepSeek:** el saldo que queda y un aviso cuando no llega para usar la API.
   - **Openference:** saldo de créditos y plan; con un plan de pago, % usado de sus ventanas y cuándo se reinician; qué modelos son gratis y hasta cuándo.
+  - **OrcaRouter:** lo mismo que OpenRouter (su API copia la de OpenRouter): saldo de créditos y el límite y el gasto de la clave.
   - Si le diste a Hermes **varias claves de la misma API** (`hermes auth add`), cada una es una cuota aparte, con su etiqueta: cuál está en uso, cuáles están de reserva y cuáles descansan hasta que se reinicie su límite.
   - En cada una, qué modelos ha usado Hermes y cuántos tokens cada uno, en 24 h, 7 días o 30 días; con varias claves de la misma API, cada clave con lo suyo.
   - Lo lee un complemento pequeño de Pedila dentro de Hermes ([hermes-plugin/pedila](hermes-plugin/pedila)): tus claves no salen de Hermes, solo llegan números. Se instala con el botón «Activar cuotas» del panel, sin reiniciar Hermes, y se actualiza también desde ahí (al venir de una versión anterior a la 1.2.0, Hermes tiene que reiniciarse una vez). Las APIs que no tienes no aparecen.
@@ -74,7 +75,7 @@ Eso quiere ser esta app: las sandalias que llevan tus mensajes hasta Hermes, est
   - **versiones de Hermes:** Pedila mira cada 6 horas si hay una nueva (la tarjeta «Conexiones» y Ajustes → Acerca de lo dicen). El Hermes de este PC, si es una instalación que Hermes sabe actualizar (la del instalador oficial), se actualiza solo con su propia orden `hermes update` cuando lleva 10 minutos sin usarse: sin chats trabajando ni con actividad. Un Hermes en Docker (un servidor) no puede actualizarse a sí mismo: Pedila avisa y se actualiza desde su servidor;
   - Pedila, la mascota, que reacciona a lo que hace Hermes; si prefieres otra, se elige entre más de 5.000 de [Petdex](https://petdex.dev).
 - **Diseño a tu gusto** (Ajustes → Diseño): ordena y esconde las pestañas (Este PC/Servidor), elige qué tarjetas enseña cada vista del panel y en qué orden (el mismo en las dos), esconde los botones que no uses y pon la lista de chats a la derecha si lo prefieres. Las pestañas y las tarjetas también se arrastran directamente en su sitio.
-- **Cuotas con el mismo diseño para todos** (en la vista avanzada): cada proveedor (OpenRouter, Venice, OpenCode, DeepSeek y Openference) sale igual: lo que te queda en grande y, debajo, cada medida con su barra y cuándo se reinicia. Para los saldos sin total (Venice, DeepSeek y Openference si no hay créditos comprados), la barra cuenta lo gastado desde el saldo más alto que Pedila ha visto, y empieza de nuevo cuando recargas.
+- **Cuotas con el mismo diseño para todos** (en la vista avanzada): cada proveedor (OpenRouter, Venice, OpenCode, DeepSeek, Openference y OrcaRouter) sale igual: lo que te queda en grande y, debajo, cada medida con su barra y cuándo se reinicia. Para los saldos sin total (Venice, DeepSeek y Openference si no hay créditos comprados), la barra cuenta lo gastado desde el saldo más alto que Pedila ha visto, y empieza de nuevo cuando recargas.
 - **Temas:** seis, cada uno en modo oscuro y claro, con vista previa en Ajustes → Apariencia:
   - **Mensajera** (predeterminado): tinta, grises y oro, como Pedila;
   - **Clásico**: grises fríos y violeta, el de las primeras versiones;

@@ -2357,12 +2357,12 @@ function panelLocalCard() {
     }))
 }
 
-// ── Quotas of the paid APIs (OpenRouter, Venice, OpenCode, DeepSeek, Openference) ──────────────────────────────────
+// ── Quotas of the paid APIs (OpenRouter, Venice, OpenCode, DeepSeek, Openference, OrcaRouter) ──────────────────────────────────
 // The "pedila" plugin reads them inside Hermes (the keys don't leave it). The card only appears if that
 // Hermes has one of those APIs: with the plugin, the ones that have a key; without it, a button to turn it
 // on if Hermes has any set. If not, nothing shows.
 const Q = { data: { local: null, server: null }, at: { local: 0, server: 0 }, loading: { local: false, server: false }, again: { local: false, server: false }, gen: { local: 0, server: 0 }, err: { local: '', server: '' }, login: { local: false, server: false }, note: { local: '', server: '' }, busy: { local: '', server: '' }, ask: { local: null, server: null }, installed: { local: false, server: false }, updated: { local: false, server: false }, updNote: { local: '', server: '' }, updAsk: { local: null, server: null }, restarted: { local: false, server: false }, host: { local: 0, server: 0 } }
-const QUOTA_NAMES = { openrouter: 'OpenRouter', venice: 'Venice', 'opencode-go': 'OpenCode Go', 'opencode-zen': 'OpenCode Zen', deepseek: 'DeepSeek', openference: 'Openference' }
+const QUOTA_NAMES = { openrouter: 'OpenRouter', venice: 'Venice', 'opencode-go': 'OpenCode Go', 'opencode-zen': 'OpenCode Zen', deepseek: 'DeepSeek', openference: 'Openference', orcarouter: 'OrcaRouter' }
 const RESET_NAMES = { daily: tr('daily'), weekly: tr('weekly'), monthly: tr('monthly') }
 const PLAN_NAMES = { go: 'Go', 'go-plus': 'Go Plus', 'go-teams': 'Go Teams' }
 
@@ -2694,8 +2694,9 @@ function quotaInfo(p, conn = S.active) {
   const list = (key, title, lines) => info.rows.push({ list: title, key, lines })
   if (!p.ok) {
     line(tr("Couldn't read it: {0}", pluginText(p.error)), 'warn')
-  } else if (p.kind === 'openrouter') {
-    big(usd(p.balance), tr('Credit balance you have left on OpenRouter'))
+  } else if (p.kind === 'openrouter' || p.kind === 'orcarouter') { // (OrcaRouter's API copies OpenRouter's)
+    const orca = p.kind === 'orcarouter'
+    big(usd(p.balance), orca ? tr('Credit balance you have left on OrcaRouter') : tr('Credit balance you have left on OpenRouter'))
     if (p.creditsTotal > 0 && p.creditsUsed !== null) {
       metric({ label: tr('Credits'), value: tr('{0} of {1}', usd(p.balance), usd(p.creditsTotal)), pct: p.creditsUsed / p.creditsTotal * 100, note: tr('spent {0} of what was bought', usd(p.creditsUsed)) })
     }
@@ -2706,7 +2707,7 @@ function quotaInfo(p, conn = S.active) {
     }
     const ku = p.keyUsage || {}
     if (ku.total !== null && ku.total !== undefined) { line(tr('This key: today {0} · week {1} · month {2} · total {3}', usd(ku.day), usd(ku.week), usd(ku.month), usd(ku.total))) }
-    if (p.freeTier) { line(tr('No credits bought: the “:free” models have a daily request limit that resets at 00:00 UTC.')) }
+    if (p.freeTier) { line(orca ? tr('No credits bought: only the “-free” models answer, when OrcaRouter has free capacity, and only if your account has a GitHub account linked that isn’t new.') : tr('No credits bought: the “:free” models have a daily request limit that resets at 00:00 UTC.')) }
   } else if (p.kind === 'venice') {
     big(usd((p.usd || 0) + (p.bundled || 0)), tr('USD balance + credits included in your plan'))
     const epoch = p.nextEpoch ? Date.parse(p.nextEpoch) : NaN
@@ -2913,7 +2914,7 @@ function quotaUpdateRow(conn, q) {
       el('div', { class: 'q-actions' }, el('button', { class: 'btn-primary', text: busy === 'restarting' ? tr('Restarting Hermes…') : tr('Restart Hermes now'), disabled: Boolean(busy), onclick: () => restartForQuotas(conn) })))
   }
   if (notice === 'ask') { return scanQuestion(conn, ask, () => updateQuotas(conn, true), () => { Q.updAsk[conn] = null }) }
-  const parts = [el('p', { class: 'small', text: tr("There's a new quotas plugin: it shows which models you've used with each API, with each key and on your local AI, and it also reads DeepSeek and Openference.") })]
+  const parts = [el('p', { class: 'small', text: tr("There's a new quotas plugin: it shows which models you've used with each API, with each key and on your local AI, and it also reads DeepSeek, Openference and OrcaRouter.") })]
   // When loading a plugin, a Hermes with username and password and no fixed "secret" closes its web
   // sessions.
   if (conn === 'server') { parts.push(el('p', { class: 'muted small', text: tr("Careful: when it changes it, the server's Hermes may close its web sessions (Pedila's too) and you'll have to sign in again once.") })) }

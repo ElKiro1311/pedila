@@ -1,9 +1,9 @@
 name: pedila
-version: 1.6.0
+version: 1.7.0
 manifest_version: 2
 api_version: 1
-description: "Pedila's companion for Hermes: reports what is left on the paid APIs connected to this Hermes (OpenRouter, Venice, OpenCode Go/Zen, DeepSeek, Openference) — balance, limits, resets and what Hermes spent — at /api/plugins/pedila/cuotas, so the Pedila app can show it. API keys never leave Hermes: only numbers are returned. It also notes down how many tokens were spent with each key (a fingerprint of it, never the key), and reports which models of the AI on your own network Hermes has used. No hooks, no tools, no prompt changes."
+description: "Pedila's companion for Hermes: reports what is left on the paid APIs connected to this Hermes (OpenRouter, Venice, OpenCode Go/Zen, DeepSeek, Openference, OrcaRouter) — balance, limits, resets and what Hermes spent — at /api/plugins/pedila/cuotas, so the Pedila app can show it. API keys never leave Hermes: only numbers are returned. It also notes down how many tokens were spent with each key (a fingerprint of it, never the key), and reports which models of the AI on your own network Hermes has used. No hooks, no tools, no prompt changes."
 author: Pedila
 license: MIT
 homepage: https://github.com/ElKiro1311/pedila
-tags: [usage, quota, openrouter, venice, opencode, deepseek, openference, pedila]
+tags: [usage, quota, openrouter, venice, opencode, deepseek, openference, orcarouter, pedila]

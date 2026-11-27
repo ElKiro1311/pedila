@@ -12,6 +12,7 @@ Hermes. (The route keeps its Spanish name, "quotas": the installed versions of t
 | OpenCode Zen | OpenCode doesn't publish the balance: only what Hermes has spent with it |
 | DeepSeek | balance (granted and topped up) and whether it's enough to use the API |
 | Openference | credit balance and plan; with a paid plan, % used of its windows and when they reset; the free models and until when they're free |
+| OrcaRouter | the same as OpenRouter (its API copies OpenRouter's `/key` and `/credits`, under `/api/v1`) |
 
 A provider may have several keys (`hermes auth add`, Hermes's credential pool): each one comes out as a quota of its
 own, with which one Hermes uses now and which ones are resting until their limit resets. They're called after

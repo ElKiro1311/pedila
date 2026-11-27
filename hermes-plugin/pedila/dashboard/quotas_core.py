@@ -11,6 +11,7 @@ account of its own, with which one is in use and which ones are resting.
 
 What it gives of each paid API with a key:
 - OpenRouter: credit balance (``/credits``) and the key's limit, spending and reset (``/key``).
+- OrcaRouter: the same, at the same addresses as OpenRouter's under ``/api/v1`` (its API copies OpenRouter's).
 - Venice: USD, DIEM and included-credit balances, plan, next DIEM reset and limits per model
   (``/api_keys/rate_limits``, an inference key is enough).
 - OpenCode Go: what has been used of the 5-hour, weekly and monthly windows and when they reset. Its API
@@ -49,10 +50,10 @@ from urllib.parse import urlparse
 
 log = logging.getLogger("hermes_dashboard_plugin_pedila")
 
-PLUGIN_VERSION = "1.6.0"
+PLUGIN_VERSION = "1.7.0"
 NAMES = {"openrouter": "OpenRouter", "venice": "Venice", "opencode-go": "OpenCode Go", "opencode-zen": "OpenCode Zen",
-         "deepseek": "DeepSeek", "openference": "Openference"}
-ORDER = ["openrouter", "venice", "opencode-go", "opencode-zen", "deepseek", "openference"]
+         "deepseek": "DeepSeek", "openference": "Openference", "orcarouter": "OrcaRouter"}
+ORDER = ["openrouter", "venice", "opencode-go", "opencode-zen", "deepseek", "openference", "orcarouter"]
 # The longest one reading takes, with all its queries (the ones left come out as "took too long"): Pedila waits 30 s.
 BUILD_BUDGET_SECONDS = 20
 REQUEST_SECONDS = 10
@@ -140,6 +141,8 @@ def kind_of(base_url: str) -> Optional[str]:
         return "deepseek"
     if host == "api.openference.com":
         return "openference"
+    if host == "orcarouter.ai" or host.endswith(".orcarouter.ai"):
+        return "orcarouter"
     return None
 
 
@@ -470,12 +473,22 @@ def _data(body: dict) -> dict:
 
 
 def fetch_openrouter(client, e: dict) -> dict:
-    base = e["base"].rstrip("/")
+    return openrouter_like(client, e["base"].rstrip("/"), e["key"])
+
+
+def fetch_orcarouter(client, e: dict) -> dict:
+    # Its chats go to /v1, but /key and /credits are under /api/v1 (as on OpenRouter): at /v1 they don't exist.
+    u = urlparse(e["base"])
+    return openrouter_like(client, f"{u.scheme}://{u.netloc}/api/v1", e["key"])
+
+
+def openrouter_like(client, base: str, key: str) -> dict:
+    """OpenRouter's /key and /credits (and those of the APIs that copy them) at ``base``."""
     # /key works with any key (limit, spending and reset); /credits (the account's balance) may not let
     # itself be read with some keys: if it fails, go on without the balance.
-    k = _data(_get(client, f"{base}/key", e["key"]))
+    k = _data(_get(client, f"{base}/key", key))
     try:
-        credits = _data(_get(client, f"{base}/credits", e["key"]))
+        credits = _data(_get(client, f"{base}/credits", key))
     except _Fail:
         credits = {}
     total, used = _num(credits.get("total_credits")), _num(credits.get("total_usage"))
@@ -966,7 +979,7 @@ def go_decimals(accounts: list[dict], rows: list[dict], catalog: Optional[dict],
 
 
 FETCHERS = {"openrouter": fetch_openrouter, "venice": fetch_venice, "opencode-go": fetch_opencode_go,
-            "deepseek": fetch_deepseek, "openference": fetch_openference}
+            "deepseek": fetch_deepseek, "openference": fetch_openference, "orcarouter": fetch_orcarouter}
 
 
 # ── What Hermes spent, from its own records ─────────────────────────────────────────────────────
